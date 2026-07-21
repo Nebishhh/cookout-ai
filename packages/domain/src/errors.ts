@@ -35,3 +35,12 @@ export class UnitMismatchError extends DomainError {
     super(message);
   }
 }
+
+/**
+ * Thrown when a recipe or scaling parameter violates domain invariants.
+ */
+export class InvalidRecipeError extends DomainError {
+  constructor(message: string) {
+    super(message);
+  }
+}

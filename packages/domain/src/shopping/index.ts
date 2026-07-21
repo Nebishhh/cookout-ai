@@ -1,5 +1,2 @@
-// Shopping module placeholder
-export interface ShoppingPlaceholder {
-  id: string;
-  itemName: string;
-}
+export * from './types.js';
+export * from './consolidateShoppingList.js';

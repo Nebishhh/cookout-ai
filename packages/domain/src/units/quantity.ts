@@ -1,9 +1,10 @@
-import { InvalidQuantityError, InvalidUnitError } from '../errors.js';
+import { InvalidQuantityError, InvalidUnitError, UnitMismatchError } from '../errors.js';
 import {
+  CONVERSION_FACTORS_TO_BASE,
   getUnitDefinition,
   isSupportedUnit,
+  UnitCategory,
   type SupportedUnit,
-  type UnitCategory,
 } from './units.js';
 
 export interface QuantityJSON {
@@ -45,6 +46,56 @@ export class Quantity {
     }
 
     return new Quantity(this.amount * factor, this.unit);
+  }
+
+  /**
+   * Converts this Quantity to a target unit within the same UnitCategory (Mass or Volume only).
+   *
+   * Open Questions / Scope Notes:
+   * - Floating point precision / rounding on repeated conversions (e.g. repeating decimals from cup/tsp conversions)
+   *   is a known open issue, not addressed in this milestone.
+   * - Ingredient-specific density (required for cross-category Volume <-> Mass conversions, e.g. cups of flour to grams)
+   *   is explicitly out of scope and not supported.
+   *
+   * @param targetUnit The target unit to convert to.
+   * @returns A new Quantity converted to the target unit.
+   * @throws InvalidUnitError if targetUnit is not a supported unit.
+   * @throws UnitMismatchError if converting across categories, or if any unit belongs to the Count category.
+   */
+  convertTo(targetUnit: string): Quantity {
+    if (!isSupportedUnit(targetUnit)) {
+      throw new InvalidUnitError(`Invalid or unsupported target unit: "${targetUnit}".`);
+    }
+
+    if (this.unit === targetUnit) {
+      return this;
+    }
+
+    const targetDef = getUnitDefinition(targetUnit);
+
+    if (
+      this.category === UnitCategory.Count ||
+      targetDef.category === UnitCategory.Count ||
+      this.category !== targetDef.category
+    ) {
+      throw new UnitMismatchError(
+        `Cannot convert between "${this.unit}" (${this.category}) and "${targetUnit}" (${targetDef.category}).`
+      );
+    }
+
+    const sourceFactor = CONVERSION_FACTORS_TO_BASE[this.unit];
+    const targetFactor = CONVERSION_FACTORS_TO_BASE[targetUnit as SupportedUnit];
+
+    if (!sourceFactor || !targetFactor) {
+      throw new UnitMismatchError(
+        `Conversion factor missing for unit: "${this.unit}" or "${targetUnit}".`
+      );
+    }
+
+    const amountInBase = this.amount * sourceFactor;
+    const convertedAmount = amountInBase / targetFactor;
+
+    return new Quantity(convertedAmount, targetUnit);
   }
 
   equals(other: unknown): boolean {

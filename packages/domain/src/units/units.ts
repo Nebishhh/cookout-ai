@@ -50,6 +50,42 @@ export const UNIT_REGISTRY: Record<SupportedUnit, UnitDefinition> = {
   onion: { name: 'onion', category: UnitCategory.Count },
 };
 
+/**
+ * Canonical base units per category:
+ * - Mass: 'g' (grams)
+ * - Volume: 'ml' (milliliters)
+ *
+ * Conversion factors are based on US Customary / Metric culinary standards (NIST Handbook 44):
+ * - 1 kg = 1000 g
+ * - 1 oz = 28.349523125 g (~28.3495 g)
+ * - 1 lb = 453.59237 g (~453.592 g)
+ * - 1 l = 1000 ml
+ * - 1 tsp = 4.92892159375 ml (~4.92892 ml)
+ * - 1 tbsp = 14.78676478125 ml (~14.7868 ml)
+ * - 1 cup = 236.5882365 ml (~236.588 ml)
+ * - 1 fl oz = 29.5735295625 ml (~29.5735 ml)
+ */
+export const BASE_UNITS: Record<UnitCategory.Mass | UnitCategory.Volume, SupportedUnit> = {
+  [UnitCategory.Mass]: 'g',
+  [UnitCategory.Volume]: 'ml',
+};
+
+export const CONVERSION_FACTORS_TO_BASE: Partial<Record<SupportedUnit, number>> = {
+  // Mass (Base unit: g)
+  g: 1,
+  kg: 1000,
+  oz: 28.349523125,
+  lb: 453.59237,
+
+  // Volume (Base unit: ml)
+  ml: 1,
+  l: 1000,
+  tsp: 4.92892159375,
+  tbsp: 14.78676478125,
+  cup: 236.5882365,
+  'fl oz': 29.5735295625,
+};
+
 export function isSupportedUnit(unit: string): unit is SupportedUnit {
   return Object.prototype.hasOwnProperty.call(UNIT_REGISTRY, unit);
 }

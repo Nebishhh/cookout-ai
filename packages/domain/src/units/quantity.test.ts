@@ -107,6 +107,101 @@ describe('Quantity Value Object', () => {
     });
   });
 
+  describe('Unit Conversion (convertTo)', () => {
+    it('performs identity conversion when targetUnit is the same as current unit', () => {
+      const q = new Quantity(500, 'g');
+      const converted = q.convertTo('g');
+      expect(converted.amount).toBe(500);
+      expect(converted.unit).toBe('g');
+      expect(converted.category).toBe(UnitCategory.Mass);
+    });
+
+    it('converts same-category Mass units in both directions', () => {
+      // g -> kg
+      const qG = new Quantity(1000, 'g');
+      const qKg = qG.convertTo('kg');
+      expect(qKg.amount).toBe(1);
+      expect(qKg.unit).toBe('kg');
+
+      // kg -> g
+      const qKg2 = new Quantity(2.5, 'kg');
+      const qG2 = qKg2.convertTo('g');
+      expect(qG2.amount).toBe(2500);
+      expect(qG2.unit).toBe('g');
+
+      // oz -> lb & lb -> oz
+      const qOz = new Quantity(16, 'oz');
+      const qLb = qOz.convertTo('lb');
+      expect(qLb.amount).toBeCloseTo(1, 4);
+
+      const qLb2 = new Quantity(2, 'lb');
+      const qOz2 = qLb2.convertTo('oz');
+      expect(qOz2.amount).toBeCloseTo(32, 4);
+    });
+
+    it('converts same-category Volume units in both directions', () => {
+      // ml -> l
+      const qMl = new Quantity(1000, 'ml');
+      const qL = qMl.convertTo('l');
+      expect(qL.amount).toBe(1);
+      expect(qL.unit).toBe('l');
+
+      // l -> ml
+      const qL2 = new Quantity(1.5, 'l');
+      const qMl2 = qL2.convertTo('ml');
+      expect(qMl2.amount).toBe(1500);
+      expect(qMl2.unit).toBe('ml');
+
+      // cup -> ml & ml -> cup
+      const qCup = new Quantity(1, 'cup');
+      const qMl3 = qCup.convertTo('ml');
+      expect(qMl3.amount).toBeCloseTo(236.588, 3);
+
+      // tsp -> tbsp & tbsp -> tsp
+      const qTsp = new Quantity(3, 'tsp');
+      const qTbsp = qTsp.convertTo('tbsp');
+      expect(qTbsp.amount).toBeCloseTo(1, 4);
+    });
+
+    it('maintains round-trip conversion accuracy within floating point tolerance', () => {
+      const initial = new Quantity(3, 'cup');
+      const converted = initial.convertTo('tbsp');
+      const roundTrip = converted.convertTo('cup');
+      expect(roundTrip.amount).toBeCloseTo(initial.amount, 5);
+      expect(roundTrip.unit).toBe('cup');
+    });
+
+    it('throws UnitMismatchError for cross-category conversions (Mass -> Volume, Volume -> Mass)', () => {
+      const qG = new Quantity(1000, 'g');
+      expect(() => qG.convertTo('ml')).toThrow(UnitMismatchError);
+
+      const qCup = new Quantity(1, 'cup');
+      expect(() => qCup.convertTo('oz')).toThrow(UnitMismatchError);
+    });
+
+    it('throws UnitMismatchError for Count-category conversions (Count -> Count, Count -> non-Count, non-Count -> Count)', () => {
+      const qEgg = new Quantity(3, 'egg');
+      // Count -> Count
+      expect(() => qEgg.convertTo('clove')).toThrow(UnitMismatchError);
+      expect(() => qEgg.convertTo('onion')).toThrow(UnitMismatchError);
+      expect(() => qEgg.convertTo('count')).toThrow(UnitMismatchError);
+
+      // Count -> non-Count
+      expect(() => qEgg.convertTo('g')).toThrow(UnitMismatchError);
+      expect(() => qEgg.convertTo('ml')).toThrow(UnitMismatchError);
+
+      // non-Count -> Count
+      const qG = new Quantity(100, 'g');
+      expect(() => qG.convertTo('egg')).toThrow(UnitMismatchError);
+    });
+
+    it('throws InvalidUnitError when targetUnit is invalid or unsupported', () => {
+      const q = new Quantity(100, 'g');
+      expect(() => q.convertTo('gallons')).toThrow(InvalidUnitError);
+      expect(() => q.convertTo('')).toThrow(InvalidUnitError);
+    });
+  });
+
   describe('Equality', () => {
     it('returns true when amount and unit match exactly', () => {
       const q1 = new Quantity(250, 'ml');

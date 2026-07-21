@@ -6,8 +6,8 @@ import { prisma } from './prisma.js';
 /**
  * Testing Architecture & Database Isolation Note:
  * - We use `supertest` with Vitest to perform HTTP integration tests against the Express app.
- * - A dedicated SQLite database file `prisma/test.db` is specified via process.env.DATABASE_URL during test execution.
- * - Before tests run, we execute Prisma schema sync to ensure `test.db` tables exist, and clear tables before each test for complete test isolation.
+ * - A dedicated SQLite database file `prisma/test.db` is specified via process.env.DATABASE_URL in `vitest.config.ts` during test execution.
+ * - Before tests run, we clear `test.db` tables before each test for complete test isolation without touching `dev.db`.
  */
 
 describe('CookOut AI API Endpoints', () => {

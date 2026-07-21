@@ -318,7 +318,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ onSuccess }) => {
           <button
             type="submit"
             disabled={loading}
-            className="flex items-center space-x-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-500/20 hover:from-orange-600 hover:to-amber-600 focus:outline-none disabled:opacity-50"
+            className="flex items-center space-x-2 rounded-xl bg-orange-500 px-6 py-2.5 text-sm font-semibold text-black shadow-sm hover:bg-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:ring-offset-2 focus:ring-offset-slate-950 disabled:opacity-50"
           >
             {loading ? <span>Creating...</span> : <span>Create Recipe</span>}
           </button>

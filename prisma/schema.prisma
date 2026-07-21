@@ -9,11 +9,34 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Initial placeholder schema model for foundation verification
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
   name      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// Tradeoff Note: SQLite (via Prisma) does not support native string arrays.
+// dietaryTags is stored as a JSON-encoded string column (`dietaryTagsJson`) on Recipe
+// and parsed/serialized at the API boundary. A normalized join table (RecipeDietaryTag)
+// would be more relationally correct but is out of scope for this milestone.
+model Recipe {
+  id              String           @id @default(uuid())
+  name            String
+  baseServings    Int
+  dietaryTagsJson String           @default("[]")
+  createdAt       DateTime         @default(now())
+  ingredients     IngredientLine[]
+}
+
+model IngredientLine {
+  id           String @id @default(uuid())
+  recipeId     String
+  recipe       Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredientId String
+  displayName  String
+  amount       Float
+  unit         String
+  position     Int
 }

@@ -1,7 +1,11 @@
 import { defineConfig } from 'vitest/config';
+import path from 'path';
 
 export default defineConfig({
   test: {
     projects: ['apps/*', 'packages/*'],
+    env: {
+      DATABASE_URL: `file:${path.resolve(__dirname, 'prisma/dev.db')}`,
+    },
   },
 });

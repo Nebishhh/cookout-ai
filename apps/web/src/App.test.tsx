@@ -4,7 +4,7 @@ import '@testing-library/jest-dom';
 import React from 'react';
 import App from './App';
 
-describe('Web UI (App Integration Tests)', () => {
+describe('Web UI (TanStack Query & App Integration Tests)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     window.location.hash = '';
@@ -86,7 +86,6 @@ describe('Web UI (App Integration Tests)', () => {
 
     render(<App />);
 
-    // Fill form
     fireEvent.change(screen.getByLabelText(/recipe name/i), {
       target: { value: 'Waffles' },
     });
@@ -224,24 +223,18 @@ describe('Web UI (App Integration Tests)', () => {
 
     render(<App />);
 
-    // Switch tab to Shopping List
     fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
 
     expect(await screen.findByText('Shopping List Builder')).toBeInTheDocument();
     expect(await screen.findByText('Pancakes')).toBeInTheDocument();
 
-    // Select recipe checkbox
-    const checkbox = screen.getByRole('checkbox', { name: /pancakes/i });
+    const checkbox = screen.getByRole('checkbox', { name: /select recipe pancakes/i });
     fireEvent.click(checkbox);
 
-    // Click Build Shopping List
     fireEvent.click(screen.getByRole('button', { name: /build shopping list/i }));
 
-    // Verify consolidated shopping list
     expect(await screen.findByText('Consolidated Shopping List')).toBeInTheDocument();
     expect(screen.getByText('473.176 ml')).toBeInTheDocument();
-
-    // Verify per-recipe breakdown
     expect(screen.getByText('Per-Recipe Scaled Breakdown')).toBeInTheDocument();
   });
 
@@ -293,9 +286,52 @@ describe('Web UI (App Integration Tests)', () => {
 
     expect(await screen.findByText('Pancakes')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /pancakes/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /select recipe pancakes/i }));
     fireEvent.click(screen.getByRole('button', { name: /build shopping list/i }));
 
     expect(await screen.findByText('Recipe not found: r1')).toBeInTheDocument();
+  });
+
+  it('does NOT trigger a duplicate fetch of GET /api/recipes when switching between views with cached data', async () => {
+    let fetchCount = 0;
+    const mockRecipes = [
+      {
+        id: 'r1',
+        name: 'Shared Pancakes',
+        baseServings: 4,
+        dietaryTags: [],
+        ingredients: [],
+      },
+    ];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (url.toString().includes('/api/recipes')) {
+        fetchCount++;
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => mockRecipes,
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<App />);
+
+    // 1. Initial load on /recipes tab -> triggers 1st fetch
+    expect(await screen.findByText('Shared Pancakes')).toBeInTheDocument();
+    expect(fetchCount).toBe(1);
+
+    // 2. Switch to /shopping-list tab -> uses shared cached query, 0 additional fetches!
+    fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
+    expect(await screen.findByText('Shopping List Builder')).toBeInTheDocument();
+    expect(screen.getByText('Shared Pancakes')).toBeInTheDocument();
+    expect(fetchCount).toBe(1);
+
+    // 3. Switch back to /recipes tab -> still uses cached query, 0 additional fetches!
+    fireEvent.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(await screen.findByText('Create New Recipe')).toBeInTheDocument();
+    expect(fetchCount).toBe(1);
   });
 });

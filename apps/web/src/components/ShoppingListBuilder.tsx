@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   ShoppingBag,
   AlertCircle,
@@ -9,52 +9,39 @@ import {
   RefreshCw,
   CheckCircle2,
 } from 'lucide-react';
-import { api, type RecipeDto, type ShoppingListResponseDto } from '../lib/api';
+import { useRecipes, useBuildShoppingList } from '../lib/queries';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Checkbox } from './ui/checkbox';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
+import { Alert, AlertDescription } from './ui/alert';
 
 export const ShoppingListBuilder: React.FC = () => {
-  const [recipes, setRecipes] = useState<RecipeDto[]>([]);
-  const [loadingRecipes, setLoadingRecipes] = useState<boolean>(true);
-  const [recipeError, setRecipeError] = useState<string | null>(null);
+  const {
+    data: recipes = [],
+    isLoading: loadingRecipes,
+    isError: recipeIsError,
+    error: recipeQueryError,
+    refetch,
+  } = useRecipes();
 
   // Selected recipe IDs and target servings map: { [recipeId]: number }
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
   const [targetServingsMap, setTargetServingsMap] = useState<Record<string, number>>({});
 
-  const [building, setBuilding] = useState<boolean>(false);
-  const [apiError, setApiError] = useState<string | null>(null);
-  const [shoppingListData, setShoppingListData] = useState<ShoppingListResponseDto | null>(null);
+  const buildShoppingListMutation = useBuildShoppingList();
 
   const [expandedRecipes, setExpandedRecipes] = useState<Record<string, boolean>>({});
 
-  const loadRecipes = async () => {
-    setLoadingRecipes(true);
-    setRecipeError(null);
-    try {
-      const data = await api.getRecipes();
-      setRecipes(data);
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setRecipeError(err.message);
-      } else {
-        setRecipeError('Failed to load recipes for shopping list.');
-      }
-    } finally {
-      setLoadingRecipes(false);
-    }
-  };
-
-  useEffect(() => {
-    loadRecipes();
-  }, []);
-
-  const toggleRecipeSelection = (recipe: RecipeDto) => {
-    if (selectedRecipeIds.includes(recipe.id)) {
-      setSelectedRecipeIds((prev) => prev.filter((id) => id !== recipe.id));
+  const toggleRecipeSelection = (recipeId: string, baseServings: number) => {
+    if (selectedRecipeIds.includes(recipeId)) {
+      setSelectedRecipeIds((prev) => prev.filter((id) => id !== recipeId));
     } else {
-      setSelectedRecipeIds((prev) => [...prev, recipe.id]);
+      setSelectedRecipeIds((prev) => [...prev, recipeId]);
       setTargetServingsMap((prev) => ({
         ...prev,
-        [recipe.id]: recipe.baseServings,
+        [recipeId]: baseServings,
       }));
     }
   };
@@ -66,12 +53,8 @@ export const ShoppingListBuilder: React.FC = () => {
     }));
   };
 
-  const handleBuildShoppingList = async () => {
-    setApiError(null);
-    setShoppingListData(null);
-
+  const handleBuildShoppingList = () => {
     if (selectedRecipeIds.length === 0) {
-      setApiError('Please select at least one recipe to build a shopping list.');
       return;
     }
 
@@ -80,20 +63,7 @@ export const ShoppingListBuilder: React.FC = () => {
       targetServings: Number(targetServingsMap[id] ?? 1),
     }));
 
-    setBuilding(true);
-
-    try {
-      const result = await api.buildShoppingList(payload);
-      setShoppingListData(result);
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setApiError(err.message);
-      } else {
-        setApiError('Failed to generate shopping list.');
-      }
-    } finally {
-      setBuilding(false);
-    }
+    buildShoppingListMutation.mutate(payload);
   };
 
   const toggleRecipeExpanded = (recipeId: string) => {
@@ -102,6 +72,13 @@ export const ShoppingListBuilder: React.FC = () => {
       [recipeId]: !prev[recipeId],
     }));
   };
+
+  const displayError =
+    (buildShoppingListMutation.isError && buildShoppingListMutation.error
+      ? buildShoppingListMutation.error.message
+      : null) || (recipeIsError && recipeQueryError ? recipeQueryError.message : null);
+
+  const shoppingListData = buildShoppingListMutation.data;
 
   return (
     <div className="space-y-8">
@@ -113,243 +90,257 @@ export const ShoppingListBuilder: React.FC = () => {
         </p>
       </div>
 
-      {apiError && (
-        <div
-          role="alert"
-          className="flex items-start space-x-3 rounded-2xl border border-red-500/30 bg-red-500/10 p-5 text-red-400 shadow-lg"
-        >
-          <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-400" />
-          <div className="text-sm">
+      {displayError && (
+        <Alert className="border-red-500/30 bg-red-500/10 text-red-400">
+          <AlertCircle className="h-5 w-5 text-red-400" />
+          <AlertDescription className="text-sm">
             <span className="font-semibold">Error: </span>
-            {apiError}
-          </div>
-        </div>
+            {displayError}
+          </AlertDescription>
+        </Alert>
       )}
 
       {/* Recipe Picker Section */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 backdrop-blur-md shadow-xl">
-        <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
-          <h3 className="text-lg font-semibold text-white">1. Select Recipes & Target Servings</h3>
-          <button
+      <Card>
+        <CardHeader className="flex-row items-center justify-between border-b border-slate-800/80 pb-4">
+          <div>
+            <CardTitle className="text-lg">1. Select Recipes & Target Servings</CardTitle>
+          </div>
+          <Button
             type="button"
-            onClick={loadRecipes}
-            className="flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white"
+            variant="ghost"
+            size="sm"
+            onClick={() => refetch()}
+            className="space-x-1.5 text-xs text-slate-400 hover:text-white"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loadingRecipes ? 'animate-spin' : ''}`} />
             <span>Reload Recipes</span>
-          </button>
-        </div>
+          </Button>
+        </CardHeader>
 
-        {loadingRecipes ? (
-          <div className="flex items-center justify-center py-8 text-slate-400">
-            <RefreshCw className="h-5 w-5 animate-spin text-orange-500 mr-2" />
-            <span className="text-sm font-medium">Loading recipe options...</span>
-          </div>
-        ) : recipeError ? (
-          <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
-            {recipeError}
-          </div>
-        ) : recipes.length === 0 ? (
-          <div className="py-8 text-center text-sm text-slate-400">
-            No recipes available yet. Go to the Recipes tab to create some!
-          </div>
-        ) : (
-          <div className="mt-6 space-y-4">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {recipes.map((recipe) => {
-                const isSelected = selectedRecipeIds.includes(recipe.id);
-                return (
-                  <div
-                    key={recipe.id}
-                    className={`flex flex-col justify-between rounded-xl border p-4 transition-all ${
-                      isSelected
-                        ? 'border-orange-500/60 bg-orange-500/10 shadow-md shadow-orange-500/10'
-                        : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-start justify-between">
-                        <label className="flex cursor-pointer items-start space-x-3">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleRecipeSelection(recipe)}
-                            className="mt-1 h-4 w-4 rounded border-slate-700 text-orange-500 focus:ring-orange-500"
-                          />
-                          <div>
-                            <span className="text-sm font-semibold text-white">{recipe.name}</span>
-                            <span className="block text-xs text-slate-400">
-                              Base: {recipe.baseServings} servings
-                            </span>
+        <CardContent className="pt-6">
+          {loadingRecipes ? (
+            <div className="flex items-center justify-center py-8 text-slate-400">
+              <RefreshCw className="mr-2 h-5 w-5 animate-spin text-orange-500" />
+              <span className="text-sm font-medium">Loading recipe options...</span>
+            </div>
+          ) : recipes.length === 0 ? (
+            <div className="py-8 text-center text-sm text-slate-400">
+              No recipes available yet. Go to the Recipes tab to create some!
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {recipes.map((recipe) => {
+                  const isSelected = selectedRecipeIds.includes(recipe.id);
+                  const checkboxId = `recipe-select-${recipe.id}`;
+                  const targetServingsId = `target-servings-${recipe.id}`;
+
+                  return (
+                    <div
+                      key={recipe.id}
+                      className={`flex flex-col justify-between rounded-xl border p-4 transition-all ${
+                        isSelected
+                          ? 'border-orange-500/60 bg-orange-500/10 shadow-md shadow-orange-500/10'
+                          : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-start space-x-3">
+                            <Checkbox
+                              id={checkboxId}
+                              checked={isSelected}
+                              onChange={() => toggleRecipeSelection(recipe.id, recipe.baseServings)}
+                              aria-label={`Select recipe ${recipe.name}`}
+                              className="mt-1"
+                            />
+                            <Label
+                              htmlFor={checkboxId}
+                              className="cursor-pointer text-left font-normal normal-case tracking-normal"
+                            >
+                              <span className="text-sm font-semibold text-white block">
+                                {recipe.name}
+                              </span>
+                              <span className="text-xs text-slate-400 block">
+                                Base: {recipe.baseServings} servings
+                              </span>
+                            </Label>
                           </div>
-                        </label>
+                        </div>
                       </div>
+
+                      {isSelected && (
+                        <div className="mt-4 border-t border-slate-800/80 pt-3">
+                          <Label htmlFor={targetServingsId} className="text-[11px] text-slate-300">
+                            Target Servings
+                          </Label>
+                          <Input
+                            id={targetServingsId}
+                            type="number"
+                            min={1}
+                            value={targetServingsMap[recipe.id] ?? recipe.baseServings}
+                            onChange={(e) =>
+                              handleServingsChange(recipe.id, Number(e.target.value))
+                            }
+                            className="mt-1 h-8 rounded-lg bg-slate-900 px-3 text-xs"
+                          />
+                        </div>
+                      )}
                     </div>
+                  );
+                })}
+              </div>
 
-                    {isSelected && (
-                      <div className="mt-4 border-t border-slate-800/80 pt-3">
-                        <label
-                          htmlFor={`target-servings-${recipe.id}`}
-                          className="block text-[11px] font-medium text-slate-300"
-                        >
-                          Target Servings
-                        </label>
-                        <input
-                          id={`target-servings-${recipe.id}`}
-                          type="number"
-                          min={1}
-                          value={targetServingsMap[recipe.id] ?? recipe.baseServings}
-                          onChange={(e) => handleServingsChange(recipe.id, Number(e.target.value))}
-                          className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-white focus:border-orange-500 focus:outline-none"
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              <div className="mt-6 flex justify-end border-t border-slate-800/80 pt-4">
+                <Button
+                  type="button"
+                  onClick={handleBuildShoppingList}
+                  disabled={buildShoppingListMutation.isPending || selectedRecipeIds.length === 0}
+                  className="space-x-2 text-black"
+                >
+                  <ShoppingBag className="h-4 w-4" />
+                  <span>
+                    {buildShoppingListMutation.isPending
+                      ? 'Building List...'
+                      : `Build Shopping List (${selectedRecipeIds.length} Selected)`}
+                  </span>
+                </Button>
+              </div>
             </div>
-
-            <div className="mt-6 flex justify-end border-t border-slate-800/80 pt-4">
-              <button
-                type="button"
-                onClick={handleBuildShoppingList}
-                disabled={building || selectedRecipeIds.length === 0}
-                className="flex items-center space-x-2 rounded-xl bg-orange-500 px-6 py-2.5 text-sm font-semibold text-black shadow-sm hover:bg-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:ring-offset-2 focus:ring-offset-slate-950 disabled:opacity-50"
-              >
-                <ShoppingBag className="h-4 w-4" />
-                <span>
-                  {building
-                    ? 'Building List...'
-                    : `Build Shopping List (${selectedRecipeIds.length} Selected)`}
-                </span>
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Shopping List Results */}
       {shoppingListData && (
         <div className="space-y-8">
           {/* Primary View: Consolidated Shopping List */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 backdrop-blur-md shadow-xl">
-            <div className="flex items-center space-x-3 border-b border-slate-800/80 pb-4">
+          <Card>
+            <CardHeader className="flex-row items-center space-x-3 border-b border-slate-800/80 pb-4">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/20 text-orange-400">
                 <CheckCircle2 className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-white">Consolidated Shopping List</h3>
-                <p className="text-xs text-slate-400">
+                <CardTitle className="text-lg">Consolidated Shopping List</CardTitle>
+                <CardDescription className="text-xs">
                   Total ingredients merged across {shoppingListData.scaledRecipes.length} scaled
                   recipe(s).
-                </p>
+                </CardDescription>
               </div>
-            </div>
+            </CardHeader>
 
-            <div className="mt-6 divide-y divide-slate-800/60">
-              {shoppingListData.shoppingList.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="flex flex-col justify-between py-3.5 sm:flex-row sm:items-center"
-                >
-                  <div>
-                    <span className="text-base font-semibold text-white">{item.displayName}</span>
-                    <span className="ml-2 font-mono text-xs text-slate-500">
-                      ({item.ingredientId})
-                    </span>
-                    <div className="mt-1 flex flex-wrap gap-1.5">
-                      <span className="text-[11px] text-slate-400">From recipes:</span>
-                      {item.sourceRecipeIds.map((rId) => {
-                        const matchedRecipe = shoppingListData.scaledRecipes.find(
-                          (sr) => sr.sourceRecipeId === rId
-                        );
-                        return (
-                          <span
-                            key={rId}
-                            className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-300"
-                          >
-                            {matchedRecipe?.sourceRecipeName || rId}
-                          </span>
-                        );
-                      })}
+            <CardContent className="pt-6">
+              <div className="divide-y divide-slate-800/60">
+                {shoppingListData.shoppingList.map((item, idx) => (
+                  <div
+                    key={idx}
+                    className="flex flex-col justify-between py-3.5 sm:flex-row sm:items-center"
+                  >
+                    <div>
+                      <span className="text-base font-semibold text-white">{item.displayName}</span>
+                      <span className="ml-2 font-mono text-xs text-slate-500">
+                        ({item.ingredientId})
+                      </span>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        <span className="text-[11px] text-slate-400">From recipes:</span>
+                        {item.sourceRecipeIds.map((rId) => {
+                          const matchedRecipe = shoppingListData.scaledRecipes.find(
+                            (sr) => sr.sourceRecipeId === rId
+                          );
+                          return (
+                            <span
+                              key={rId}
+                              className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-300"
+                            >
+                              {matchedRecipe?.sourceRecipeName || rId}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="mt-2 sm:mt-0">
+                      <span className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-2 font-mono text-sm font-semibold text-orange-400">
+                        {item.quantity.amount} {item.quantity.unit}
+                      </span>
                     </div>
                   </div>
-
-                  <div className="mt-2 sm:mt-0">
-                    <span className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-2 font-mono text-sm font-semibold text-orange-400">
-                      {item.quantity.amount} {item.quantity.unit}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Secondary View: Per-Recipe Scaled Breakdown */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 backdrop-blur-md shadow-xl">
-            <div className="flex items-center space-x-3 border-b border-slate-800/80 pb-4">
+          <Card>
+            <CardHeader className="flex-row items-center space-x-3 border-b border-slate-800/80 pb-4">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/20 text-amber-400">
                 <Layers className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-white">Per-Recipe Scaled Breakdown</h3>
-                <p className="text-xs text-slate-400">
+                <CardTitle className="text-lg">Per-Recipe Scaled Breakdown</CardTitle>
+                <CardDescription className="text-xs">
                   Individual scaled ingredient quantities for each recipe.
-                </p>
+                </CardDescription>
               </div>
-            </div>
+            </CardHeader>
 
-            <div className="mt-6 space-y-4">
-              {shoppingListData.scaledRecipes.map((sr) => {
-                const isExpanded = expandedRecipes[sr.sourceRecipeId] ?? true;
-                return (
-                  <div
-                    key={sr.sourceRecipeId}
-                    className="rounded-xl border border-slate-800 bg-slate-800/30 overflow-hidden"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => toggleRecipeExpanded(sr.sourceRecipeId)}
-                      className="flex w-full items-center justify-between p-4 text-left hover:bg-slate-800/50"
+            <CardContent className="pt-6">
+              <div className="space-y-4">
+                {shoppingListData.scaledRecipes.map((sr) => {
+                  const isExpanded = expandedRecipes[sr.sourceRecipeId] ?? true;
+                  return (
+                    <div
+                      key={sr.sourceRecipeId}
+                      className="overflow-hidden rounded-xl border border-slate-800 bg-slate-800/30"
                     >
-                      <div className="flex items-center space-x-3">
-                        <span className="font-semibold text-white">{sr.sourceRecipeName}</span>
-                        <span className="flex items-center space-x-1 rounded-full bg-slate-800 px-2.5 py-0.5 text-xs text-slate-300">
-                          <Users className="h-3 w-3 text-orange-400" />
-                          <span>
-                            {sr.targetServings} servings (x{sr.scaleFactor})
+                      <button
+                        type="button"
+                        onClick={() => toggleRecipeExpanded(sr.sourceRecipeId)}
+                        aria-expanded={isExpanded}
+                        className="flex w-full items-center justify-between p-4 text-left hover:bg-slate-800/50"
+                      >
+                        <div className="flex items-center space-x-3">
+                          <span className="font-semibold text-white">{sr.sourceRecipeName}</span>
+                          <span className="flex items-center space-x-1 rounded-full bg-slate-800 px-2.5 py-0.5 text-xs text-slate-300">
+                            <Users className="h-3 w-3 text-orange-400" />
+                            <span>
+                              {sr.targetServings} servings (x{sr.scaleFactor})
+                            </span>
                           </span>
-                        </span>
-                      </div>
-                      {isExpanded ? (
-                        <ChevronUp className="h-4 w-4 text-slate-400" />
-                      ) : (
-                        <ChevronDown className="h-4 w-4 text-slate-400" />
-                      )}
-                    </button>
+                        </div>
+                        {isExpanded ? (
+                          <ChevronUp className="h-4 w-4 text-slate-400" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                        )}
+                      </button>
 
-                    {isExpanded && (
-                      <div className="border-t border-slate-800/80 p-4 bg-slate-900/40">
-                        <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          {sr.ingredients.map((ing, i) => (
-                            <li
-                              key={i}
-                              className="flex items-center justify-between rounded-lg border border-slate-800/60 bg-slate-900/80 p-2.5 text-xs"
-                            >
-                              <span className="font-medium text-slate-200">{ing.displayName}</span>
-                              <span className="font-mono text-orange-400">
-                                {ing.quantity.amount} {ing.quantity.unit}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+                      {isExpanded && (
+                        <div className="border-t border-slate-800/80 bg-slate-900/40 p-4">
+                          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {sr.ingredients.map((ing, i) => (
+                              <li
+                                key={i}
+                                className="flex items-center justify-between rounded-lg border border-slate-800/60 bg-slate-900/80 p-2.5 text-xs"
+                              >
+                                <span className="font-medium text-slate-200">
+                                  {ing.displayName}
+                                </span>
+                                <span className="font-mono text-orange-400">
+                                  {ing.quantity.amount} {ing.quantity.unit}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
     </div>

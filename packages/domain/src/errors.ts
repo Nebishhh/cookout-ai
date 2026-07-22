@@ -44,3 +44,12 @@ export class InvalidRecipeError extends DomainError {
     super(message);
   }
 }
+
+/**
+ * Thrown when a guest group breakdown violates domain invariants.
+ */
+export class InvalidGuestGroupError extends DomainError {
+  constructor(message: string) {
+    super(message);
+  }
+}

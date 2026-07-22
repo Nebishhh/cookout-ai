@@ -1,12 +1,44 @@
-import React from 'react';
-import { Users, AlertCircle, RefreshCw, ChefHat } from 'lucide-react';
-import { useRecipes } from '../lib/queries';
+import React, { useState } from 'react';
+import { Users, AlertCircle, RefreshCw, ChefHat, Pencil, Trash2 } from 'lucide-react';
+import type { RecipeDto } from '../lib/api';
+import { useRecipes, useDeleteRecipe } from '../lib/queries';
 import { Button } from './ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { Alert, AlertTitle, AlertDescription } from './ui/alert';
+import { RecipeForm } from './RecipeForm';
 
-export const RecipeList: React.FC = () => {
+export interface RecipeListProps {
+  onEditRecipe?: (recipe: RecipeDto) => void;
+}
+
+export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
   const { data: recipes = [], isLoading, isError, error, refetch } = useRecipes();
+  const deleteRecipeMutation = useDeleteRecipe();
+  const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
+
+  const handleDelete = (recipe: RecipeDto) => {
+    if (window.confirm(`Are you sure you want to delete "${recipe.name}"?`)) {
+      deleteRecipeMutation.mutate(recipe.id);
+    }
+  };
+
+  const handleEditClick = (recipe: RecipeDto) => {
+    if (onEditRecipe) {
+      onEditRecipe(recipe);
+    } else {
+      setEditingRecipe(recipe);
+    }
+  };
+
+  if (editingRecipe) {
+    return (
+      <RecipeForm
+        recipe={editingRecipe}
+        onCancel={() => setEditingRecipe(null)}
+        onSuccess={() => setEditingRecipe(null)}
+      />
+    );
+  }
 
   if (isLoading && recipes.length === 0) {
     return (
@@ -56,6 +88,16 @@ export const RecipeList: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {deleteRecipeMutation.isError && (
+        <Alert className="border-red-500/30 bg-red-500/10 text-red-400">
+          <AlertCircle className="h-5 w-5 text-red-400" />
+          <AlertDescription className="text-sm">
+            <span className="font-semibold">Error Deleting Recipe: </span>
+            {deleteRecipeMutation.error.message}
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold text-white">Saved Recipes ({recipes.length})</h2>
@@ -124,8 +166,35 @@ export const RecipeList: React.FC = () => {
               </CardContent>
             </div>
 
-            <div className="mt-4 border-t border-slate-800/40 pt-3 text-[11px] text-slate-500">
-              ID: <span className="font-mono">{recipe.id}</span>
+            <div className="mt-4 flex items-center justify-between border-t border-slate-800/40 pt-3 text-[11px] text-slate-500">
+              <div>
+                ID: <span className="font-mono">{recipe.id.slice(0, 8)}...</span>
+              </div>
+              <div className="flex items-center space-x-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleEditClick(recipe)}
+                  aria-label={`Edit recipe ${recipe.name}`}
+                  className="h-7 px-2 text-xs text-slate-400 hover:text-white"
+                >
+                  <Pencil className="mr-1 h-3 w-3" />
+                  <span>Edit</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDelete(recipe)}
+                  disabled={deleteRecipeMutation.isPending}
+                  aria-label={`Delete recipe ${recipe.name}`}
+                  className="h-7 px-2 text-xs text-slate-400 hover:text-red-400"
+                >
+                  <Trash2 className="mr-1 h-3 w-3" />
+                  <span>Delete</span>
+                </Button>
+              </div>
             </div>
           </Card>
         ))}

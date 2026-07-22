@@ -120,6 +120,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  updateRecipe: (id: string, data: CreateRecipeInput) =>
+    request<RecipeDto>(`/api/recipes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteRecipe: (id: string) =>
+    request<void>(`/api/recipes/${id}`, {
+      method: 'DELETE',
+    }),
   buildShoppingList: (items: ShoppingListRequestItem[]) =>
     request<ShoppingListResponseDto>('/api/shopping-list', {
       method: 'POST',

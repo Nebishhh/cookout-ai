@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { RecipeDto } from './lib/api';
 import { Navigation } from './components/Navigation';
 import { RecipeList } from './components/RecipeList';
 import { RecipeForm } from './components/RecipeForm';
@@ -9,7 +10,9 @@ import { ShoppingListBuilder } from './components/ShoppingListBuilder';
  * Open Questions / Scope Notes:
  * - Query stale time / cache invalidation strategy is using TanStack Query defaults (5-min staleTime configured for shared queries).
  * - No client-side routing guard or authentication exists (matches API's current no-auth scope).
- * - No edit or delete UI for recipes exists (matches API's current create/read-only scope).
+ * - Shopping lists built via POST /api/shopping-list are dynamically generated on request and never persisted,
+ *   so recipe edits or deletions do not require optimistic-locking or shopping list staleness checks.
+ * - No confirmation UI beyond basic browser confirm dialog.
  * - No optimistic updates on mutations (out of scope for this milestone).
  */
 
@@ -30,6 +33,8 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
         },
       })
   );
+
+  const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
 
   // Sync tab with URL hash (#recipes or #shopping-list)
   const getInitialTab = (): 'recipes' | 'shopping-list' => {
@@ -67,8 +72,12 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
         <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
           {currentTab === 'recipes' ? (
             <div className="space-y-10">
-              <RecipeForm />
-              <RecipeList />
+              <RecipeForm
+                recipe={editingRecipe || undefined}
+                onCancel={editingRecipe ? () => setEditingRecipe(null) : undefined}
+                onSuccess={() => setEditingRecipe(null)}
+              />
+              <RecipeList onEditRecipe={(recipe) => setEditingRecipe(recipe)} />
             </div>
           ) : (
             <ShoppingListBuilder />

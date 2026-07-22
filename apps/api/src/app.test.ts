@@ -248,4 +248,134 @@ describe('CookOut AI API Endpoints', () => {
       expect(resNeg.body).toHaveProperty('error', 'InvalidRecipeError');
     });
   });
+
+  describe('PUT /api/recipes/:id & DELETE /api/recipes/:id', () => {
+    it('PUT /api/recipes/:id with valid data updates the recipe; GET afterward reflects new values & new ingredient list', async () => {
+      const initialRecipe = {
+        name: 'Old Pancakes',
+        baseServings: 2,
+        dietaryTags: ['Vegetarian'],
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' }],
+      };
+
+      const createRes = await request(app).post('/api/recipes').send(initialRecipe);
+      expect(createRes.status).toBe(201);
+      const recipeId = createRes.body.id;
+
+      const updatedPayload = {
+        name: 'New Fluffy Waffles',
+        baseServings: 6,
+        dietaryTags: ['Vegan'],
+        ingredients: [
+          { ingredientId: 'waffle-mix', displayName: 'Waffle Mix', amount: 500, unit: 'g' },
+          { ingredientId: 'water', displayName: 'Water', amount: 300, unit: 'ml' },
+          { ingredientId: 'oil', displayName: 'Vegetable Oil', amount: 2, unit: 'tbsp' },
+        ],
+      };
+
+      const putRes = await request(app).put(`/api/recipes/${recipeId}`).send(updatedPayload);
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.id).toBe(recipeId);
+      expect(putRes.body.name).toBe('New Fluffy Waffles');
+      expect(putRes.body.baseServings).toBe(6);
+      expect(putRes.body.dietaryTags).toEqual(['Vegan']);
+      expect(putRes.body.ingredients).toHaveLength(3);
+
+      const getRes = await request(app).get(`/api/recipes/${recipeId}`);
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.name).toBe('New Fluffy Waffles');
+      expect(getRes.body.ingredients[0].ingredientId).toBe('waffle-mix');
+    });
+
+    it('PUT /api/recipes/:id with invalid data (baseServings: 0) returns 400 AND the original recipe is unchanged', async () => {
+      const originalRecipe = {
+        name: 'Original Safe Recipe',
+        baseServings: 4,
+        dietaryTags: ['Vegetarian'],
+        ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 2, unit: 'cup' }],
+      };
+
+      const createRes = await request(app).post('/api/recipes').send(originalRecipe);
+      expect(createRes.status).toBe(201);
+      const recipeId = createRes.body.id;
+
+      const invalidPayload = {
+        name: 'Corrupted Attempt',
+        baseServings: 0, // Invalid!
+        ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 10, unit: 'cup' }],
+      };
+
+      const putRes = await request(app).put(`/api/recipes/${recipeId}`).send(invalidPayload);
+      expect(putRes.status).toBe(400);
+      expect(putRes.body).toHaveProperty('error', 'InvalidRecipeError');
+
+      // Verify original recipe in DB is completely UNCHANGED
+      const getRes = await request(app).get(`/api/recipes/${recipeId}`);
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.name).toBe('Original Safe Recipe');
+      expect(getRes.body.baseServings).toBe(4);
+      expect(getRes.body.ingredients).toHaveLength(1);
+      expect(getRes.body.ingredients[0].amount).toBe(2);
+    });
+
+    it('PUT /api/recipes/:id for a nonexistent id returns 404', async () => {
+      const res = await request(app)
+        .put('/api/recipes/non-existent-id-404')
+        .send({
+          name: 'Ghosts',
+          baseServings: 2,
+          ingredients: [{ ingredientId: 'air', displayName: 'Air', amount: 1, unit: 'count' }],
+        });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+
+    it('DELETE /api/recipes/:id removes the recipe; subsequent GET returns 404', async () => {
+      const recipe = {
+        name: 'To Be Deleted',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 1, unit: 'egg' }],
+      };
+
+      const createRes = await request(app).post('/api/recipes').send(recipe);
+      const id = createRes.body.id;
+
+      const deleteRes = await request(app).delete(`/api/recipes/${id}`);
+      expect(deleteRes.status).toBe(204);
+
+      const getRes = await request(app).get(`/api/recipes/${id}`);
+      expect(getRes.status).toBe(404);
+    });
+
+    it('DELETE /api/recipes/:id also removes its IngredientLine rows directly in Prisma', async () => {
+      const recipe = {
+        name: 'Cascade Delete Test Recipe',
+        baseServings: 4,
+        ingredients: [
+          { ingredientId: 'salt', displayName: 'Salt', amount: 1, unit: 'tsp' },
+          { ingredientId: 'pepper', displayName: 'Pepper', amount: 1, unit: 'tsp' },
+        ],
+      };
+
+      const createRes = await request(app).post('/api/recipes').send(recipe);
+      const id = createRes.body.id;
+
+      // Verify ingredient lines exist in Prisma DB before delete
+      const linesBefore = await prisma.ingredientLine.findMany({ where: { recipeId: id } });
+      expect(linesBefore).toHaveLength(2);
+
+      await request(app).delete(`/api/recipes/${id}`);
+
+      // Verify ingredient lines were cascade deleted in Prisma DB
+      const linesAfter = await prisma.ingredientLine.findMany({ where: { recipeId: id } });
+      expect(linesAfter).toHaveLength(0);
+    });
+
+    it('DELETE /api/recipes/:id for a nonexistent id returns 404', async () => {
+      const res = await request(app).delete('/api/recipes/non-existent-id-404');
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+  });
 });

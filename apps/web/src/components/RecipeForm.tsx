@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { Plus, Trash2, AlertCircle, CheckCircle2 } from 'lucide-react';
-import type { IngredientInput } from '../lib/api';
-import { useCreateRecipe } from '../lib/queries';
+import React, { useState, useEffect } from 'react';
+import { Plus, Trash2, AlertCircle, CheckCircle2, X } from 'lucide-react';
+import type { IngredientInput, RecipeDto } from '../lib/api';
+import { useCreateRecipe, useUpdateRecipe } from '../lib/queries';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -16,18 +16,55 @@ const SUPPORTED_UNITS_BY_CATEGORY = [
   { category: 'Count', units: ['count', 'clove', 'egg', 'onion'] },
 ];
 
-export const RecipeForm: React.FC = () => {
-  const [name, setName] = useState('');
-  const [baseServings, setBaseServings] = useState<number>(4);
-  const [dietaryTags, setDietaryTags] = useState<string[]>([]);
-  const [ingredients, setIngredients] = useState<IngredientInput[]>([
-    { ingredientId: '', displayName: '', amount: 1, unit: 'g' },
-  ]);
+export interface RecipeFormProps {
+  recipe?: RecipeDto;
+  onSuccess?: () => void;
+  onCancel?: () => void;
+}
+
+export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCancel }) => {
+  const isEditing = Boolean(recipe);
+
+  const [name, setName] = useState(recipe?.name || '');
+  const [baseServings, setBaseServings] = useState<number>(recipe?.baseServings || 4);
+  const [dietaryTags, setDietaryTags] = useState<string[]>(recipe?.dietaryTags || []);
+  const [ingredients, setIngredients] = useState<IngredientInput[]>(
+    recipe?.ingredients.map((ing) => ({
+      ingredientId: ing.ingredientId,
+      displayName: ing.displayName,
+      amount: ing.amount,
+      unit: ing.unit,
+    })) || [{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]
+  );
 
   const [validationError, setValidationError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const createRecipeMutation = useCreateRecipe();
+  const updateRecipeMutation = useUpdateRecipe();
+
+  useEffect(() => {
+    if (recipe) {
+      setName(recipe.name);
+      setBaseServings(recipe.baseServings);
+      setDietaryTags(recipe.dietaryTags || []);
+      setIngredients(
+        recipe.ingredients.map((ing) => ({
+          ingredientId: ing.ingredientId,
+          displayName: ing.displayName,
+          amount: ing.amount,
+          unit: ing.unit,
+        }))
+      );
+    } else {
+      setName('');
+      setBaseServings(4);
+      setDietaryTags([]);
+      setIngredients([{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]);
+    }
+    setValidationError(null);
+    setSuccessMessage(null);
+  }, [recipe]);
 
   const handleTagToggle = (tag: string) => {
     setDietaryTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
@@ -77,40 +114,72 @@ export const RecipeForm: React.FC = () => {
       }
     }
 
-    createRecipeMutation.mutate(
-      {
-        name: name.trim(),
-        baseServings: Number(baseServings),
-        dietaryTags,
-        ingredients: ingredients.map((ing) => ({
-          ingredientId: ing.ingredientId.trim(),
-          displayName: ing.displayName.trim(),
-          amount: Number(ing.amount),
-          unit: ing.unit,
-        })),
-      },
-      {
+    const payload = {
+      name: name.trim(),
+      baseServings: Number(baseServings),
+      dietaryTags,
+      ingredients: ingredients.map((ing) => ({
+        ingredientId: ing.ingredientId.trim(),
+        displayName: ing.displayName.trim(),
+        amount: Number(ing.amount),
+        unit: ing.unit,
+      })),
+    };
+
+    if (isEditing && recipe) {
+      updateRecipeMutation.mutate(
+        { id: recipe.id, data: payload },
+        {
+          onSuccess: (updatedRecipe) => {
+            setSuccessMessage(`Recipe "${updatedRecipe.name}" updated successfully!`);
+            if (onSuccess) onSuccess();
+          },
+        }
+      );
+    } else {
+      createRecipeMutation.mutate(payload, {
         onSuccess: (newRecipe) => {
           setSuccessMessage(`Recipe "${newRecipe.name}" created successfully!`);
           setName('');
           setBaseServings(4);
           setDietaryTags([]);
           setIngredients([{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]);
+          if (onSuccess) onSuccess();
         },
-      }
-    );
+      });
+    }
   };
 
+  const isPending = createRecipeMutation.isPending || updateRecipeMutation.isPending;
   const displayError =
-    validationError || (createRecipeMutation.error ? createRecipeMutation.error.message : null);
+    validationError ||
+    (createRecipeMutation.error ? createRecipeMutation.error.message : null) ||
+    (updateRecipeMutation.error ? updateRecipeMutation.error.message : null);
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Create New Recipe</CardTitle>
-        <CardDescription>
-          Add a new recipe to your collection with ingredients and serving size.
-        </CardDescription>
+      <CardHeader className="flex-row items-center justify-between">
+        <div>
+          <CardTitle>{isEditing ? `Edit Recipe: ${recipe?.name}` : 'Create New Recipe'}</CardTitle>
+          <CardDescription>
+            {isEditing
+              ? 'Update ingredient quantities, base servings, or dietary tags for this recipe.'
+              : 'Add a new recipe to your collection with ingredients and serving size.'}
+          </CardDescription>
+        </div>
+
+        {onCancel && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            className="space-x-1.5 text-slate-400 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+            <span>Cancel</span>
+          </Button>
+        )}
       </CardHeader>
 
       <CardContent>
@@ -296,16 +365,17 @@ export const RecipeForm: React.FC = () => {
             ))}
           </div>
 
-          <div className="flex justify-end pt-2">
-            <Button
-              type="submit"
-              disabled={createRecipeMutation.isPending}
-              className="px-6 text-black"
-            >
-              {createRecipeMutation.isPending ? (
-                <span>Creating...</span>
+          <div className="flex justify-end space-x-3 pt-2">
+            {onCancel && (
+              <Button type="button" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+            )}
+            <Button type="submit" disabled={isPending} className="px-6 text-black">
+              {isPending ? (
+                <span>{isEditing ? 'Saving...' : 'Creating...'}</span>
               ) : (
-                <span>Create Recipe</span>
+                <span>{isEditing ? 'Save Changes' : 'Create Recipe'}</span>
               )}
             </Button>
           </div>

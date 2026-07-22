@@ -44,6 +44,36 @@ export function useCreateRecipe() {
 }
 
 /**
+ * Mutation hook for updating an existing recipe (PUT /api/recipes/:id).
+ * Automatically invalidates the shared ['recipes'] query cache on success.
+ */
+export function useUpdateRecipe() {
+  const queryClient = useQueryClient();
+
+  return useMutation<RecipeDto, Error, { id: string; data: CreateRecipeInput }>({
+    mutationFn: ({ id, data }) => api.updateRecipe(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * Mutation hook for deleting a recipe (DELETE /api/recipes/:id).
+ * Automatically invalidates the shared ['recipes'] query cache on success.
+ */
+export function useDeleteRecipe() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string>({
+    mutationFn: (id: string) => api.deleteRecipe(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+    },
+  });
+}
+
+/**
  * Mutation hook for generating a consolidated shopping list (POST /api/shopping-list).
  */
 export function useBuildShoppingList() {

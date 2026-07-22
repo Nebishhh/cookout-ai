@@ -334,4 +334,210 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     expect(await screen.findByText('Create New Recipe')).toBeInTheDocument();
     expect(fetchCount).toBe(1);
   });
+
+  it('clicking Edit on a recipe card pre-fills RecipeForm with existing data', async () => {
+    const mockRecipes = [
+      {
+        id: 'r1',
+        name: 'Pre-filled Pancake',
+        baseServings: 4,
+        dietaryTags: ['Vegan'],
+        ingredients: [
+          {
+            ingredientId: 'flour',
+            displayName: 'Flour',
+            amount: 2,
+            unit: 'cup',
+            category: 'Volume',
+          },
+        ],
+      },
+    ];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (url.toString().includes('/api/recipes')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => mockRecipes,
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Pre-filled Pancake')).toBeInTheDocument();
+
+    const editBtn = screen.getByRole('button', { name: /edit recipe pre-filled pancake/i });
+    fireEvent.click(editBtn);
+
+    expect(await screen.findByText('Edit Recipe: Pre-filled Pancake')).toBeInTheDocument();
+    expect(screen.getByLabelText(/recipe name/i)).toHaveValue('Pre-filled Pancake');
+    expect(screen.getByLabelText(/base servings/i)).toHaveValue(4);
+  });
+
+  it('submitting an edit calls PUT (not POST) and updates recipe on success', async () => {
+    let putCalled = false;
+    let capturedMethod = '';
+    let capturedBody: unknown = null;
+
+    const mockRecipes = [
+      {
+        id: 'r1',
+        name: 'Old Pancake Name',
+        baseServings: 2,
+        dietaryTags: [],
+        ingredients: [
+          { ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup', category: 'Volume' },
+        ],
+      },
+    ];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (url.toString().endsWith('/api/recipes/r1') && options?.method === 'PUT') {
+        putCalled = true;
+        capturedMethod = options.method;
+        capturedBody = JSON.parse(options.body as string);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            id: 'r1',
+            name: 'Updated Pancake Name',
+            baseServings: 6,
+            dietaryTags: [],
+            ingredients: [
+              {
+                ingredientId: 'milk',
+                displayName: 'Milk',
+                amount: 3,
+                unit: 'cup',
+                category: 'Volume',
+              },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.toString().includes('/api/recipes')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => mockRecipes,
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Old Pancake Name')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /edit recipe old pancake name/i }));
+    expect(await screen.findByText('Edit Recipe: Old Pancake Name')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/recipe name/i), {
+      target: { value: 'Updated Pancake Name' },
+    });
+    fireEvent.change(screen.getByLabelText(/base servings/i), {
+      target: { value: '6' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(putCalled).toBe(true);
+      expect(capturedMethod).toBe('PUT');
+      expect(capturedBody).toEqual({
+        name: 'Updated Pancake Name',
+        baseServings: 6,
+        dietaryTags: [],
+        ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
+      });
+    });
+  });
+
+  it('clicking Delete requires confirmation before firing DELETE request', async () => {
+    let deleteCalled = false;
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false); // User cancels confirm!
+
+    const mockRecipes = [
+      {
+        id: 'r1',
+        name: 'Safe Recipe',
+        baseServings: 2,
+        dietaryTags: [],
+        ingredients: [],
+      },
+    ];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (url.toString().endsWith('/api/recipes/r1') && options?.method === 'DELETE') {
+        deleteCalled = true;
+        return { ok: true, status: 204 } as Response;
+      }
+      if (url.toString().includes('/api/recipes')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => mockRecipes,
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Safe Recipe')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /delete recipe safe recipe/i }));
+
+    expect(confirmSpy).toHaveBeenCalledWith('Are you sure you want to delete "Safe Recipe"?');
+    expect(deleteCalled).toBe(false); // API call was NOT made because confirm was cancelled!
+  });
+
+  it('confirming Delete fires DELETE request and removes recipe from list', async () => {
+    let deleteCalled = false;
+    vi.spyOn(window, 'confirm').mockReturnValue(true); // User approves confirm!
+
+    const mockRecipes = [
+      {
+        id: 'r1',
+        name: 'Doomed Recipe',
+        baseServings: 2,
+        dietaryTags: [],
+        ingredients: [],
+      },
+    ];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (url.toString().endsWith('/api/recipes/r1') && options?.method === 'DELETE') {
+        deleteCalled = true;
+        return { ok: true, status: 204 } as Response;
+      }
+      if (url.toString().includes('/api/recipes')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => (deleteCalled ? [] : mockRecipes),
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Doomed Recipe')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /delete recipe doomed recipe/i }));
+
+    await waitFor(() => {
+      expect(deleteCalled).toBe(true);
+    });
+  });
 });

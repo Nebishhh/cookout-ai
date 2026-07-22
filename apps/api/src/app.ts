@@ -113,6 +113,80 @@ app.get('/api/recipes/:id', async (req: Request, res: Response, next: NextFuncti
   }
 });
 
+// PUT /api/recipes/:id (Full Replace)
+app.put('/api/recipes/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
+
+    // 1. Check if recipe exists
+    const existingRecipe = await prisma.recipe.findUnique({
+      where: { id },
+    });
+    if (!existingRecipe) {
+      throw new NotFoundError(`Recipe with id "${id}" not found.`);
+    }
+
+    // 2. Validate request body and construct domain Recipe FIRST before modifying DB
+    const domainRecipe = validateAndCreateDomainRecipe(req.body as CreateRecipeInput, id);
+
+    // 3. Atomically update recipe and replace full ingredient list inside a transaction
+    const updatedPrismaRecipe = await prisma.$transaction(async (tx) => {
+      await tx.ingredientLine.deleteMany({
+        where: { recipeId: id },
+      });
+
+      return await tx.recipe.update({
+        where: { id },
+        data: {
+          name: domainRecipe.name,
+          baseServings: domainRecipe.baseServings,
+          dietaryTagsJson: JSON.stringify(domainRecipe.dietaryTags),
+          ingredients: {
+            create: domainRecipe.ingredients.map((ing, idx) => ({
+              ingredientId: ing.ingredientId,
+              displayName: ing.displayName,
+              amount: ing.quantity.amount,
+              unit: ing.quantity.unit,
+              position: idx,
+            })),
+          },
+        },
+        include: {
+          ingredients: true,
+        },
+      });
+    });
+
+    // 4. Map back through domain layer and return 200 OK
+    const reconstructedDomainRecipe = toDomainRecipe(updatedPrismaRecipe);
+    res.json(toRecipeJSON(reconstructedDomainRecipe));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/recipes/:id
+app.delete('/api/recipes/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
+
+    const existingRecipe = await prisma.recipe.findUnique({
+      where: { id },
+    });
+    if (!existingRecipe) {
+      throw new NotFoundError(`Recipe with id "${id}" not found.`);
+    }
+
+    await prisma.recipe.delete({
+      where: { id },
+    });
+
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/shopping-list
 app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFunction) => {
   try {

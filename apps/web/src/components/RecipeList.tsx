@@ -87,7 +87,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {deleteRecipeMutation.isError && (
         <Alert className="border-red-500/30 bg-red-500/10 text-red-400">
           <AlertCircle className="h-5 w-5 text-red-400" />
@@ -98,10 +98,12 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
         </Alert>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
         <div>
-          <h2 className="text-xl font-semibold text-white">Saved Recipes ({recipes.length})</h2>
-          <p className="text-xs text-slate-400">All available recipes in database</p>
+          <h2 className="text-2xl font-bold tracking-tight text-white">
+            Saved Recipes ({recipes.length})
+          </h2>
+          <p className="mt-1 text-sm text-slate-400">All available recipes in database</p>
         </div>
         <Button
           type="button"
@@ -115,11 +117,11 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {recipes.map((recipe) => (
           <Card
             key={recipe.id}
-            className="flex flex-col justify-between p-5 transition-all hover:border-slate-700 hover:shadow-lg"
+            className="flex flex-col justify-between p-5 transition-colors hover:border-slate-700"
           >
             <div>
               <CardHeader className="p-0">
@@ -166,10 +168,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
               </CardContent>
             </div>
 
-            <div className="mt-4 flex items-center justify-between border-t border-slate-800/40 pt-3 text-[11px] text-slate-500">
-              <div>
-                ID: <span className="font-mono">{recipe.id.slice(0, 8)}...</span>
-              </div>
+            <div className="mt-4 flex items-center justify-end border-t border-slate-800/40 pt-3 text-xs">
               <div className="flex items-center space-x-1">
                 <Button
                   type="button"

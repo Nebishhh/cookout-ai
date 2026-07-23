@@ -158,7 +158,7 @@ export const EventPlanner: React.FC = () => {
 
             {/* Recipe Multi-Select Grid */}
             <div>
-              <Label className="text-xs font-semibold text-slate-300 block mb-3">
+              <Label className="text-xs font-medium text-slate-300 block mb-3">
                 Select Candidate Recipes
               </Label>
 

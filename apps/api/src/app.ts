@@ -4,7 +4,10 @@ import {
   DOMAIN_PACKAGE_NAME,
   scaleRecipe,
   consolidateShoppingList,
+  planEventShoppingList,
+  GuestGroup,
   InvalidRecipeError,
+  InvalidGuestGroupError,
 } from '@cookout-ai/domain';
 import { prisma } from './prisma.js';
 import {
@@ -33,7 +36,6 @@ app.get('/api/health', (_req: Request, res: Response) => {
 /**
  * Open Question / Scope Notes:
  * - No authentication/authorization exists yet — anyone can create or read any recipe.
- * - No update or delete endpoints yet (PATCH/DELETE /api/recipes/:id) — deliberately deferred.
  */
 
 // POST /api/recipes
@@ -245,6 +247,89 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
           quantity: ing.quantity.toJSON(),
         })),
         dietaryTags: sr.dietaryTags,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Open Question / Scope Notes for Event Planning:
+ * - No persistence of event plans (matches the existing shopping-list design precedent — computed fresh on each request).
+ * - No pagination or limit on recipeIds array size — acceptable for v1 scope, note as a future concern for large collections.
+ */
+
+// POST /api/events/plan
+app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { recipeIds, guestGroup: guestGroupInput } = req.body || {};
+
+    // 1. Construct domain GuestGroup FIRST — validates inputs before touching DB
+    if (!guestGroupInput || typeof guestGroupInput !== 'object') {
+      throw new InvalidGuestGroupError('Request body must include a guestGroup object.');
+    }
+    const guestGroup = new GuestGroup(guestGroupInput);
+
+    // 2. Validate recipeIds array
+    if (!Array.isArray(recipeIds) || recipeIds.length === 0) {
+      throw new InvalidRecipeError('recipeIds must be a non-empty array of recipe ID strings.');
+    }
+
+    // 3. Fetch each recipe in recipeIds from DB via Prisma
+    const recipes = [];
+    for (const id of recipeIds) {
+      if (typeof id !== 'string' || id.trim().length === 0) {
+        throw new InvalidRecipeError(`Invalid recipeId in array: ${id}`);
+      }
+
+      const prismaRecipe = await prisma.recipe.findUnique({
+        where: { id },
+        include: {
+          ingredients: true,
+        },
+      });
+
+      if (!prismaRecipe) {
+        throw new NotFoundError(`Recipe with id "${id}" not found.`);
+      }
+
+      // Reconstruct domain Recipe reusing toDomainRecipe() mapper
+      const domainRecipe = toDomainRecipe(prismaRecipe);
+      recipes.push(domainRecipe);
+    }
+
+    // 4. Call planEventShoppingList() from @cookout-ai/domain
+    const eventPlan = planEventShoppingList(recipes, guestGroup);
+
+    // 5. Serialize EventPlan to JSON output
+    res.status(200).json({
+      guestGroup: {
+        totalGuests: eventPlan.guestGroup.totalGuests,
+        vegetarianCount: eventPlan.guestGroup.vegetarianCount,
+        veganCount: eventPlan.guestGroup.veganCount,
+        omnivoreCount: eventPlan.guestGroup.omnivoreCount,
+      },
+      includedRecipes: eventPlan.includedRecipes.map((item) => ({
+        recipeId: item.scaledRecipe.sourceRecipeId,
+        recipeName: item.scaledRecipe.sourceRecipeName,
+        eligibleServings: item.eligibleServings,
+        scaledIngredients: item.scaledRecipe.ingredients.map((ing) => ({
+          ingredientId: ing.ingredientId,
+          displayName: ing.displayName,
+          quantity: ing.quantity.toJSON(),
+        })),
+      })),
+      excludedRecipes: eventPlan.excludedRecipes.map((item) => ({
+        recipeId: item.recipe.id,
+        recipeName: item.recipe.name,
+        reason: item.reason,
+      })),
+      shoppingList: eventPlan.shoppingList.map((item) => ({
+        ingredientId: item.ingredientId,
+        displayName: item.displayName,
+        quantity: item.quantity.toJSON(),
+        sourceRecipeIds: item.sourceRecipeIds,
       })),
     });
   } catch (err) {

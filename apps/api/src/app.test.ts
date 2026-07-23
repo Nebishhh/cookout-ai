@@ -378,4 +378,221 @@ describe('CookOut AI API Endpoints', () => {
       expect(res.body).toHaveProperty('error', 'NotFound');
     });
   });
+
+  describe('POST /api/events/plan', () => {
+    it('POST /api/events/plan with a valid guest group and a mix of real created recipes returns 200 with correct eligible servings for EACH recipe', async () => {
+      // 1. Create 3 real recipes via POST /api/recipes
+      const meatRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Beef Roast',
+          baseServings: 6,
+          ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+        });
+
+      const vegRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Mac and Cheese',
+          baseServings: 4,
+          dietaryTags: ['Vegetarian'],
+          ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
+        });
+
+      const veganRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Fruit Salad',
+          baseServings: 6,
+          dietaryTags: ['Vegan'],
+          ingredients: [{ ingredientId: 'apple', displayName: 'Apple', amount: 3, unit: 'count' }],
+        });
+
+      const meatId = meatRes.body.id;
+      const vegId = vegRes.body.id;
+      const veganId = veganRes.body.id;
+
+      // 2. Call POST /api/events/plan with 12 total, 3 veg, 1 vegan (9 omnivores, 2 veg-only, 1 vegan)
+      const planReq = {
+        recipeIds: [meatId, vegId, veganId],
+        guestGroup: {
+          totalGuests: 12,
+          vegetarianCount: 3,
+          veganCount: 1,
+        },
+      };
+
+      const res = await request(app).post('/api/events/plan').send(planReq);
+
+      expect(res.status).toBe(200);
+      expect(res.body.guestGroup).toEqual({
+        totalGuests: 12,
+        vegetarianCount: 3,
+        veganCount: 1,
+        omnivoreCount: 9,
+      });
+
+      expect(res.body.includedRecipes).toHaveLength(3);
+      expect(res.body.excludedRecipes).toHaveLength(0);
+
+      const meatPlan = res.body.includedRecipes.find(
+        (r: { recipeName: string }) => r.recipeName === 'Beef Roast'
+      );
+      const vegPlan = res.body.includedRecipes.find(
+        (r: { recipeName: string }) => r.recipeName === 'Mac and Cheese'
+      );
+      const veganPlan = res.body.includedRecipes.find(
+        (r: { recipeName: string }) => r.recipeName === 'Fruit Salad'
+      );
+
+      expect(meatPlan?.eligibleServings).toBe(9); // 9 omnivores
+      expect(vegPlan?.eligibleServings).toBe(11); // 12 total - 1 vegan
+      expect(veganPlan?.eligibleServings).toBe(12); // 12 total guests
+    });
+
+    it('POST /api/events/plan with an invalid guestGroup returns 400 with error name InvalidGuestGroupError', async () => {
+      const meatRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Beef Roast',
+          baseServings: 6,
+          ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+        });
+
+      const invalidReq = {
+        recipeIds: [meatRes.body.id],
+        guestGroup: {
+          totalGuests: 10,
+          vegetarianCount: 2,
+          veganCount: 5, // Invalid! veganCount > vegetarianCount
+        },
+      };
+
+      const res = await request(app).post('/api/events/plan').send(invalidReq);
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidGuestGroupError');
+    });
+
+    it('POST /api/events/plan with a nonexistent recipeId returns 404 naming the missing id', async () => {
+      const realRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Beef Roast',
+          baseServings: 6,
+          ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+        });
+
+      const missingId = 'non-existent-recipe-id-999';
+      const planReq = {
+        recipeIds: [realRes.body.id, missingId],
+        guestGroup: {
+          totalGuests: 10,
+          vegetarianCount: 2,
+          veganCount: 1,
+        },
+      };
+
+      const res = await request(app).post('/api/events/plan').send(planReq);
+
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
+      expect(res.body.message).toContain(missingId);
+    });
+
+    it('POST /api/events/plan with an empty recipeIds array returns 400', async () => {
+      const emptyReq = {
+        recipeIds: [],
+        guestGroup: {
+          totalGuests: 10,
+          vegetarianCount: 2,
+          veganCount: 1,
+        },
+      };
+
+      const res = await request(app).post('/api/events/plan').send(emptyReq);
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
+    });
+
+    it('POST /api/events/plan correctly excludes a recipe with 0 eligible guests and includes the reason in the response', async () => {
+      const meatRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Steak Dinner',
+          baseServings: 2,
+          ingredients: [{ ingredientId: 'beef', displayName: 'Steak', amount: 2, unit: 'lb' }],
+        });
+
+      const allVegReq = {
+        recipeIds: [meatRes.body.id],
+        guestGroup: {
+          totalGuests: 10,
+          vegetarianCount: 10, // 100% vegetarian guests
+          veganCount: 2,
+        },
+      };
+
+      const res = await request(app).post('/api/events/plan').send(allVegReq);
+
+      expect(res.status).toBe(200);
+      expect(res.body.includedRecipes).toHaveLength(0);
+      expect(res.body.excludedRecipes).toHaveLength(1);
+      expect(res.body.excludedRecipes[0].recipeName).toBe('Steak Dinner');
+      expect(res.body.excludedRecipes[0].reason).toContain('No eligible guests');
+      expect(res.body.shoppingList).toHaveLength(0);
+    });
+
+    it('POST /api/events/plan shoppingList correctly consolidates ingredients across multiple included recipes', async () => {
+      // Group: 10 guests (2 vegetarians, 0 vegans) => 8 omnivores, 2 vegetarians
+      // Recipe 1: Meat dish (8 eligible, base 4 => scale 2.0). Needs 500g potatoes
+      const r1Res = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Shepherd Pie',
+          baseServings: 4,
+          ingredients: [
+            { ingredientId: 'potato', displayName: 'Russet Potato', amount: 500, unit: 'g' },
+          ],
+        });
+
+      // Recipe 2: Vegan dish (10 eligible, base 5 => scale 2.0). Needs 1 kg potatoes
+      const r2Res = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Mashed Potatoes',
+          baseServings: 5,
+          dietaryTags: ['Vegan'],
+          ingredients: [
+            { ingredientId: 'potato', displayName: 'Yukon Potato', amount: 1, unit: 'kg' },
+          ],
+        });
+
+      const r1Id = r1Res.body.id;
+      const r2Id = r2Res.body.id;
+
+      const planReq = {
+        recipeIds: [r1Id, r2Id],
+        guestGroup: {
+          totalGuests: 10,
+          vegetarianCount: 2,
+          veganCount: 0,
+        },
+      };
+
+      const res = await request(app).post('/api/events/plan').send(planReq);
+
+      expect(res.status).toBe(200);
+      expect(res.body.includedRecipes).toHaveLength(2);
+      expect(res.body.shoppingList).toHaveLength(1);
+
+      const potatoItem = res.body.shoppingList[0];
+      expect(potatoItem.ingredientId).toBe('potato');
+      // 500g * 2.0 = 1000g + (1kg * 2.0 = 2000g) = 3000g
+      expect(potatoItem.quantity.amount).toBe(3000);
+      expect(potatoItem.quantity.unit).toBe('g');
+      expect(potatoItem.sourceRecipeIds).toEqual([r1Id, r2Id]);
+    });
+  });
 });

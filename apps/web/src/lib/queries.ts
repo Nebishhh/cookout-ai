@@ -5,6 +5,8 @@ import {
   type CreateRecipeInput,
   type ShoppingListRequestItem,
   type ShoppingListResponseDto,
+  type PlanEventInput,
+  type EventPlanResponseDto,
 } from './api';
 
 /**
@@ -18,7 +20,7 @@ export const RECIPES_QUERY_KEY = ['recipes'] as const;
 
 /**
  * Shared query hook for fetching all recipes (GET /api/recipes).
- * Shared across RecipeList and ShoppingListBuilder so both components share a single cache entry.
+ * Shared across RecipeList, ShoppingListBuilder, and EventPlanner so all components share a single cache entry.
  */
 export function useRecipes() {
   return useQuery<RecipeDto[]>({
@@ -79,5 +81,15 @@ export function useDeleteRecipe() {
 export function useBuildShoppingList() {
   return useMutation<ShoppingListResponseDto, Error, ShoppingListRequestItem[]>({
     mutationFn: (items: ShoppingListRequestItem[]) => api.buildShoppingList(items),
+  });
+}
+
+/**
+ * Mutation hook for generating a diet-split event plan (POST /api/events/plan).
+ * Implemented as a compute-on-demand mutation with no cache invalidation needed.
+ */
+export function usePlanEvent() {
+  return useMutation<EventPlanResponseDto, Error, PlanEventInput>({
+    mutationFn: (data: PlanEventInput) => api.planEvent(data),
   });
 }

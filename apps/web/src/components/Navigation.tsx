@@ -1,10 +1,10 @@
 import React from 'react';
-import { UtensilsCrossed, ShoppingBag, Flame } from 'lucide-react';
+import { UtensilsCrossed, ShoppingBag, Flame, Calendar } from 'lucide-react';
 import { Button } from './ui/button';
 
 interface NavigationProps {
-  currentTab: 'recipes' | 'shopping-list';
-  onTabChange: (tab: 'recipes' | 'shopping-list') => void;
+  currentTab: 'recipes' | 'shopping-list' | 'event-planner';
+  onTabChange: (tab: 'recipes' | 'shopping-list' | 'event-planner') => void;
 }
 
 export const Navigation: React.FC<NavigationProps> = ({ currentTab, onTabChange }) => {
@@ -53,6 +53,21 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onTabChange 
           >
             <ShoppingBag className="h-4 w-4" />
             <span>Shopping List</span>
+          </Button>
+
+          <Button
+            id="nav-tab-event-planner"
+            type="button"
+            variant={currentTab === 'event-planner' ? 'default' : 'ghost'}
+            onClick={() => onTabChange('event-planner')}
+            className={`space-x-2 text-sm font-semibold ${
+              currentTab === 'event-planner'
+                ? 'bg-orange-500 text-black shadow-sm'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Calendar className="h-4 w-4" />
+            <span>Event Planner</span>
           </Button>
         </nav>
       </div>

@@ -540,4 +540,249 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       expect(deleteCalled).toBe(true);
     });
   });
+
+  describe('Event Planner UI Tests', () => {
+    it('submitting the event planner form calls POST /api/events/plan with expected payload shape and renders included, excluded, and shopping list results', async () => {
+      let capturedBody: unknown = null;
+      const mockRecipes = [
+        {
+          id: 'r-meat',
+          name: 'Beef Roast',
+          baseServings: 6,
+          dietaryTags: [],
+          ingredients: [
+            {
+              ingredientId: 'beef',
+              displayName: 'Beef',
+              amount: 1,
+              unit: 'kg',
+              category: 'Mass',
+            },
+          ],
+        },
+        {
+          id: 'r-steak',
+          name: 'Steak Dinner',
+          baseServings: 2,
+          dietaryTags: [],
+          ingredients: [
+            {
+              ingredientId: 'beef',
+              displayName: 'Steak',
+              amount: 2,
+              unit: 'lb',
+              category: 'Mass',
+            },
+          ],
+        },
+      ];
+
+      const mockEventPlanResponse = {
+        guestGroup: {
+          totalGuests: 12,
+          vegetarianCount: 3,
+          veganCount: 1,
+          omnivoreCount: 9,
+        },
+        includedRecipes: [
+          {
+            recipeId: 'r-meat',
+            recipeName: 'Beef Roast',
+            eligibleServings: 9,
+            scaledIngredients: [
+              {
+                ingredientId: 'beef',
+                displayName: 'Beef',
+                quantity: { amount: 1.5, unit: 'kg', category: 'Mass' },
+              },
+            ],
+          },
+        ],
+        excludedRecipes: [
+          {
+            recipeId: 'r-steak',
+            recipeName: 'Steak Dinner',
+            reason:
+              'No eligible guests: recipe has no vegetarian/vegan tags and all guests have dietary restrictions.',
+          },
+        ],
+        shoppingList: [
+          {
+            ingredientId: 'beef',
+            displayName: 'Beef',
+            quantity: { amount: 1.5, unit: 'kg', category: 'Mass' },
+            sourceRecipeIds: ['r-meat'],
+          },
+        ],
+      };
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockRecipes,
+          } as Response;
+        }
+        if (url.toString().endsWith('/api/events/plan') && options?.method === 'POST') {
+          capturedBody = JSON.parse(options.body as string);
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockEventPlanResponse,
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      // Switch to Event Planner tab
+      fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+
+      expect(await screen.findByText('1. Guest Breakdown & Recipe Selection')).toBeInTheDocument();
+      expect(await screen.findByText('Beef Roast')).toBeInTheDocument();
+
+      // Change guest group inputs
+      fireEvent.change(screen.getByLabelText(/total guests/i), {
+        target: { value: '12' },
+      });
+      fireEvent.change(screen.getByLabelText(/vegetarian guests/i), {
+        target: { value: '3' },
+      });
+      fireEvent.change(screen.getByLabelText(/vegan guests/i), {
+        target: { value: '1' },
+      });
+
+      // Select both recipes
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe beef roast/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe steak dinner/i }));
+
+      // Submit form
+      fireEvent.click(screen.getByRole('button', { name: /plan event shopping list/i }));
+
+      await waitFor(() => {
+        expect(capturedBody).toEqual({
+          recipeIds: ['r-meat', 'r-steak'],
+          guestGroup: {
+            totalGuests: 12,
+            vegetarianCount: 3,
+            veganCount: 1,
+          },
+        });
+      });
+
+      // Verify Included Recipes section
+      expect(await screen.findByText('Included Recipes')).toBeInTheDocument();
+      expect(screen.getByText('serves 9 guests')).toBeInTheDocument();
+
+      // Verify Excluded Recipes section with reason text
+      expect(screen.getByText('Excluded Recipes')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'No eligible guests: recipe has no vegetarian/vegan tags and all guests have dietary restrictions.'
+        )
+      ).toBeInTheDocument();
+
+      // Verify Consolidated Event Shopping List section
+      expect(screen.getByText('Consolidated Event Shopping List')).toBeInTheDocument();
+      expect(screen.getByText('1.5 kg')).toBeInTheDocument();
+    });
+
+    it('displays 400 error message (invalid guest group) from POST /api/events/plan', async () => {
+      const mockRecipes = [
+        {
+          id: 'r1',
+          name: 'Pancakes',
+          baseServings: 4,
+          dietaryTags: [],
+          ingredients: [],
+        },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockRecipes,
+          } as Response;
+        }
+        if (url.toString().endsWith('/api/events/plan') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 400,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'InvalidGuestGroupError',
+              message: 'veganCount (5) cannot exceed vegetarianCount (2)',
+            }),
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+
+      expect(await screen.findByText('Pancakes')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe pancakes/i }));
+      fireEvent.click(screen.getByRole('button', { name: /plan event shopping list/i }));
+
+      expect(
+        await screen.findByText('veganCount (5) cannot exceed vegetarianCount (2)')
+      ).toBeInTheDocument();
+    });
+
+    it('displays 404 error message (missing recipe) from POST /api/events/plan', async () => {
+      const mockRecipes = [
+        {
+          id: 'r1',
+          name: 'Pancakes',
+          baseServings: 4,
+          dietaryTags: [],
+          ingredients: [],
+        },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockRecipes,
+          } as Response;
+        }
+        if (url.toString().endsWith('/api/events/plan') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 404,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'NotFound',
+              message: 'Recipe with id "missing-id-999" not found.',
+            }),
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+
+      expect(await screen.findByText('Pancakes')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe pancakes/i }));
+      fireEvent.click(screen.getByRole('button', { name: /plan event shopping list/i }));
+
+      expect(
+        await screen.findByText('Recipe with id "missing-id-999" not found.')
+      ).toBeInTheDocument();
+    });
+  });
 });

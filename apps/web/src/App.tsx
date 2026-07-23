@@ -5,13 +5,13 @@ import { Navigation } from './components/Navigation';
 import { RecipeList } from './components/RecipeList';
 import { RecipeForm } from './components/RecipeForm';
 import { ShoppingListBuilder } from './components/ShoppingListBuilder';
+import { EventPlanner } from './components/EventPlanner';
 
 /**
  * Open Questions / Scope Notes:
  * - Query stale time / cache invalidation strategy is using TanStack Query defaults (5-min staleTime configured for shared queries).
  * - No client-side routing guard or authentication exists (matches API's current no-auth scope).
- * - Shopping lists built via POST /api/shopping-list are dynamically generated on request and never persisted,
- *   so recipe edits or deletions do not require optimistic-locking or shopping list staleness checks.
+ * - Shopping lists built via POST /api/shopping-list and event plans built via POST /api/events/plan are dynamically generated on request and never persisted.
  * - No confirmation UI beyond basic browser confirm dialog.
  * - No optimistic updates on mutations (out of scope for this milestone).
  */
@@ -36,20 +36,25 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
 
   const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
 
-  // Sync tab with URL hash (#recipes or #shopping-list)
-  const getInitialTab = (): 'recipes' | 'shopping-list' => {
+  // Sync tab with URL hash (#recipes, #shopping-list, or #event-planner)
+  const getInitialTab = (): 'recipes' | 'shopping-list' | 'event-planner' => {
     const hash = window.location.hash.replace('#', '');
     if (hash === 'shopping-list') return 'shopping-list';
+    if (hash === 'event-planner') return 'event-planner';
     return 'recipes';
   };
 
-  const [currentTab, setCurrentTab] = useState<'recipes' | 'shopping-list'>(getInitialTab);
+  const [currentTab, setCurrentTab] = useState<'recipes' | 'shopping-list' | 'event-planner'>(
+    getInitialTab
+  );
 
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#', '');
       if (hash === 'shopping-list') {
         setCurrentTab('shopping-list');
+      } else if (hash === 'event-planner') {
+        setCurrentTab('event-planner');
       } else {
         setCurrentTab('recipes');
       }
@@ -59,7 +64,7 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  const handleTabChange = (tab: 'recipes' | 'shopping-list') => {
+  const handleTabChange = (tab: 'recipes' | 'shopping-list' | 'event-planner') => {
     setCurrentTab(tab);
     window.location.hash = tab;
   };
@@ -79,8 +84,10 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
               />
               <RecipeList onEditRecipe={(recipe) => setEditingRecipe(recipe)} />
             </div>
-          ) : (
+          ) : currentTab === 'shopping-list' ? (
             <ShoppingListBuilder />
+          ) : (
+            <EventPlanner />
           )}
         </main>
       </div>

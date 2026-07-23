@@ -77,6 +77,50 @@ export interface ShoppingListResponseDto {
   scaledRecipes: ScaledRecipeDto[];
 }
 
+export interface GuestGroupDto {
+  totalGuests: number;
+  vegetarianCount: number;
+  veganCount: number;
+  omnivoreCount: number;
+}
+
+export interface IncludedRecipePlanDto {
+  recipeId: string;
+  recipeName: string;
+  eligibleServings: number;
+  scaledIngredients: Array<{
+    ingredientId: string;
+    displayName: string;
+    quantity: {
+      amount: number;
+      unit: string;
+      category: string;
+    };
+  }>;
+}
+
+export interface ExcludedRecipePlanDto {
+  recipeId: string;
+  recipeName: string;
+  reason: string;
+}
+
+export interface EventPlanResponseDto {
+  guestGroup: GuestGroupDto;
+  includedRecipes: IncludedRecipePlanDto[];
+  excludedRecipes: ExcludedRecipePlanDto[];
+  shoppingList: ShoppingListItemDto[];
+}
+
+export interface PlanEventInput {
+  recipeIds: string[];
+  guestGroup: {
+    totalGuests: number;
+    vegetarianCount?: number;
+    veganCount?: number;
+  };
+}
+
 export class ApiError extends Error {
   status: number;
   errorName?: string;
@@ -133,5 +177,10 @@ export const api = {
     request<ShoppingListResponseDto>('/api/shopping-list', {
       method: 'POST',
       body: JSON.stringify(items),
+    }),
+  planEvent: (data: PlanEventInput) =>
+    request<EventPlanResponseDto>('/api/events/plan', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
 };

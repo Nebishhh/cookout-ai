@@ -8,6 +8,7 @@ import {
   GuestGroup,
   InvalidRecipeError,
   InvalidGuestGroupError,
+  DomainError,
 } from '@cookout-ai/domain';
 import { prisma } from './prisma.js';
 import {
@@ -16,6 +17,7 @@ import {
   toRecipeJSON,
   type CreateRecipeInput,
 } from './recipeMapper.js';
+import { parseRecipeTextWithGemini } from './geminiClient.js';
 import { errorHandler, NotFoundError } from './middleware/errorHandler.js';
 
 export const app = express();
@@ -37,6 +39,87 @@ app.get('/api/health', (_req: Request, res: Response) => {
  * Open Question / Scope Notes:
  * - No authentication/authorization exists yet — anyone can create or read any recipe.
  */
+
+/**
+ * Open Question / Scope Notes for Recipe Import:
+ * - No rate limiting or cost controls on this endpoint yet — acceptable for personal-use v1 tool.
+ * - URL import and image import are explicitly out of scope for this milestone.
+ * - No caching of Gemini responses — each call is a fresh API request.
+ * - ZERO database persistence — returns parsed draft data for review.
+ */
+app.post('/api/recipes/import-text', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { text } = req.body || {};
+    if (typeof text !== 'string' || text.trim() === '') {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'Request body must contain a non-empty "text" string.',
+      });
+    }
+
+    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '') {
+      return res.status(500).json({
+        error: 'ServerConfigurationError',
+        message: 'Server is not configured for AI recipe import: GEMINI_API_KEY is missing.',
+      });
+    }
+
+    let rawAiResponse: string;
+    try {
+      rawAiResponse = await parseRecipeTextWithGemini(text);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
+      return res.status(502).json({
+        error: 'BadGateway',
+        message: `Upstream AI service error: ${errorMessage}`,
+      });
+    }
+
+    let parsedCandidate: unknown;
+    try {
+      const sanitizedResponse = rawAiResponse
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+      parsedCandidate = JSON.parse(sanitizedResponse);
+    } catch {
+      return res.status(502).json({
+        error: 'BadGateway',
+        message: 'Upstream AI service returned invalid JSON response.',
+      });
+    }
+
+    // Validate draft structure against domain rules (without persisting)
+    let domainRecipe;
+    try {
+      domainRecipe = validateAndCreateDomainRecipe(parsedCandidate as CreateRecipeInput);
+    } catch (err) {
+      if (err instanceof DomainError) {
+        return res.status(422).json({
+          error: err.name,
+          message: err.message,
+        });
+      }
+      throw err;
+    }
+
+    // Success response: Return plain parsed draft data (no ID, no DB persistence)
+    return res.status(200).json({
+      name: domainRecipe.name,
+      baseServings: domainRecipe.baseServings,
+      dietaryTags: domainRecipe.dietaryTags,
+      ingredients: domainRecipe.ingredients.map((ing) => ({
+        ingredientId: ing.ingredientId,
+        displayName: ing.displayName,
+        amount: ing.quantity.amount,
+        unit: ing.quantity.unit,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // POST /api/recipes
 app.post('/api/recipes', async (req: Request, res: Response, next: NextFunction) => {

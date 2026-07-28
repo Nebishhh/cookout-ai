@@ -92,6 +92,20 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
       });
     }
 
+    if (
+      parsedCandidate &&
+      typeof parsedCandidate === 'object' &&
+      'error' in parsedCandidate &&
+      (parsedCandidate as { error: string }).error === 'NoRecipeFound'
+    ) {
+      return res.status(502).json({
+        error: 'ExtractionError',
+        message:
+          (parsedCandidate as { message?: string }).message ||
+          'The provided text does not contain explicit recipe ingredients or quantities.',
+      });
+    }
+
     // Validate draft structure against domain rules (without persisting)
     let domainRecipe;
     try {
@@ -215,6 +229,20 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
       return res.status(502).json({
         error: 'BadGateway',
         message: 'Upstream AI service returned invalid JSON response.',
+      });
+    }
+
+    if (
+      parsedCandidate &&
+      typeof parsedCandidate === 'object' &&
+      'error' in parsedCandidate &&
+      (parsedCandidate as { error: string }).error === 'NoRecipeFound'
+    ) {
+      return res.status(502).json({
+        error: 'ExtractionError',
+        message:
+          (parsedCandidate as { message?: string }).message ||
+          'The provided text does not contain explicit recipe ingredients or quantities.',
       });
     }
 

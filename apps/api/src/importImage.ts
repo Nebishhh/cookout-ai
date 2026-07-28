@@ -1,0 +1,121 @@
+import type { Request, Response } from 'express';
+import { DomainError } from '@cookout-ai/domain';
+import { parseAndValidateImageStream, ImageValidationError } from './imageValidator.js';
+import { parseRecipeImageWithGeminiTimeout } from './geminiClient.js';
+import { validateAndCreateDomainRecipe, type CreateRecipeInput } from './recipeMapper.js';
+
+export interface ImportRecipeImageResponseDto {
+  name: string;
+  baseServings: number;
+  dietaryTags: string[];
+  ingredients: {
+    ingredientId: string;
+    displayName: string;
+    amount: number;
+    unit: string;
+  }[];
+}
+
+export async function handleImportImage(req: Request, res: Response): Promise<void> {
+  try {
+    const { buffer, mimeType } = await parseAndValidateImageStream(req);
+
+    const rawGeminiResponse = await parseRecipeImageWithGeminiTimeout(buffer, mimeType);
+
+    // Clean up potential markdown formatting code blocks if present
+    const cleanedText = rawGeminiResponse
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/, '')
+      .replace(/\s*```$/, '')
+      .trim();
+
+    let parsedJson: Record<string, unknown>;
+    try {
+      parsedJson = JSON.parse(cleanedText);
+    } catch {
+      res.status(502).json({
+        error: 'ExtractionError',
+        message: 'Gemini returned malformed or non-JSON response text.',
+      });
+      return;
+    }
+
+    if (parsedJson.error === 'NoRecipeFound') {
+      res.status(502).json({
+        error: 'ExtractionError',
+        message:
+          typeof parsedJson.message === 'string'
+            ? parsedJson.message
+            : 'The provided image does not contain explicit recipe ingredients or quantities.',
+      });
+      return;
+    }
+
+    // Domain validation via domain layer factory (zero persistence)
+    let validDomainRecipe;
+    try {
+      validDomainRecipe = validateAndCreateDomainRecipe(parsedJson as unknown as CreateRecipeInput);
+    } catch (err) {
+      if (
+        err instanceof DomainError ||
+        (err instanceof Error && (err.name.startsWith('Invalid') || err.name.includes('Domain')))
+      ) {
+        res.status(422).json({
+          error: err.name,
+          message: err.message,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    const responseDto: ImportRecipeImageResponseDto = {
+      name: validDomainRecipe.name,
+      baseServings: validDomainRecipe.baseServings,
+      dietaryTags: [...validDomainRecipe.dietaryTags],
+      ingredients: validDomainRecipe.ingredients.map((ing) => ({
+        ingredientId: ing.ingredientId,
+        displayName: ing.displayName,
+        amount: ing.quantity.amount,
+        unit: ing.quantity.unit,
+      })),
+    };
+
+    res.status(200).json(responseDto);
+  } catch (error: unknown) {
+    if (error instanceof ImageValidationError) {
+      res.status(error.statusCode).json({
+        error: error.errorName,
+        message: error.message,
+      });
+      return;
+    }
+
+    if (error instanceof Error) {
+      if (error.message.includes('GEMINI_API_KEY is not configured')) {
+        res.status(500).json({
+          error: 'InternalServerError',
+          message: error.message,
+        });
+        return;
+      }
+
+      if (
+        error.message.includes('timed out') ||
+        error.message.includes('Gemini API') ||
+        error.message.includes('Empty response')
+      ) {
+        res.status(502).json({
+          error: 'BadGateway',
+          message: error.message,
+        });
+        return;
+      }
+    }
+
+    res.status(500).json({
+      error: 'InternalServerError',
+      message: 'An unexpected internal error occurred during image import.',
+    });
+  }
+}

@@ -20,6 +20,7 @@ import {
 import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
 import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
+import { handleImportImage } from './importImage.js';
 import { errorHandler, NotFoundError } from './middleware/errorHandler.js';
 
 export const app = express();
@@ -276,6 +277,8 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
     next(err);
   }
 });
+
+app.post('/api/recipes/import-image', handleImportImage);
 
 // POST /api/recipes
 app.post('/api/recipes', async (req: Request, res: Response, next: NextFunction) => {

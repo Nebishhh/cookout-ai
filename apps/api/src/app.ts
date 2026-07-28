@@ -17,7 +17,9 @@ import {
   toRecipeJSON,
   type CreateRecipeInput,
 } from './recipeMapper.js';
-import { parseRecipeTextWithGemini } from './geminiClient.js';
+import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
+import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
+import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
 import { errorHandler, NotFoundError } from './middleware/errorHandler.js';
 
 export const app = express();
@@ -91,6 +93,132 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
     }
 
     // Validate draft structure against domain rules (without persisting)
+    let domainRecipe;
+    try {
+      domainRecipe = validateAndCreateDomainRecipe(parsedCandidate as CreateRecipeInput);
+    } catch (err) {
+      if (err instanceof DomainError) {
+        return res.status(422).json({
+          error: err.name,
+          message: err.message,
+        });
+      }
+      throw err;
+    }
+
+    // Success response: Return plain parsed draft data (no ID, no DB persistence)
+    return res.status(200).json({
+      name: domainRecipe.name,
+      baseServings: domainRecipe.baseServings,
+      dietaryTags: domainRecipe.dietaryTags,
+      ingredients: domainRecipe.ingredients.map((ing) => ({
+        ingredientId: ing.ingredientId,
+        displayName: ing.displayName,
+        amount: ing.quantity.amount,
+        unit: ing.quantity.unit,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Open Questions / Scope Notes for URL Recipe Import:
+ * - Basic SSRF protection implemented (http/https protocols, literal localhost check, DNS IP range lookup, manual 5-hop redirect re-validation, 10s timeout, streamed 2MB body limit).
+ * - User-Agent spoofing ("CookOutAI-Recipe-Import/1.0") helps with some sites, but sites using advanced bot detection beyond header inspection may still block requests.
+ * - Naive HTML-to-text fallback may produce noisy input to Gemini if no schema.org JSON-LD is found.
+ * - No caching of fetched pages or parsed results — each call fetches fresh HTML and calls Gemini.
+ * - Image import remains out of scope for this milestone.
+ * - ZERO database persistence — returns parsed draft data for review.
+ */
+app.post('/api/recipes/import-url', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { url } = req.body || {};
+    if (typeof url !== 'string' || url.trim() === '') {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'Request body must contain a non-empty "url" string.',
+      });
+    }
+
+    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '') {
+      return res.status(500).json({
+        error: 'ServerConfigurationError',
+        message: 'Server is not configured for AI recipe import: GEMINI_API_KEY is missing.',
+      });
+    }
+
+    // Step 1: Fetch HTML (with SSRF, protocol, DNS IP, manual redirect, timeout, size limit, content-type checks)
+    let html: string;
+    try {
+      html = await fetchRecipeHtml(url.trim());
+    } catch (err) {
+      if (err instanceof SsrfValidationError) {
+        return res.status(400).json({
+          error: err.name,
+          message: err.message,
+        });
+      }
+      if (err instanceof FetchError) {
+        return res.status(err.statusCode).json({
+          error: err.name,
+          message: err.message,
+        });
+      }
+      return res.status(502).json({
+        error: 'BadGateway',
+        message: `Failed to fetch webpage: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
+    // Step 2: Extract text (JSON-LD priority, HTML-text fallback priority)
+    let extractedText: string;
+    try {
+      const extracted = extractRecipeText(html);
+      extractedText = extracted.extractedText;
+    } catch (err) {
+      if (err instanceof ExtractionError) {
+        return res.status(err.statusCode).json({
+          error: err.name,
+          message: err.message,
+        });
+      }
+      return res.status(502).json({
+        error: 'ExtractionError',
+        message: `Failed to extract text from webpage: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
+    // Step 3: Call parseRecipeTextWithGeminiTimeout (30s timeout)
+    let rawAiResponse: string;
+    try {
+      rawAiResponse = await parseRecipeTextWithGeminiTimeout(extractedText);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
+      return res.status(502).json({
+        error: 'BadGateway',
+        message: `Upstream AI service error: ${errorMessage}`,
+      });
+    }
+
+    // Step 4: Parse candidate JSON
+    let parsedCandidate: unknown;
+    try {
+      const sanitizedResponse = rawAiResponse
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+      parsedCandidate = JSON.parse(sanitizedResponse);
+    } catch {
+      return res.status(502).json({
+        error: 'BadGateway',
+        message: 'Upstream AI service returned invalid JSON response.',
+      });
+    }
+
+    // Step 5: Validate draft against domain rules
     let domainRecipe;
     try {
       domainRecipe = validateAndCreateDomainRecipe(parsedCandidate as CreateRecipeInput);

@@ -65,3 +65,26 @@ export async function parseRecipeTextWithGemini(text: string): Promise<string> {
 
   return responseText;
 }
+
+/**
+ * Wraps parseRecipeTextWithGemini with a ~30-second timeout.
+ * Reuses the existing parseRecipeTextWithGemini function unmodified.
+ */
+export async function parseRecipeTextWithGeminiTimeout(
+  text: string,
+  timeoutMs = 30000
+): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Gemini API request timed out after ${timeoutMs / 1000} seconds.`));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([parseRecipeTextWithGemini(text), timeoutPromise]);
+    return result;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

@@ -7,6 +7,7 @@ import * as geminiClientModule from './geminiClient.js';
 // Mock geminiClient module so tests never make real network API calls
 vi.mock('./geminiClient.js', () => ({
   parseRecipeTextWithGemini: vi.fn(),
+  parseRecipeTextWithGeminiTimeout: vi.fn(),
 }));
 
 describe('POST /api/recipes/import-text', () => {

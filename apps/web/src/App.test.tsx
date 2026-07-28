@@ -1051,4 +1051,256 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       expect(screen.queryByRole('button', { name: /paste recipe text/i })).not.toBeInTheDocument();
     });
   });
+
+  describe('AI Recipe URL Import UI Tests', () => {
+    it('submits URL to import UI (POST /api/recipes/import-url) and pre-fills form fields without auto-persisting', async () => {
+      let importUrlCalled = false;
+      let capturedUrl = '';
+      let postRecipesCalled = false;
+
+      const mockDraft = {
+        name: 'URL Pancakes',
+        baseServings: 4,
+        dietaryTags: ['Vegetarian'],
+        ingredients: [
+          { ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' },
+          { ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' },
+        ],
+      };
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-url') && options?.method === 'POST') {
+          importUrlCalled = true;
+          const body = JSON.parse(options.body as string);
+          capturedUrl = body.url;
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockDraft,
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes') && options?.method === 'POST') {
+          postRecipesCalled = true;
+          return { ok: false, status: 500 } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /url link/i }));
+
+      const urlInput = screen.getByLabelText(/enter recipe webpage url below/i);
+      fireEvent.change(urlInput, { target: { value: 'https://example.com/pancakes' } });
+
+      const importButton = screen.getByRole('button', { name: /import from url/i });
+      expect(importButton).toHaveAttribute('type', 'button');
+
+      fireEvent.click(importButton);
+
+      await waitFor(() => {
+        expect(importUrlCalled).toBe(true);
+        expect(capturedUrl).toBe('https://example.com/pancakes');
+      });
+
+      expect(await screen.findByDisplayValue('URL Pancakes')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('4')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Flour')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Milk')).toBeInTheDocument();
+
+      // CRITICAL: confirm POST /api/recipes was NOT called automatically
+      expect(postRecipesCalled).toBe(false);
+
+      expect(screen.getByText(/imported via ai — please review all fields/i)).toBeInTheDocument();
+    });
+
+    it('pressing Enter in the URL input triggers URL import and does NOT submit the RecipeForm', async () => {
+      let importUrlCalled = false;
+      let postRecipesCalled = false;
+
+      const mockDraft = {
+        name: 'Enter Key Waffles',
+        baseServings: 2,
+        dietaryTags: [],
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' }],
+      };
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-url') && options?.method === 'POST') {
+          importUrlCalled = true;
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockDraft,
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes') && options?.method === 'POST') {
+          postRecipesCalled = true;
+          return { ok: false, status: 500 } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /url link/i }));
+
+      const urlInput = screen.getByLabelText(/enter recipe webpage url below/i);
+      fireEvent.change(urlInput, { target: { value: 'https://example.com/waffles' } });
+
+      // Press Enter inside URL input
+      fireEvent.keyDown(urlInput, { key: 'Enter', code: 'Enter' });
+
+      await waitFor(() => {
+        expect(importUrlCalled).toBe(true);
+      });
+
+      // Confirm form creation endpoint was NOT triggered by Enter key
+      expect(postRecipesCalled).toBe(false);
+      expect(await screen.findByDisplayValue('Enter Key Waffles')).toBeInTheDocument();
+    });
+
+    it('displays error message when URL import returns 502 (NoRecipeFound / extraction failure)', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-url') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 502,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'ExtractionError',
+              message:
+                'The provided text does not contain explicit recipe ingredients or quantities.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /url link/i }));
+
+      const urlInput = screen.getByLabelText(/enter recipe webpage url below/i);
+      fireEvent.change(urlInput, { target: { value: 'https://en.wikipedia.org/wiki/Pancake' } });
+
+      const importButton = screen.getByRole('button', { name: /import from url/i });
+      fireEvent.click(importButton);
+
+      expect(
+        await screen.findByText(
+          /the provided text does not contain explicit recipe ingredients or quantities/i
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('displays error message when URL import returns 400 (SSRF / invalid URL) without leaking internal IP or hop count details', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-url') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 400,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'SsrfValidationError',
+              message: 'Access to hostname "localhost" is forbidden.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /url link/i }));
+
+      const urlInput = screen.getByLabelText(/enter recipe webpage url below/i);
+      fireEvent.change(urlInput, { target: { value: 'http://localhost:3001' } });
+
+      const importButton = screen.getByRole('button', { name: /import from url/i });
+      fireEvent.click(importButton);
+
+      expect(
+        await screen.findByText(/access to hostname "localhost" is forbidden/i)
+      ).toBeInTheDocument();
+    });
+
+    it('displays clean generic error message when URL import returns 500 (Internal Server Error)', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-url') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 500,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'InternalServerError',
+              message: 'Server error: GEMINI_API_KEY is missing or invalid.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /url link/i }));
+
+      const urlInput = screen.getByLabelText(/enter recipe webpage url below/i);
+      fireEvent.change(urlInput, { target: { value: 'https://example.com/recipe' } });
+
+      const importButton = screen.getByRole('button', { name: /import from url/i });
+      fireEvent.click(importButton);
+
+      expect(
+        await screen.findByText(/server error: gemini_api_key is missing or invalid/i)
+      ).toBeInTheDocument();
+    });
+  });
 });

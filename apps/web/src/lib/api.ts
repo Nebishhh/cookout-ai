@@ -200,4 +200,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
+  importRecipeUrl: (url: string) =>
+    request<ImportRecipeTextResponseDto>('/api/recipes/import-url', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
 };

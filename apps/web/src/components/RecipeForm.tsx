@@ -12,7 +12,12 @@ import {
   Info,
 } from 'lucide-react';
 import type { IngredientInput, RecipeDto } from '../lib/api';
-import { useCreateRecipe, useUpdateRecipe, useImportRecipeText } from '../lib/queries';
+import {
+  useCreateRecipe,
+  useUpdateRecipe,
+  useImportRecipeText,
+  useImportRecipeUrl,
+} from '../lib/queries';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -49,6 +54,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
   );
 
   const [importText, setImportText] = useState('');
+  const [importUrl, setImportUrl] = useState('');
+  const [importMode, setImportMode] = useState<'text' | 'url'>('text');
   const [showImportSection, setShowImportSection] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
 
@@ -58,6 +65,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
   const createRecipeMutation = useCreateRecipe();
   const updateRecipeMutation = useUpdateRecipe();
   const importRecipeTextMutation = useImportRecipeText();
+  const importRecipeUrlMutation = useImportRecipeUrl();
 
   useEffect(() => {
     if (recipe) {
@@ -82,6 +90,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     setSuccessMessage(null);
     setReviewNotice(null);
     setImportText('');
+    setImportUrl('');
+    setImportMode('text');
   }, [recipe]);
 
   const handleTagToggle = (tag: string) => {
@@ -133,6 +143,37 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
           }))
         );
         setImportText('');
+        setReviewNotice(
+          'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
+        );
+      },
+    });
+  };
+
+  const handleImportUrl = () => {
+    setValidationError(null);
+    setSuccessMessage(null);
+    setReviewNotice(null);
+
+    if (!importUrl.trim()) {
+      setValidationError('Please enter a recipe URL to import.');
+      return;
+    }
+
+    importRecipeUrlMutation.mutate(importUrl.trim(), {
+      onSuccess: (draft) => {
+        setName(draft.name);
+        setBaseServings(draft.baseServings);
+        setDietaryTags(draft.dietaryTags || []);
+        setIngredients(
+          draft.ingredients.map((ing) => ({
+            ingredientId: ing.ingredientId,
+            displayName: ing.displayName,
+            amount: ing.amount,
+            unit: ing.unit,
+          }))
+        );
+        setImportUrl('');
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
         );
@@ -205,7 +246,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     validationError ||
     (createRecipeMutation.error ? createRecipeMutation.error.message : null) ||
     (updateRecipeMutation.error ? updateRecipeMutation.error.message : null) ||
-    (importRecipeTextMutation.error ? importRecipeTextMutation.error.message : null);
+    (importRecipeTextMutation.error ? importRecipeTextMutation.error.message : null) ||
+    (importRecipeUrlMutation.error ? importRecipeUrlMutation.error.message : null);
 
   return (
     <Card>
@@ -254,7 +296,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                 onClick={() => setShowImportSection((prev) => !prev)}
                 className="space-x-1 text-xs text-amber-300 hover:bg-slate-800 hover:text-white"
               >
-                <span>{showImportSection ? 'Hide Text Area' : 'Paste Recipe Text'}</span>
+                <span>{showImportSection ? 'Hide Import Tools' : 'Paste Recipe Text'}</span>
                 {showImportSection ? (
                   <ChevronUp className="h-3.5 w-3.5" />
                 ) : (
@@ -265,37 +307,115 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
             {showImportSection && (
               <div className="mt-3 space-y-3">
-                <Label htmlFor="import-text-input" className="text-xs text-slate-300">
-                  Paste unformatted recipe text below (ingredients, servings, instructions)
-                </Label>
-                <textarea
-                  id="import-text-input"
-                  rows={4}
-                  value={importText}
-                  onChange={(e) => setImportText(e.target.value)}
-                  placeholder="e.g. Grandma's Pancakes&#10;Serves 4&#10;- 2 cups flour&#10;- 2 eggs&#10;- 300 ml milk"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/90 p-3 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
-                <div className="flex justify-end">
-                  <Button
+                {/* Sub-mode selector tabs */}
+                <div className="flex space-x-2 border-b border-slate-700/60 pb-2">
+                  <button
                     type="button"
-                    onClick={handleImportText}
-                    disabled={importRecipeTextMutation.isPending || !importText.trim()}
-                    className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                    onClick={() => {
+                      setImportMode('text');
+                      setValidationError(null);
+                    }}
+                    className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                      importMode === 'text'
+                        ? 'border border-amber-500/30 bg-amber-500/20 text-amber-300'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
                   >
-                    {importRecipeTextMutation.isPending ? (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
-                        <span>Importing with AI...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="h-3.5 w-3.5 text-black" />
-                        <span>Import with AI</span>
-                      </>
-                    )}
-                  </Button>
+                    Paste Text
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportMode('url');
+                      setValidationError(null);
+                    }}
+                    className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                      importMode === 'url'
+                        ? 'border border-amber-500/30 bg-amber-500/20 text-amber-300'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    URL Link
+                  </button>
                 </div>
+
+                {importMode === 'text' ? (
+                  <>
+                    <Label htmlFor="import-text-input" className="text-xs text-slate-300">
+                      Paste unformatted recipe text below (ingredients, servings, instructions)
+                    </Label>
+                    <textarea
+                      id="import-text-input"
+                      rows={4}
+                      value={importText}
+                      onChange={(e) => setImportText(e.target.value)}
+                      placeholder="e.g. Grandma's Pancakes&#10;Serves 4&#10;- 2 cups flour&#10;- 2 eggs&#10;- 300 ml milk"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900/90 p-3 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        onClick={handleImportText}
+                        disabled={importRecipeTextMutation.isPending || !importText.trim()}
+                        className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                      >
+                        {importRecipeTextMutation.isPending ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
+                            <span>Importing with AI...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3.5 w-3.5 text-black" />
+                            <span>Import with AI</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Label htmlFor="import-url-input" className="text-xs text-slate-300">
+                      Enter recipe webpage URL below (e.g. food blog or recipe site)
+                    </Label>
+                    <Input
+                      id="import-url-input"
+                      type="url"
+                      value={importUrl}
+                      onChange={(e) => setImportUrl(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (!importRecipeUrlMutation.isPending && importUrl.trim()) {
+                            handleImportUrl();
+                          }
+                        }
+                      }}
+                      placeholder="https://example.com/recipes/pancakes"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900/90 p-3 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        onClick={handleImportUrl}
+                        disabled={importRecipeUrlMutation.isPending || !importUrl.trim()}
+                        className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                      >
+                        {importRecipeUrlMutation.isPending ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
+                            <span>Importing from URL...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3.5 w-3.5 text-black" />
+                            <span>Import from URL</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

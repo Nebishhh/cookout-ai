@@ -104,3 +104,13 @@ export function useImportRecipeText() {
     mutationFn: (text: string) => api.importRecipeText(text),
   });
 }
+
+/**
+ * Mutation hook for extracting and parsing recipe data from a URL using AI (POST /api/recipes/import-url).
+ * Implemented as an on-demand mutation with no cache invalidation or automatic persistence.
+ */
+export function useImportRecipeUrl() {
+  return useMutation<ImportRecipeTextResponseDto, Error, string>({
+    mutationFn: (url: string) => api.importRecipeUrl(url),
+  });
+}

@@ -156,6 +156,18 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   return data as T;
 }
 
+export interface ImportRecipeTextResponseDto {
+  name: string;
+  baseServings: number;
+  dietaryTags: string[];
+  ingredients: Array<{
+    ingredientId: string;
+    displayName: string;
+    amount: number;
+    unit: string;
+  }>;
+}
+
 export const api = {
   getRecipes: () => request<RecipeDto[]>('/api/recipes'),
   getRecipeById: (id: string) => request<RecipeDto>(`/api/recipes/${id}`),
@@ -182,5 +194,10 @@ export const api = {
     request<EventPlanResponseDto>('/api/events/plan', {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  importRecipeText: (text: string) =>
+    request<ImportRecipeTextResponseDto>('/api/recipes/import-text', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
     }),
 };

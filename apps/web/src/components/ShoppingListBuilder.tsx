@@ -10,6 +10,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useRecipes, useBuildShoppingList } from '../lib/queries';
+import { formatQuantityAmount } from '../lib/formatQuantity';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -46,7 +47,9 @@ export const ShoppingListBuilder: React.FC = () => {
     }
   };
 
-  const handleServingsChange = (recipeId: string, servings: number) => {
+  const handleServingsChange = (recipeId: string, valueStr: string) => {
+    const parsed = parseInt(valueStr, 10);
+    const servings = isNaN(parsed) || parsed < 1 ? 1 : parsed;
     setTargetServingsMap((prev) => ({
       ...prev,
       [recipeId]: servings,
@@ -180,9 +183,7 @@ export const ShoppingListBuilder: React.FC = () => {
                             type="number"
                             min={1}
                             value={targetServingsMap[recipe.id] ?? recipe.baseServings}
-                            onChange={(e) =>
-                              handleServingsChange(recipe.id, Number(e.target.value))
-                            }
+                            onChange={(e) => handleServingsChange(recipe.id, e.target.value)}
                             className="mt-1 h-8 rounded-lg bg-slate-900 px-3 text-xs"
                           />
                         </div>
@@ -239,9 +240,7 @@ export const ShoppingListBuilder: React.FC = () => {
                   >
                     <div>
                       <span className="text-base font-semibold text-white">{item.displayName}</span>
-                      <span className="ml-2 font-mono text-xs text-slate-500">
-                        ({item.ingredientId})
-                      </span>
+                      <span className="ml-2 text-xs text-slate-500">({item.ingredientId})</span>
                       <div className="mt-1 flex flex-wrap gap-1.5">
                         <span className="text-[11px] text-slate-400">From recipes:</span>
                         {item.sourceRecipeIds.map((rId) => {
@@ -262,7 +261,7 @@ export const ShoppingListBuilder: React.FC = () => {
 
                     <div className="mt-2 sm:mt-0">
                       <span className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-2 font-mono text-sm font-semibold text-orange-400">
-                        {item.quantity.amount} {item.quantity.unit}
+                        {formatQuantityAmount(item.quantity.amount)} {item.quantity.unit}
                       </span>
                     </div>
                   </div>
@@ -328,7 +327,7 @@ export const ShoppingListBuilder: React.FC = () => {
                                   {ing.displayName}
                                 </span>
                                 <span className="font-mono text-orange-400">
-                                  {ing.quantity.amount} {ing.quantity.unit}
+                                  {formatQuantityAmount(ing.quantity.amount)} {ing.quantity.unit}
                                 </span>
                               </li>
                             ))}

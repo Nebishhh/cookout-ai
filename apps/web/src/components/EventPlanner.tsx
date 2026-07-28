@@ -1,6 +1,15 @@
 import React, { useState } from 'react';
-import { Calendar, AlertCircle, Users, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
+import {
+  Calendar,
+  AlertCircle,
+  Users,
+  CheckCircle2,
+  AlertTriangle,
+  RefreshCw,
+  ShoppingBag,
+} from 'lucide-react';
 import { useRecipes, usePlanEvent } from '../lib/queries';
+import { formatQuantityAmount } from '../lib/formatQuantity';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -38,6 +47,21 @@ export const EventPlanner: React.FC = () => {
     } else {
       setSelectedRecipeIds((prev) => [...prev, recipeId]);
     }
+  };
+
+  const handleTotalGuestsChange = (valueStr: string) => {
+    const parsed = parseInt(valueStr, 10);
+    setTotalGuests(isNaN(parsed) || parsed < 1 ? 1 : parsed);
+  };
+
+  const handleVegetarianCountChange = (valueStr: string) => {
+    const parsed = parseInt(valueStr, 10);
+    setVegetarianCount(isNaN(parsed) || parsed < 0 ? 0 : parsed);
+  };
+
+  const handleVeganCountChange = (valueStr: string) => {
+    const parsed = parseInt(valueStr, 10);
+    setVeganCount(isNaN(parsed) || parsed < 0 ? 0 : parsed);
   };
 
   const handlePlanEvent = (e: React.FormEvent) => {
@@ -119,7 +143,7 @@ export const EventPlanner: React.FC = () => {
                   type="number"
                   min={1}
                   value={totalGuests}
-                  onChange={(e) => setTotalGuests(Math.max(1, Number(e.target.value)))}
+                  onChange={(e) => handleTotalGuestsChange(e.target.value)}
                   className="mt-1 h-9 bg-slate-900"
                   required
                 />
@@ -134,7 +158,7 @@ export const EventPlanner: React.FC = () => {
                   type="number"
                   min={0}
                   value={vegetarianCount}
-                  onChange={(e) => setVegetarianCount(Math.max(0, Number(e.target.value)))}
+                  onChange={(e) => handleVegetarianCountChange(e.target.value)}
                   className="mt-1 h-9 bg-slate-900"
                   required
                 />
@@ -149,7 +173,7 @@ export const EventPlanner: React.FC = () => {
                   type="number"
                   min={0}
                   value={veganCount}
-                  onChange={(e) => setVeganCount(Math.max(0, Number(e.target.value)))}
+                  onChange={(e) => handleVeganCountChange(e.target.value)}
                   className="mt-1 h-9 bg-slate-900"
                   required
                 />
@@ -253,29 +277,29 @@ export const EventPlanner: React.FC = () => {
               <Users className="h-4 w-4 text-orange-400" />
               <span>Event Guest Group:</span>
             </div>
-            <span className="rounded bg-slate-800 px-2 py-1 font-mono text-slate-200">
+            <span className="rounded bg-slate-800 px-2 py-1 font-semibold text-slate-200">
               Total: {eventPlanData.guestGroup.totalGuests}
             </span>
-            <span className="rounded bg-slate-800 px-2 py-1 font-mono text-slate-200">
+            <span className="rounded bg-slate-800 px-2 py-1 font-semibold text-slate-200">
               Omnivores: {eventPlanData.guestGroup.omnivoreCount}
             </span>
-            <span className="rounded bg-slate-800 px-2 py-1 font-mono text-slate-200">
+            <span className="rounded bg-slate-800 px-2 py-1 font-semibold text-slate-200">
               Vegetarians: {eventPlanData.guestGroup.vegetarianCount}
             </span>
-            <span className="rounded bg-slate-800 px-2 py-1 font-mono text-slate-200">
+            <span className="rounded bg-slate-800 px-2 py-1 font-semibold text-slate-200">
               Vegans: {eventPlanData.guestGroup.veganCount}
             </span>
           </div>
 
           {/* 1. Included Recipes */}
-          <Card>
+          <Card className="border-emerald-500/20 bg-slate-900/90">
             <CardHeader className="flex-row items-center space-x-3 border-b border-slate-800/80 pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
                 <CheckCircle2 className="h-5 w-5" />
               </div>
               <div>
-                <CardTitle className="text-lg">Included Recipes</CardTitle>
-                <CardDescription className="text-xs">
+                <CardTitle className="text-lg text-white">Included Recipes</CardTitle>
+                <CardDescription className="text-xs text-slate-400">
                   Recipes with eligible guests, scaled to target guest counts.
                 </CardDescription>
               </div>
@@ -291,12 +315,12 @@ export const EventPlanner: React.FC = () => {
                   {eventPlanData.includedRecipes.map((item) => (
                     <div
                       key={item.recipeId}
-                      className="rounded-xl border border-slate-800 bg-slate-900/80 p-4"
+                      className="rounded-xl border border-emerald-500/20 bg-slate-950 p-4"
                     >
                       <div className="font-semibold text-white">{item.recipeName}</div>
                       <div className="mt-2 flex items-center justify-between text-xs">
                         <span className="text-slate-400">Eligible Servings:</span>
-                        <span className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 font-mono font-semibold text-emerald-400">
+                        <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 font-semibold text-emerald-400">
                           serves {item.eligibleServings} guests
                         </span>
                       </div>
@@ -309,9 +333,9 @@ export const EventPlanner: React.FC = () => {
 
           {/* 2. Excluded Recipes (Visually Distinct Warning Treatment) */}
           {eventPlanData.excludedRecipes.length > 0 && (
-            <Card className="border-amber-500/40 bg-amber-950/20">
+            <Card className="border-amber-500/40 bg-amber-950/20 shadow-lg shadow-amber-950/20">
               <CardHeader className="flex-row items-center space-x-3 border-b border-amber-500/30 pb-4">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/20 text-amber-400">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/40 bg-amber-500/20 text-amber-400">
                   <AlertTriangle className="h-5 w-5" />
                 </div>
                 <div>
@@ -341,14 +365,16 @@ export const EventPlanner: React.FC = () => {
           )}
 
           {/* 3. Consolidated Shopping List */}
-          <Card>
+          <Card className="border-orange-500/20 bg-slate-900/90">
             <CardHeader className="flex-row items-center space-x-3 border-b border-slate-800/80 pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/20 text-orange-400">
-                <CheckCircle2 className="h-5 w-5" />
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-400">
+                <ShoppingBag className="h-5 w-5" />
               </div>
               <div>
-                <CardTitle className="text-lg">Consolidated Event Shopping List</CardTitle>
-                <CardDescription className="text-xs">
+                <CardTitle className="text-lg text-white">
+                  Consolidated Event Shopping List
+                </CardTitle>
+                <CardDescription className="text-xs text-slate-400">
                   Total required ingredients merged across all included scaled recipes.
                 </CardDescription>
               </div>
@@ -370,9 +396,7 @@ export const EventPlanner: React.FC = () => {
                         <span className="text-base font-semibold text-white">
                           {item.displayName}
                         </span>
-                        <span className="ml-2 font-mono text-xs text-slate-500">
-                          ({item.ingredientId})
-                        </span>
+                        <span className="ml-2 text-xs text-slate-500">({item.ingredientId})</span>
                         <div className="mt-1 flex flex-wrap gap-1.5">
                           <span className="text-[11px] text-slate-400">From recipes:</span>
                           {item.sourceRecipeIds.map((rId) => {
@@ -393,7 +417,7 @@ export const EventPlanner: React.FC = () => {
 
                       <div className="mt-2 sm:mt-0">
                         <span className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-2 font-mono text-sm font-semibold text-orange-400">
-                          {item.quantity.amount} {item.quantity.unit}
+                          {formatQuantityAmount(item.quantity.amount)} {item.quantity.unit}
                         </span>
                       </div>
                     </div>

@@ -1,7 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, AlertCircle, CheckCircle2, X } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  AlertCircle,
+  CheckCircle2,
+  X,
+  Sparkles,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
+  Info,
+} from 'lucide-react';
 import type { IngredientInput, RecipeDto } from '../lib/api';
-import { useCreateRecipe, useUpdateRecipe } from '../lib/queries';
+import { useCreateRecipe, useUpdateRecipe, useImportRecipeText } from '../lib/queries';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -37,11 +48,16 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     })) || [{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]
   );
 
+  const [importText, setImportText] = useState('');
+  const [showImportSection, setShowImportSection] = useState(false);
+  const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+
   const [validationError, setValidationError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const createRecipeMutation = useCreateRecipe();
   const updateRecipeMutation = useUpdateRecipe();
+  const importRecipeTextMutation = useImportRecipeText();
 
   useEffect(() => {
     if (recipe) {
@@ -64,6 +80,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     }
     setValidationError(null);
     setSuccessMessage(null);
+    setReviewNotice(null);
+    setImportText('');
   }, [recipe]);
 
   const handleTagToggle = (tag: string) => {
@@ -89,6 +107,37 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     setIngredients((prev) =>
       prev.map((ing, i) => (i === index ? { ...ing, [field]: value } : ing))
     );
+  };
+
+  const handleImportText = () => {
+    setValidationError(null);
+    setSuccessMessage(null);
+    setReviewNotice(null);
+
+    if (!importText.trim()) {
+      setValidationError('Please paste recipe text to import.');
+      return;
+    }
+
+    importRecipeTextMutation.mutate(importText.trim(), {
+      onSuccess: (draft) => {
+        setName(draft.name);
+        setBaseServings(draft.baseServings);
+        setDietaryTags(draft.dietaryTags || []);
+        setIngredients(
+          draft.ingredients.map((ing) => ({
+            ingredientId: ing.ingredientId,
+            displayName: ing.displayName,
+            amount: ing.amount,
+            unit: ing.unit,
+          }))
+        );
+        setImportText('');
+        setReviewNotice(
+          'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
+        );
+      },
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -144,6 +193,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
           setBaseServings(4);
           setDietaryTags([]);
           setIngredients([{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]);
+          setReviewNotice(null);
           if (onSuccess) onSuccess();
         },
       });
@@ -154,7 +204,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
   const displayError =
     validationError ||
     (createRecipeMutation.error ? createRecipeMutation.error.message : null) ||
-    (updateRecipeMutation.error ? updateRecipeMutation.error.message : null);
+    (updateRecipeMutation.error ? updateRecipeMutation.error.message : null) ||
+    (importRecipeTextMutation.error ? importRecipeTextMutation.error.message : null);
 
   return (
     <Card>
@@ -183,12 +234,96 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       </CardHeader>
 
       <CardContent>
+        {/*
+          Open Questions / Scope Notes for AI Text Import:
+          - No undo/re-import feature — if a user dislikes the parsed output, they edit manually or re-paste.
+          - No per-field AI provenance badges — the general review notice alerts users to double-check inferred tags/amounts.
+          - URL and Image imports remain out of scope for this milestone.
+        */}
+        {!isEditing && (
+          <div className="mb-6 rounded-2xl border border-purple-500/20 bg-purple-950/20 p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2 text-purple-300">
+                <Sparkles className="h-4 w-4 text-purple-400" />
+                <span className="text-sm font-semibold">Import Recipe with AI</span>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowImportSection((prev) => !prev)}
+                className="space-x-1 text-xs text-purple-300 hover:bg-purple-900/40 hover:text-white"
+              >
+                <span>{showImportSection ? 'Hide Text Area' : 'Paste Recipe Text'}</span>
+                {showImportSection ? (
+                  <ChevronUp className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+
+            {showImportSection && (
+              <div className="mt-3 space-y-3">
+                <Label htmlFor="import-text-input" className="text-xs text-purple-200">
+                  Paste unformatted recipe text below (ingredients, servings, instructions)
+                </Label>
+                <textarea
+                  id="import-text-input"
+                  rows={4}
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  placeholder="e.g. Grandma's Pancakes&#10;Serves 4&#10;- 2 cups flour&#10;- 2 eggs&#10;- 300 ml milk"
+                  className="w-full rounded-xl border border-purple-500/30 bg-slate-900/90 p-3 text-xs text-slate-100 placeholder-slate-500 focus:border-purple-400 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                />
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    onClick={handleImportText}
+                    disabled={importRecipeTextMutation.isPending || !importText.trim()}
+                    className="space-x-2 bg-purple-600 px-4 text-xs font-semibold text-white hover:bg-purple-500 disabled:opacity-50"
+                  >
+                    {importRecipeTextMutation.isPending ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <span>Importing with AI...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span>Import with AI</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {displayError && (
           <Alert className="mb-6 border-red-500/30 bg-red-500/10 text-red-400">
             <AlertCircle className="h-5 w-5 text-red-400" />
             <AlertDescription className="text-sm">
               <span className="font-semibold">Error: </span>
               {displayError}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {reviewNotice && (
+          <Alert className="mb-6 border-purple-500/40 bg-purple-500/10 text-purple-300">
+            <Info className="h-5 w-5 text-purple-400" />
+            <AlertDescription className="flex items-center justify-between text-sm font-medium">
+              <span>{reviewNotice}</span>
+              <button
+                type="button"
+                onClick={() => setReviewNotice(null)}
+                className="ml-2 text-purple-400 hover:text-white"
+                aria-label="Dismiss review notice"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </AlertDescription>
           </Alert>
         )}

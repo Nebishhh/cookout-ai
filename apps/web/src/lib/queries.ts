@@ -7,6 +7,7 @@ import {
   type ShoppingListResponseDto,
   type PlanEventInput,
   type EventPlanResponseDto,
+  type ImportRecipeTextResponseDto,
 } from './api';
 
 /**
@@ -91,5 +92,15 @@ export function useBuildShoppingList() {
 export function usePlanEvent() {
   return useMutation<EventPlanResponseDto, Error, PlanEventInput>({
     mutationFn: (data: PlanEventInput) => api.planEvent(data),
+  });
+}
+
+/**
+ * Mutation hook for parsing raw recipe text into structured draft data using AI (POST /api/recipes/import-text).
+ * Implemented as an on-demand mutation with no cache invalidation or automatic persistence.
+ */
+export function useImportRecipeText() {
+  return useMutation<ImportRecipeTextResponseDto, Error, string>({
+    mutationFn: (text: string) => api.importRecipeText(text),
   });
 }

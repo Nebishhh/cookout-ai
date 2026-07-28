@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Users, AlertCircle, RefreshCw, ChefHat, Pencil, Trash2 } from 'lucide-react';
 import type { RecipeDto } from '../lib/api';
 import { useRecipes, useDeleteRecipe } from '../lib/queries';
+import { formatQuantityAmount } from '../lib/formatQuantity';
 import { Button } from './ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { Alert, AlertTitle, AlertDescription } from './ui/alert';
@@ -127,7 +128,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
               <CardHeader className="p-0">
                 <div className="flex items-start justify-between">
                   <CardTitle className="text-base">{recipe.name}</CardTitle>
-                  <div className="flex items-center space-x-1 rounded-full bg-slate-800/80 px-2.5 py-1 text-xs font-medium text-slate-300">
+                  <div className="flex items-center space-x-1 rounded-full bg-slate-800/80 px-2.5 py-1 text-xs font-semibold text-slate-300">
                     <Users className="h-3 w-3 text-orange-400" />
                     <span>{recipe.baseServings} servings</span>
                   </div>
@@ -159,8 +160,8 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
                   {recipe.ingredients.map((ing, i) => (
                     <li key={i} className="flex justify-between py-0.5">
                       <span className="font-medium text-slate-200">{ing.displayName}</span>
-                      <span className="text-slate-400">
-                        {ing.amount} {ing.unit}
+                      <span className="font-mono text-slate-400">
+                        {formatQuantityAmount(ing.amount)} {ing.unit}
                       </span>
                     </li>
                   ))}

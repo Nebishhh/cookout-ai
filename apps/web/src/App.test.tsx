@@ -2,7 +2,9 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
+import { RecipeForm } from './components/RecipeForm';
 
 describe('Web UI (TanStack Query & App Integration Tests)', () => {
   beforeEach(() => {
@@ -234,7 +236,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     fireEvent.click(screen.getByRole('button', { name: /build shopping list/i }));
 
     expect(await screen.findByText('Consolidated Shopping List')).toBeInTheDocument();
-    expect(screen.getByText('473.176 ml')).toBeInTheDocument();
+    expect(screen.getByText('473.18 ml')).toBeInTheDocument();
     expect(screen.getByText('Per-Recipe Scaled Breakdown')).toBeInTheDocument();
   });
 
@@ -783,6 +785,227 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       expect(
         await screen.findByText('Recipe with id "missing-id-999" not found.')
       ).toBeInTheDocument();
+    });
+  });
+
+  describe('AI Recipe Import UI Tests', () => {
+    it('submits text to import UI (POST /api/recipes/import-text) and pre-fills form fields without auto-persisting', async () => {
+      let importCallBody: unknown = null;
+      let postRecipesCalled = false;
+
+      const mockDraft = {
+        name: "Grandma's Pancakes",
+        baseServings: 4,
+        dietaryTags: ['Vegetarian'],
+        ingredients: [
+          { ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' },
+          { ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' },
+        ],
+      };
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-text') && options?.method === 'POST') {
+          importCallBody = JSON.parse(options.body as string);
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockDraft,
+          } as Response;
+        }
+        if (url.toString().endsWith('/api/recipes') && options?.method === 'POST') {
+          postRecipesCalled = true;
+          return {
+            ok: true,
+            status: 201,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ id: 'r-new', ...mockDraft }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      // Open import section
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+
+      const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
+      fireEvent.change(textarea, { target: { value: 'Grandma Pancakes text...' } });
+
+      // Click "Import with AI"
+      const importButton = screen.getByRole('button', { name: /import with ai/i });
+      expect(importButton).toHaveAttribute('type', 'button');
+      fireEvent.click(importButton);
+
+      // Verify POST /api/recipes/import-text was called
+      await waitFor(() => {
+        expect(importCallBody).toEqual({ text: 'Grandma Pancakes text...' });
+      });
+
+      // Verify fields pre-filled using toHaveValue()
+      const nameInput = screen.getByLabelText(/recipe name/i);
+      const servingsInput = screen.getByLabelText(/base servings/i);
+      expect(nameInput).toHaveValue("Grandma's Pancakes");
+      expect(servingsInput).toHaveValue(4);
+
+      // Verify review notice displayed
+      expect(screen.getByText(/imported via ai — please review all fields/i)).toBeInTheDocument();
+
+      // Verify import textarea is cleared
+      expect(textarea).toHaveValue('');
+
+      // CRITICAL ASSERTION: POST /api/recipes was NOT called automatically
+      expect(postRecipesCalled).toBe(false);
+
+      // Now click "Create Recipe" explicitly
+      const createButton = screen.getByRole('button', { name: /create recipe/i });
+      expect(createButton).toHaveAttribute('type', 'submit');
+      fireEvent.click(createButton);
+
+      // Verify POST /api/recipes was only called AFTER clicking Create Recipe
+      await waitFor(() => {
+        expect(postRecipesCalled).toBe(true);
+      });
+    });
+
+    it('displays real API error message for 500 (server not configured)', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-text') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 500,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'ServerConfigurationError',
+              message: 'Server is not configured for AI recipe import: GEMINI_API_KEY is missing.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
+      fireEvent.change(textarea, { target: { value: 'Pancakes text' } });
+      fireEvent.click(screen.getByRole('button', { name: /import with ai/i }));
+
+      expect(
+        await screen.findByText(
+          /server is not configured for ai recipe import: gemini_api_key is missing/i
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('displays real API error message for 502 (malformed Gemini response)', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-text') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 502,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'BadGateway',
+              message: 'Upstream AI service returned invalid JSON response.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
+      fireEvent.change(textarea, { target: { value: 'Bad text' } });
+      fireEvent.click(screen.getByRole('button', { name: /import with ai/i }));
+
+      expect(
+        await screen.findByText(/upstream ai service returned invalid json response/i)
+      ).toBeInTheDocument();
+    });
+
+    it('displays real API error message for 422 (domain validation error)', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-text') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 422,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'InvalidUnitError',
+              message:
+                'Invalid unit: "pinch". Supported units are g, kg, oz, lb, ml, l, tsp, tbsp, cup, fl oz, count, clove, egg, onion.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
+      fireEvent.change(textarea, { target: { value: 'Pinch of salt text' } });
+      fireEvent.click(screen.getByRole('button', { name: /import with ai/i }));
+
+      expect(await screen.findByText(/invalid unit: "pinch"/i)).toBeInTheDocument();
+    });
+
+    it('does NOT render import section when RecipeForm is in edit mode', () => {
+      const queryClient = new QueryClient();
+      const existingRecipe = {
+        id: 'r100',
+        name: 'Existing Dish',
+        baseServings: 2,
+        dietaryTags: [],
+        ingredients: [
+          { ingredientId: 'salt', displayName: 'Salt', amount: 1, unit: 'g', category: 'Mass' },
+        ],
+      };
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <RecipeForm recipe={existingRecipe} />
+        </QueryClientProvider>
+      );
+
+      expect(screen.queryByText(/import recipe with ai/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /paste recipe text/i })).not.toBeInTheDocument();
     });
   });
 });

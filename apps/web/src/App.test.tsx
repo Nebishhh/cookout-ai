@@ -877,6 +877,49 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       });
     });
 
+    it('displays real API error message for 400 (empty or invalid request body)', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-text') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 400,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'BadRequest',
+              message: 'Request body must contain a non-empty "text" string.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
+
+      // Test client-side disabled state on whitespace
+      fireEvent.change(textarea, { target: { value: '   ' } });
+      const importButton = screen.getByRole('button', { name: /import with ai/i });
+      expect(importButton).toBeDisabled();
+
+      // Test API 400 error display
+      fireEvent.change(textarea, { target: { value: 'Some recipe text' } });
+      fireEvent.click(importButton);
+
+      expect(
+        await screen.findByText(/request body must contain a non-empty "text" string/i)
+      ).toBeInTheDocument();
+    });
+
     it('displays real API error message for 500 (server not configured)', async () => {
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
         if (url.toString().includes('/api/recipes/import-text') && options?.method === 'POST') {

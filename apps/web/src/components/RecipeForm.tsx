@@ -241,10 +241,10 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
           - URL and Image imports remain out of scope for this milestone.
         */}
         {!isEditing && (
-          <div className="mb-6 rounded-2xl border border-purple-500/20 bg-purple-950/20 p-4">
+          <div className="mb-6 rounded-2xl border border-amber-500/20 bg-slate-800/40 p-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 text-purple-300">
-                <Sparkles className="h-4 w-4 text-purple-400" />
+              <div className="flex items-center space-x-2 text-amber-300">
+                <Sparkles className="h-4 w-4 text-amber-400" />
                 <span className="text-sm font-semibold">Import Recipe with AI</span>
               </div>
               <Button
@@ -252,7 +252,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowImportSection((prev) => !prev)}
-                className="space-x-1 text-xs text-purple-300 hover:bg-purple-900/40 hover:text-white"
+                className="space-x-1 text-xs text-amber-300 hover:bg-slate-800 hover:text-white"
               >
                 <span>{showImportSection ? 'Hide Text Area' : 'Paste Recipe Text'}</span>
                 {showImportSection ? (
@@ -265,7 +265,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
             {showImportSection && (
               <div className="mt-3 space-y-3">
-                <Label htmlFor="import-text-input" className="text-xs text-purple-200">
+                <Label htmlFor="import-text-input" className="text-xs text-slate-300">
                   Paste unformatted recipe text below (ingredients, servings, instructions)
                 </Label>
                 <textarea
@@ -274,23 +274,23 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                   value={importText}
                   onChange={(e) => setImportText(e.target.value)}
                   placeholder="e.g. Grandma's Pancakes&#10;Serves 4&#10;- 2 cups flour&#10;- 2 eggs&#10;- 300 ml milk"
-                  className="w-full rounded-xl border border-purple-500/30 bg-slate-900/90 p-3 text-xs text-slate-100 placeholder-slate-500 focus:border-purple-400 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900/90 p-3 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
                 />
                 <div className="flex justify-end">
                   <Button
                     type="button"
                     onClick={handleImportText}
                     disabled={importRecipeTextMutation.isPending || !importText.trim()}
-                    className="space-x-2 bg-purple-600 px-4 text-xs font-semibold text-white hover:bg-purple-500 disabled:opacity-50"
+                    className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
                   >
                     {importRecipeTextMutation.isPending ? (
                       <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
                         <span>Importing with AI...</span>
                       </>
                     ) : (
                       <>
-                        <Sparkles className="h-3.5 w-3.5" />
+                        <Sparkles className="h-3.5 w-3.5 text-black" />
                         <span>Import with AI</span>
                       </>
                     )}
@@ -312,14 +312,14 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         )}
 
         {reviewNotice && (
-          <Alert className="mb-6 border-purple-500/40 bg-purple-500/10 text-purple-300">
-            <Info className="h-5 w-5 text-purple-400" />
+          <Alert className="mb-6 border-amber-500/30 bg-amber-500/10 text-amber-300">
+            <Info className="h-5 w-5 text-amber-400" />
             <AlertDescription className="flex items-center justify-between text-sm font-medium">
               <span>{reviewNotice}</span>
               <button
                 type="button"
                 onClick={() => setReviewNotice(null)}
-                className="ml-2 text-purple-400 hover:text-white"
+                className="ml-2 text-amber-400 hover:text-white"
                 aria-label="Dismiss review notice"
               >
                 <X className="h-4 w-4" />

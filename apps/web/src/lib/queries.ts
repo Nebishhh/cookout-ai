@@ -114,3 +114,13 @@ export function useImportRecipeUrl() {
     mutationFn: (url: string) => api.importRecipeUrl(url),
   });
 }
+
+/**
+ * Mutation hook for extracting and parsing recipe data from an image file using AI (POST /api/recipes/import-image).
+ * Implemented as an on-demand mutation with no cache invalidation or automatic persistence.
+ */
+export function useImportRecipeImage() {
+  return useMutation<ImportRecipeTextResponseDto, Error, File>({
+    mutationFn: (file: File) => api.importRecipeImage(file),
+  });
+}

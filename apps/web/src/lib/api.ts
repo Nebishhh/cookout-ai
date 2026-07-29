@@ -135,12 +135,15 @@ export class ApiError extends Error {
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = `${BASE_URL}${endpoint}`;
+
+  const headers: Record<string, string> = { ...(options?.headers as Record<string, string>) };
+  if (!(options?.body instanceof FormData) && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   const response = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
     ...options,
+    headers,
   });
 
   const contentType = response.headers.get('content-type');
@@ -205,4 +208,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url }),
     }),
+  importRecipeImage: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return request<ImportRecipeTextResponseDto>('/api/recipes/import-image', {
+      method: 'POST',
+      body: formData,
+    });
+  },
 };

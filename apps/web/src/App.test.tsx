@@ -1303,4 +1303,239 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       ).toBeInTheDocument();
     });
   });
+
+  describe('AI Recipe Image Import UI Tests', () => {
+    beforeEach(() => {
+      if (!globalThis.URL.createObjectURL) {
+        globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-image-url');
+      }
+      if (!globalThis.URL.revokeObjectURL) {
+        globalThis.URL.revokeObjectURL = vi.fn();
+      }
+    });
+
+    it('submits image file to import UI (POST /api/recipes/import-image) and pre-fills form fields without auto-persisting', async () => {
+      let importImageCalled = false;
+      let postRecipesCalled = false;
+
+      const mockDraft = {
+        name: 'Shortcake Recipe',
+        baseServings: 6,
+        dietaryTags: ['Vegetarian'],
+        ingredients: [
+          { ingredientId: 'flour', displayName: 'Flour', amount: 3, unit: 'cup' },
+          { ingredientId: 'sugar', displayName: 'Sugar', amount: 1, unit: 'cup' },
+        ],
+      };
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-image') && options?.method === 'POST') {
+          importImageCalled = true;
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockDraft,
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes') && options?.method === 'POST') {
+          postRecipesCalled = true;
+          return { ok: false, status: 500 } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
+
+      const file = new File(['dummy content'], 'shortcake.png', { type: 'image/png' });
+      const fileInput = document.getElementById('import-image-input') as HTMLInputElement;
+
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      const importButton = screen.getByRole('button', { name: /import from image/i });
+      expect(importButton).toHaveAttribute('type', 'button');
+
+      fireEvent.click(importButton);
+
+      await waitFor(() => {
+        expect(importImageCalled).toBe(true);
+      });
+
+      expect(await screen.findByDisplayValue('Shortcake Recipe')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('6')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Flour')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Sugar')).toBeInTheDocument();
+
+      // CRITICAL: confirm POST /api/recipes was NOT called automatically
+      expect(postRecipesCalled).toBe(false);
+      expect(screen.getByText(/imported via ai — please review all fields/i)).toBeInTheDocument();
+    });
+
+    it('rejects file > 8MB client-side with instant error message without making network call', async () => {
+      let importImageCalled = false;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-image') && options?.method === 'POST') {
+          importImageCalled = true;
+          return { ok: false, status: 500 } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
+
+      // Create fake 9MB file
+      const giantBuffer = new Uint8Array(9 * 1024 * 1024);
+      const giantFile = new File([giantBuffer], 'giant.jpg', { type: 'image/jpeg' });
+
+      const fileInput = document.getElementById('import-image-input') as HTMLInputElement;
+
+      fireEvent.change(fileInput, { target: { files: [giantFile] } });
+
+      expect(await screen.findByText(/selected file exceeds 8mb size limit/i)).toBeInTheDocument();
+      expect(importImageCalled).toBe(false);
+    });
+
+    it('rejects file with unsupported MIME type client-side with instant error message without making network call', async () => {
+      let importImageCalled = false;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-image') && options?.method === 'POST') {
+          importImageCalled = true;
+          return { ok: false, status: 500 } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
+
+      const textFile = new File(['text content'], 'recipe.txt', { type: 'text/plain' });
+      const fileInput = document.getElementById('import-image-input') as HTMLInputElement;
+
+      fireEvent.change(fileInput, { target: { files: [textFile] } });
+
+      expect(
+        await screen.findByText(/invalid file type\. please select a jpeg, png, or webp image/i)
+      ).toBeInTheDocument();
+      expect(importImageCalled).toBe(false);
+    });
+
+    it('displays error message when image import returns 502 (NoRecipeFound / extraction failure)', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-image') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 502,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'ExtractionError',
+              message:
+                'The provided image or text does not contain explicit recipe ingredients or quantities.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
+
+      const file = new File(['dummy content'], 'landscape.png', { type: 'image/png' });
+      const fileInput = document.getElementById('import-image-input') as HTMLInputElement;
+
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      const importButton = screen.getByRole('button', { name: /import from image/i });
+      fireEvent.click(importButton);
+
+      expect(
+        await screen.findByText(
+          /the provided image or text does not contain explicit recipe ingredients or quantities/i
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('displays error message when image import returns 500 (Internal Server Error)', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-image') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 500,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              error: 'InternalServerError',
+              message: 'GEMINI_API_KEY is not configured on the server.',
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
+
+      const file = new File(['dummy content'], 'card.jpg', { type: 'image/jpeg' });
+      const fileInput = document.getElementById('import-image-input') as HTMLInputElement;
+
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      const importButton = screen.getByRole('button', { name: /import from image/i });
+      fireEvent.click(importButton);
+
+      expect(
+        await screen.findByText(/gemini_api_key is not configured on the server/i)
+      ).toBeInTheDocument();
+    });
+  });
 });

@@ -10,6 +10,8 @@ import {
   ChevronDown,
   ChevronUp,
   Info,
+  Upload,
+  Image as ImageIcon,
 } from 'lucide-react';
 import type { IngredientInput, RecipeDto } from '../lib/api';
 import {
@@ -17,6 +19,7 @@ import {
   useUpdateRecipe,
   useImportRecipeText,
   useImportRecipeUrl,
+  useImportRecipeImage,
 } from '../lib/queries';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -33,7 +36,7 @@ const SUPPORTED_UNITS_BY_CATEGORY = [
 ];
 
 export interface RecipeFormProps {
-  recipe?: RecipeDto;
+  recipe?: RecipeDto | null;
   onSuccess?: () => void;
   onCancel?: () => void;
 }
@@ -55,7 +58,11 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
   const [importText, setImportText] = useState('');
   const [importUrl, setImportUrl] = useState('');
-  const [importMode, setImportMode] = useState<'text' | 'url'>('text');
+  const [importMode, setImportMode] = useState<'text' | 'url' | 'image'>('text');
+  const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
   const [showImportSection, setShowImportSection] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
 
@@ -66,6 +73,15 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
   const updateRecipeMutation = useUpdateRecipe();
   const importRecipeTextMutation = useImportRecipeText();
   const importRecipeUrlMutation = useImportRecipeUrl();
+  const importRecipeImageMutation = useImportRecipeImage();
+
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl) {
+        URL.revokeObjectURL(imagePreviewUrl);
+      }
+    };
+  }, [imagePreviewUrl]);
 
   useEffect(() => {
     if (recipe) {
@@ -92,6 +108,11 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     setImportText('');
     setImportUrl('');
     setImportMode('text');
+    setSelectedImageFile(null);
+    setImagePreviewUrl((prevUrl) => {
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
+      return null;
+    });
   }, [recipe]);
 
   const handleTagToggle = (tag: string) => {
@@ -117,6 +138,41 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     setIngredients((prev) =>
       prev.map((ing, i) => (i === index ? { ...ing, [field]: value } : ing))
     );
+  };
+
+  const handleFileSelection = (file: File) => {
+    setValidationError(null);
+    setSuccessMessage(null);
+    setReviewNotice(null);
+
+    const MAX_SIZE = 8 * 1024 * 1024; // 8MB
+    if (file.size > MAX_SIZE) {
+      handleRemoveImageFile();
+      setValidationError('Selected file exceeds 8MB size limit.');
+      return;
+    }
+
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      handleRemoveImageFile();
+      setValidationError('Invalid file type. Please select a JPEG, PNG, or WebP image.');
+      return;
+    }
+
+    if (imagePreviewUrl) {
+      URL.revokeObjectURL(imagePreviewUrl);
+    }
+    const newPreview = URL.createObjectURL(file);
+    setSelectedImageFile(file);
+    setImagePreviewUrl(newPreview);
+  };
+
+  const handleRemoveImageFile = () => {
+    if (imagePreviewUrl) {
+      URL.revokeObjectURL(imagePreviewUrl);
+    }
+    setSelectedImageFile(null);
+    setImagePreviewUrl(null);
   };
 
   const handleImportText = () => {
@@ -181,6 +237,37 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     });
   };
 
+  const handleImportImage = () => {
+    setValidationError(null);
+    setSuccessMessage(null);
+    setReviewNotice(null);
+
+    if (!selectedImageFile) {
+      setValidationError('Please select or drop an image file to import.');
+      return;
+    }
+
+    importRecipeImageMutation.mutate(selectedImageFile, {
+      onSuccess: (draft) => {
+        setName(draft.name);
+        setBaseServings(draft.baseServings);
+        setDietaryTags(draft.dietaryTags || []);
+        setIngredients(
+          draft.ingredients.map((ing) => ({
+            ingredientId: ing.ingredientId,
+            displayName: ing.displayName,
+            amount: ing.amount,
+            unit: ing.unit,
+          }))
+        );
+        handleRemoveImageFile();
+        setReviewNotice(
+          'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
+        );
+      },
+    });
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setValidationError(null);
@@ -191,27 +278,40 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       return;
     }
 
+    if (baseServings <= 0 || !Number.isInteger(baseServings)) {
+      setValidationError('Base servings must be a positive integer.');
+      return;
+    }
+
     if (ingredients.length === 0) {
-      setValidationError('At least one ingredient line is required.');
+      setValidationError('Recipe must have at least one ingredient.');
       return;
     }
 
     for (let i = 0; i < ingredients.length; i++) {
       const ing = ingredients[i];
-      if (!ing.ingredientId.trim() || !ing.displayName.trim()) {
-        setValidationError(`Ingredient row #${i + 1} requires an Ingredient ID and Display Name.`);
+      if (!ing.displayName.trim()) {
+        setValidationError(`Ingredient #${i + 1} display name is required.`);
+        return;
+      }
+      if (!ing.ingredientId.trim()) {
+        setValidationError(`Ingredient #${i + 1} ID is required.`);
+        return;
+      }
+      if (ing.amount < 0 || isNaN(ing.amount)) {
+        setValidationError(`Ingredient #${i + 1} amount must be 0 or greater.`);
         return;
       }
     }
 
     const payload = {
       name: name.trim(),
-      baseServings: Number(baseServings),
+      baseServings,
       dietaryTags,
       ingredients: ingredients.map((ing) => ({
         ingredientId: ing.ingredientId.trim(),
         displayName: ing.displayName.trim(),
-        amount: Number(ing.amount),
+        amount: ing.amount,
         unit: ing.unit,
       })),
     };
@@ -220,16 +320,16 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       updateRecipeMutation.mutate(
         { id: recipe.id, data: payload },
         {
-          onSuccess: (updatedRecipe) => {
-            setSuccessMessage(`Recipe "${updatedRecipe.name}" updated successfully!`);
+          onSuccess: (updated) => {
+            setSuccessMessage(`Recipe "${updated.name}" updated successfully!`);
             if (onSuccess) onSuccess();
           },
         }
       );
     } else {
       createRecipeMutation.mutate(payload, {
-        onSuccess: (newRecipe) => {
-          setSuccessMessage(`Recipe "${newRecipe.name}" created successfully!`);
+        onSuccess: (created) => {
+          setSuccessMessage(`Recipe "${created.name}" created successfully!`);
           setName('');
           setBaseServings(4);
           setDietaryTags([]);
@@ -241,13 +341,21 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     }
   };
 
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const isPending = createRecipeMutation.isPending || updateRecipeMutation.isPending;
   const displayError =
     validationError ||
     (createRecipeMutation.error ? createRecipeMutation.error.message : null) ||
     (updateRecipeMutation.error ? updateRecipeMutation.error.message : null) ||
     (importRecipeTextMutation.error ? importRecipeTextMutation.error.message : null) ||
-    (importRecipeUrlMutation.error ? importRecipeUrlMutation.error.message : null);
+    (importRecipeUrlMutation.error ? importRecipeUrlMutation.error.message : null) ||
+    (importRecipeImageMutation.error ? importRecipeImageMutation.error.message : null);
 
   return (
     <Card>
@@ -276,12 +384,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       </CardHeader>
 
       <CardContent>
-        {/*
-          Open Questions / Scope Notes for AI Text Import:
-          - No undo/re-import feature — if a user dislikes the parsed output, they edit manually or re-paste.
-          - No per-field AI provenance badges — the general review notice alerts users to double-check inferred tags/amounts.
-          - URL and Image imports remain out of scope for this milestone.
-        */}
+        {/* AI Import Container */}
         {!isEditing && (
           <div className="mb-6 rounded-2xl border border-amber-500/20 bg-slate-800/40 p-4">
             <div className="flex items-center justify-between">
@@ -337,9 +440,23 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                   >
                     URL Link
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportMode('image');
+                      setValidationError(null);
+                    }}
+                    className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                      importMode === 'image'
+                        ? 'border border-amber-500/30 bg-amber-500/20 text-amber-300'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Upload Image
+                  </button>
                 </div>
 
-                {importMode === 'text' ? (
+                {importMode === 'text' && (
                   <>
                     <Label htmlFor="import-text-input" className="text-xs text-slate-300">
                       Paste unformatted recipe text below (ingredients, servings, instructions)
@@ -373,7 +490,9 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                       </Button>
                     </div>
                   </>
-                ) : (
+                )}
+
+                {importMode === 'url' && (
                   <>
                     <Label htmlFor="import-url-input" className="text-xs text-slate-300">
                       Enter recipe webpage URL below (e.g. food blog or recipe site)
@@ -416,221 +535,295 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     </div>
                   </>
                 )}
+
+                {importMode === 'image' && (
+                  <>
+                    <Label htmlFor="import-image-input" className="text-xs text-slate-300">
+                      Upload an image of a recipe card, cookbook page, or handwritten note (JPEG,
+                      PNG, WebP up to 8MB)
+                    </Label>
+
+                    <input
+                      id="import-image-input"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFileSelection(file);
+                      }}
+                    />
+
+                    {!selectedImageFile ? (
+                      <button
+                        type="button"
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setIsDragging(true);
+                        }}
+                        onDragLeave={() => setIsDragging(false)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setIsDragging(false);
+                          const file = e.dataTransfer.files?.[0];
+                          if (file) handleFileSelection(file);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            document.getElementById('import-image-input')?.click();
+                          }
+                        }}
+                        onClick={() => document.getElementById('import-image-input')?.click()}
+                        className={`w-full flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors cursor-pointer ${
+                          isDragging
+                            ? 'border-amber-400 bg-amber-500/10'
+                            : 'border-slate-700 bg-slate-900/60 hover:border-slate-600 hover:bg-slate-900/80'
+                        }`}
+                      >
+                        <Upload className="mb-2 h-8 w-8 text-amber-400" />
+                        <p className="text-xs font-medium text-slate-200">
+                          Drag and drop an image file here, or click to browse
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          JPEG, PNG, or WebP (max 8MB)
+                        </p>
+                      </button>
+                    ) : (
+                      <div className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/90 p-3">
+                        <div className="flex items-center space-x-3">
+                          {imagePreviewUrl ? (
+                            <img
+                              src={imagePreviewUrl}
+                              alt="Recipe preview"
+                              className="h-12 w-12 rounded-lg object-cover border border-slate-700"
+                            />
+                          ) : (
+                            <ImageIcon className="h-8 w-8 text-amber-400" />
+                          )}
+                          <div className="text-left">
+                            <p className="text-xs font-medium text-slate-200 truncate max-w-[200px] sm:max-w-[300px]">
+                              {selectedImageFile.name}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              {formatFileSize(selectedImageFile.size)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleRemoveImageFile}
+                          disabled={importRecipeImageMutation.isPending}
+                          className="h-8 px-2 text-xs text-slate-400 hover:text-red-400"
+                        >
+                          <X className="h-4 w-4" />
+                          <span>Remove</span>
+                        </Button>
+                      </div>
+                    )}
+
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        onClick={handleImportImage}
+                        disabled={importRecipeImageMutation.isPending || !selectedImageFile}
+                        className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                      >
+                        {importRecipeImageMutation.isPending ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
+                            <span>Analyzing Image with AI...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3.5 w-3.5 text-black" />
+                            <span>Import from Image</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
         )}
 
-        {displayError && (
-          <Alert className="mb-6 border-red-500/30 bg-red-500/10 text-red-400">
-            <AlertCircle className="h-5 w-5 text-red-400" />
-            <AlertDescription className="text-sm">
-              <span className="font-semibold">Error: </span>
-              {displayError}
-            </AlertDescription>
+        {reviewNotice && (
+          <Alert className="mb-6 border-amber-500/40 bg-amber-500/10 text-amber-200">
+            <Info className="h-4 w-4 text-amber-400" />
+            <AlertDescription className="text-xs">{reviewNotice}</AlertDescription>
           </Alert>
         )}
 
-        {reviewNotice && (
-          <Alert className="mb-6 border-amber-500/30 bg-amber-500/10 text-amber-300">
-            <Info className="h-5 w-5 text-amber-400" />
-            <AlertDescription className="flex items-center justify-between text-sm font-medium">
-              <span>{reviewNotice}</span>
-              <button
-                type="button"
-                onClick={() => setReviewNotice(null)}
-                className="ml-2 text-amber-400 hover:text-white"
-                aria-label="Dismiss review notice"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </AlertDescription>
+        {displayError && (
+          <Alert variant="destructive" className="mb-6 border-red-500/30 bg-red-500/10">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{displayError}</AlertDescription>
           </Alert>
         )}
 
         {successMessage && (
           <Alert className="mb-6 border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
-            <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-            <AlertDescription className="text-sm font-medium">{successMessage}</AlertDescription>
+            <CheckCircle2 className="h-4 w-4" />
+            <AlertDescription>{successMessage}</AlertDescription>
           </Alert>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-            <div className="sm:col-span-2">
-              <Label htmlFor="recipe-name">Recipe Name</Label>
-              <Input
-                id="recipe-name"
-                type="text"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Fluffy Chocolate Pancakes"
-                className="mt-2"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="recipe-base-servings">Base Servings</Label>
-              <Input
-                id="recipe-base-servings"
-                type="number"
-                required
-                min={1}
-                value={baseServings}
-                onChange={(e) => setBaseServings(Number(e.target.value))}
-                className="mt-2"
-              />
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="recipe-name">Recipe Name</Label>
+            <Input
+              id="recipe-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Grandma's Pancakes"
+              required
+            />
           </div>
 
-          <div>
-            <Label>Dietary Tags</Label>
-            <div className="mt-2.5 flex flex-wrap gap-3">
-              {['Vegetarian', 'Vegan'].map((tag) => {
-                const checked = dietaryTags.includes(tag);
-                const tagId = `tag-${tag.toLowerCase()}`;
-                return (
+          <div className="space-y-2">
+            <Label htmlFor="base-servings">Base Servings</Label>
+            <Input
+              id="base-servings"
+              type="number"
+              min={1}
+              step={1}
+              value={baseServings}
+              onChange={(e) => setBaseServings(parseInt(e.target.value, 10) || 0)}
+              required
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Dietary Tags (Optional)</Label>
+            <div className="flex flex-wrap gap-4 pt-1">
+              {['Vegetarian', 'Vegan'].map((tag) => (
+                <div key={tag} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={`tag-${tag}`}
+                    checked={dietaryTags.includes(tag)}
+                    onChange={() => handleTagToggle(tag)}
+                  />
                   <Label
-                    key={tag}
-                    htmlFor={tagId}
-                    className={`flex cursor-pointer items-center space-x-2 rounded-xl border px-4 py-2 text-sm font-medium transition-all ${
-                      checked
-                        ? 'border-amber-500/50 bg-amber-500/10 text-amber-300'
-                        : 'border-slate-800 bg-slate-800/40 text-slate-400 hover:border-slate-700 hover:text-slate-200'
-                    }`}
+                    htmlFor={`tag-${tag}`}
+                    className="text-sm font-normal cursor-pointer text-slate-200"
                   >
-                    <Checkbox id={tagId} checked={checked} onChange={() => handleTagToggle(tag)} />
-                    <span>{tag}</span>
+                    {tag}
                   </Label>
-                );
-              })}
+                </div>
+              ))}
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <Label className="text-sm font-semibold uppercase tracking-wider text-slate-300">
-                Ingredients
-              </Label>
+              <Label>Ingredients</Label>
               <Button
                 type="button"
-                variant="secondary"
+                variant="outline"
                 size="sm"
                 onClick={handleAddIngredient}
-                className="space-x-1.5"
+                className="space-x-1 text-xs"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>Add Ingredient</span>
               </Button>
             </div>
 
-            {ingredients.map((ing, idx) => (
-              <div
-                key={idx}
-                className="grid grid-cols-12 gap-3 rounded-xl border border-slate-800 bg-slate-800/40 p-3.5"
-              >
-                <div className="col-span-12 sm:col-span-3">
-                  <Label htmlFor={`ingredient-id-${idx}`} className="text-[11px] text-slate-400">
-                    ID (e.g. flour)
-                  </Label>
-                  <Input
-                    id={`ingredient-id-${idx}`}
-                    type="text"
-                    required
-                    value={ing.ingredientId}
-                    onChange={(e) => handleIngredientChange(idx, 'ingredientId', e.target.value)}
-                    placeholder="flour"
-                    className="mt-1 h-8 rounded-lg bg-slate-900 px-3 text-xs"
-                  />
-                </div>
+            <div className="space-y-3">
+              {ingredients.map((ing, idx) => (
+                <div
+                  key={idx}
+                  className="grid grid-cols-1 gap-2 sm:grid-cols-12 sm:items-center sm:gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3"
+                >
+                  <div className="sm:col-span-3">
+                    <Input
+                      aria-label="ID (e.g. flour)"
+                      placeholder="ID (e.g. flour)"
+                      value={ing.ingredientId}
+                      onChange={(e) => handleIngredientChange(idx, 'ingredientId', e.target.value)}
+                    />
+                  </div>
 
-                <div className="col-span-12 sm:col-span-4">
-                  <Label
-                    htmlFor={`ingredient-display-${idx}`}
-                    className="text-[11px] text-slate-400"
-                  >
-                    Display Name
-                  </Label>
-                  <Input
-                    id={`ingredient-display-${idx}`}
-                    type="text"
-                    required
-                    value={ing.displayName}
-                    onChange={(e) => handleIngredientChange(idx, 'displayName', e.target.value)}
-                    placeholder="All-Purpose Flour"
-                    className="mt-1 h-8 rounded-lg bg-slate-900 px-3 text-xs"
-                  />
-                </div>
+                  <div className="sm:col-span-4">
+                    <Input
+                      aria-label="Display Name (e.g. All-Purpose Flour)"
+                      placeholder="Display Name (e.g. All-Purpose Flour)"
+                      value={ing.displayName}
+                      onChange={(e) => handleIngredientChange(idx, 'displayName', e.target.value)}
+                    />
+                  </div>
 
-                <div className="col-span-6 sm:col-span-2">
-                  <Label
-                    htmlFor={`ingredient-amount-${idx}`}
-                    className="text-[11px] text-slate-400"
-                  >
-                    Amount
-                  </Label>
-                  <Input
-                    id={`ingredient-amount-${idx}`}
-                    type="number"
-                    required
-                    step="any"
-                    value={ing.amount}
-                    onChange={(e) => handleIngredientChange(idx, 'amount', Number(e.target.value))}
-                    className="mt-1 h-8 rounded-lg bg-slate-900 px-3 text-xs"
-                  />
-                </div>
+                  <div className="sm:col-span-2">
+                    <Input
+                      aria-label="Amount"
+                      type="number"
+                      min={0}
+                      step="any"
+                      placeholder="Amount"
+                      value={ing.amount}
+                      onChange={(e) =>
+                        handleIngredientChange(idx, 'amount', parseFloat(e.target.value) || 0)
+                      }
+                    />
+                  </div>
 
-                <div className="col-span-5 sm:col-span-2">
-                  <Label htmlFor={`ingredient-unit-${idx}`} className="text-[11px] text-slate-400">
-                    Unit
-                  </Label>
-                  <Select
-                    id={`ingredient-unit-${idx}`}
-                    value={ing.unit}
-                    onChange={(e) => handleIngredientChange(idx, 'unit', e.target.value)}
-                    className="mt-1 h-8 rounded-lg bg-slate-900 px-2 text-xs"
-                  >
-                    {SUPPORTED_UNITS_BY_CATEGORY.map((catGroup) => (
-                      <optgroup key={catGroup.category} label={catGroup.category}>
-                        {catGroup.units.map((u) => (
-                          <option key={u} value={u}>
-                            {u}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </Select>
-                </div>
+                  <div className="sm:col-span-2">
+                    <Select
+                      value={ing.unit}
+                      onChange={(e) => handleIngredientChange(idx, 'unit', e.target.value)}
+                    >
+                      {SUPPORTED_UNITS_BY_CATEGORY.map((cat) => (
+                        <optgroup key={cat.category} label={cat.category}>
+                          {cat.units.map((u) => (
+                            <option key={u} value={u}>
+                              {u}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </Select>
+                  </div>
 
-                <div className="col-span-1 flex items-end justify-center pb-0.5">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleRemoveIngredient(idx)}
-                    disabled={ingredients.length <= 1}
-                    aria-label={`Remove ingredient line #${idx + 1}`}
-                    className="h-8 w-8 text-slate-400 hover:bg-slate-800 hover:text-red-400 disabled:opacity-30"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="sm:col-span-1 flex justify-end">
+                    {ingredients.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveIngredient(idx)}
+                        className="h-9 w-9 p-0 text-slate-400 hover:text-red-400"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
 
-          <div className="flex justify-end space-x-3 pt-2">
+          <div className="pt-4 flex justify-end space-x-3">
             {onCancel && (
               <Button type="button" variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
             )}
-            <Button type="submit" disabled={isPending} className="px-6 text-black">
+            <Button type="submit" disabled={isPending}>
               {isPending ? (
-                <span>{isEditing ? 'Saving...' : 'Creating...'}</span>
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : isEditing ? (
+                'Save Changes'
               ) : (
-                <span>{isEditing ? 'Save Changes' : 'Create Recipe'}</span>
+                'Create Recipe'
               )}
             </Button>
           </div>

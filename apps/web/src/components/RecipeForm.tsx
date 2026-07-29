@@ -12,6 +12,7 @@ import {
   Info,
   Upload,
   Image as ImageIcon,
+  Camera,
 } from 'lucide-react';
 import type { IngredientInput, RecipeDto } from '../lib/api';
 import {
@@ -58,7 +59,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
   const [importText, setImportText] = useState('');
   const [importUrl, setImportUrl] = useState('');
-  const [importMode, setImportMode] = useState<'text' | 'url' | 'image'>('text');
+  const [importMode, setImportMode] = useState<'text' | 'url' | 'image' | 'camera'>('text');
   const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -454,6 +455,20 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                   >
                     Upload Image
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportMode('camera');
+                      setValidationError(null);
+                    }}
+                    className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                      importMode === 'camera'
+                        ? 'border border-amber-500/30 bg-amber-500/20 text-amber-300'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Take Picture
+                  </button>
                 </div>
 
                 {importMode === 'text' && (
@@ -641,6 +656,119 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                           <>
                             <Sparkles className="h-3.5 w-3.5 text-black" />
                             <span>Import from Image</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </>
+                )}
+
+                {importMode === 'camera' && (
+                  <>
+                    <Label htmlFor="import-camera-input" className="text-xs text-slate-300">
+                      Take a photo of a recipe card, cookbook page, or handwritten note using your
+                      camera (JPEG, PNG, WebP up to 8MB)
+                    </Label>
+
+                    <input
+                      id="import-camera-input"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFileSelection(file);
+                      }}
+                    />
+
+                    {!selectedImageFile ? (
+                      <button
+                        type="button"
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setIsDragging(true);
+                        }}
+                        onDragLeave={() => setIsDragging(false)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setIsDragging(false);
+                          const file = e.dataTransfer.files?.[0];
+                          if (file) handleFileSelection(file);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            document.getElementById('import-camera-input')?.click();
+                          }
+                        }}
+                        onClick={() => document.getElementById('import-camera-input')?.click()}
+                        className={`w-full flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors cursor-pointer ${
+                          isDragging
+                            ? 'border-amber-400 bg-amber-500/10'
+                            : 'border-slate-700 bg-slate-900/60 hover:border-slate-600 hover:bg-slate-900/80'
+                        }`}
+                      >
+                        <Camera className="mb-2 h-8 w-8 text-amber-400" />
+                        <p className="text-xs font-medium text-slate-200">
+                          Tap to open camera & take a picture, or drag and drop a file
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          JPEG, PNG, or WebP (max 8MB)
+                        </p>
+                      </button>
+                    ) : (
+                      <div className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/90 p-3">
+                        <div className="flex items-center space-x-3">
+                          {imagePreviewUrl ? (
+                            <img
+                              src={imagePreviewUrl}
+                              alt="Recipe preview"
+                              className="h-12 w-12 rounded-lg object-cover border border-slate-700"
+                            />
+                          ) : (
+                            <ImageIcon className="h-8 w-8 text-amber-400" />
+                          )}
+                          <div className="text-left">
+                            <p className="text-xs font-medium text-slate-200 truncate max-w-[200px] sm:max-w-[300px]">
+                              {selectedImageFile.name}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              {formatFileSize(selectedImageFile.size)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleRemoveImageFile}
+                          disabled={importRecipeImageMutation.isPending}
+                          className="h-8 px-2 text-xs text-slate-400 hover:text-red-400"
+                        >
+                          <X className="h-4 w-4" />
+                          <span>Remove</span>
+                        </Button>
+                      </div>
+                    )}
+
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        onClick={handleImportImage}
+                        disabled={importRecipeImageMutation.isPending || !selectedImageFile}
+                        className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                      >
+                        {importRecipeImageMutation.isPending ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
+                            <span>Analyzing Photo with AI...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3.5 w-3.5 text-black" />
+                            <span>Import from Picture</span>
                           </>
                         )}
                       </Button>

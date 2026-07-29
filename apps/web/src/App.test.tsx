@@ -1537,5 +1537,70 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         await screen.findByText(/gemini_api_key is not configured on the server/i)
       ).toBeInTheDocument();
     });
+
+    it('renders Take Picture tab with capture="environment" file input', async () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /take picture/i }));
+
+      const cameraInput = document.getElementById('import-camera-input') as HTMLInputElement;
+      expect(cameraInput).toBeInTheDocument();
+      expect(cameraInput.getAttribute('type')).toBe('file');
+      expect(cameraInput.getAttribute('accept')).toBe('image/jpeg,image/png,image/webp');
+      expect(cameraInput.getAttribute('capture')).toBe('environment');
+    });
+
+    it('submits photo taken via Take Picture tab to POST /api/recipes/import-image hitting the shared downstream handler', async () => {
+      let importImageCalled = false;
+
+      const mockDraft = {
+        name: 'Camera Recipe Card',
+        baseServings: 2,
+        dietaryTags: ['Vegan'],
+        ingredients: [{ ingredientId: 'oats', displayName: 'Oats', amount: 1, unit: 'cup' }],
+      };
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-image') && options?.method === 'POST') {
+          importImageCalled = true;
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockDraft,
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /take picture/i }));
+
+      const photoFile = new File(['camera photo buffer'], 'photo.jpg', { type: 'image/jpeg' });
+      const cameraInput = document.getElementById('import-camera-input') as HTMLInputElement;
+
+      fireEvent.change(cameraInput, { target: { files: [photoFile] } });
+
+      const importButton = screen.getByRole('button', { name: /import from picture/i });
+      fireEvent.click(importButton);
+
+      await waitFor(() => {
+        expect(importImageCalled).toBe(true);
+      });
+
+      expect(await screen.findByDisplayValue('Camera Recipe Card')).toBeInTheDocument();
+      expect(screen.getByText(/imported via ai — please review all fields/i)).toBeInTheDocument();
+    });
   });
 });

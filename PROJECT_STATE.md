@@ -1,7 +1,7 @@
 # PROJECT_STATE.md — CookOut AI Comprehensive Technical Handoff
 
 > **Target Audience**: Senior Software Engineer / Technical Architect entering the codebase for the first time.
-> **Scope**: Complete, exhaustive technical snapshot of the repository as of Milestone 10 completion.
+> **Scope**: Complete, exhaustive technical snapshot of the repository's actual shipped state. This is the single canonical status document — `PROJECT_HANDOFF.md` and `ROADMAP.md` (milestone-numbered snapshots that had drifted out of sync with shipped code) have been retired in favor of this file. Keep it current when you ship a feature that changes the picture described here.
 
 ---
 
@@ -9,7 +9,7 @@
 
 ### Project Purpose
 
-**CookOut AI** is a production-grade full-stack TypeScript application designed for culinary event planning, recipe scaling, dietary group management, and consolidated shopping list generation. It solves the real-world domain problem of scaling recipes for varying party sizes and consolidating ingredients across disparate units (mass, volume, count) without precision loss or invalid unit conversions.
+**CookOut AI** is a production-grade full-stack TypeScript application designed for culinary event planning, recipe scaling, dietary group management, consolidated shopping list generation, and AI-assisted recipe import. It solves the real-world domain problem of scaling recipes for varying party sizes and consolidating ingredients across disparate units (mass, volume, count) without precision loss or invalid unit conversions.
 
 ### Intended Users
 
@@ -18,19 +18,19 @@
 
 ### Current Maturity
 
-- **Current Phase**: **Production-Grade Core System & Domain Model (Milestones 1–10 Complete)**.
-- **Architectural Status**:
+- **Architectural Status**: all four planned layers are implemented and tested:
   - Pure, food-agnostic domain kernel (`@cookout-ai/domain`) with zero external runtime dependencies.
-  - Persisted HTTP REST API (`@cookout-ai/api`) backed by Express and Prisma SQLite.
-  - Accessible, responsive React Web UI (`@cookout-ai/web`) built with shadcn/ui primitives and TanStack Query state management.
-  - Full automated testing suite: **104 Vitest unit/integration tests** + **Playwright E2E lifecycle test** running against real servers and an isolated database (`prisma/e2e.db`).
+  - Persisted HTTP REST API (`@cookout-ai/api`) backed by Express and Prisma SQLite, including recipe CRUD, shopping-list generation, guest-group event planning, and Google Gemini-powered recipe import.
+  - Accessible, responsive React Web UI (`@cookout-ai/web`) built with shadcn/ui primitives and TanStack Query state management, with three top-level views (Recipes, Shopping List Builder, Event Planner) plus a four-mode AI import flow (text / URL / image upload / camera capture) inside the recipe form.
+  - Full automated testing suite: Vitest unit/integration tests across all three workspaces + a Playwright E2E suite (recipe lifecycle, AI import fixture interception, event planning) running against real servers and an isolated database (`prisma/e2e.db`).
+- **Test counts** (see §9 for the full breakdown): 190 Vitest tests, 8 Playwright E2E tests, all passing.
 
 ### Overall Architecture Philosophy
 
 1. **Domain-Driven Design (DDD)**: Core business rules, unit conversions, recipe scaling, and dietary eligibility logic reside strictly inside an isolated, immutable domain package (`packages/domain`). The domain package depends on nothing outside itself.
 2. **Clean Monorepo Boundaries**: The system uses npm workspaces separating `packages/domain` (domain kernel), `apps/api` (infrastructure & HTTP endpoints), and `apps/web` (user interface).
 3. **Immutability & Value Objects**: Domain objects (`Quantity`, `Recipe`, `IngredientLine`, `GuestGroup`) are frozen value objects that guarantee validity upon construction and prevent accidental side effects.
-4. **Deterministic Calculation Over AI Inference**: All core mathematical scaling, unit conversions, and dietary subgroup filtering are 100% deterministic code. AI capability is scoped for structured text extraction (e.g. OCR/recipe importing) and explanation, never for core arithmetic or eligibility calculation.
+4. **Deterministic Calculation Over AI Inference**: All core mathematical scaling, unit conversions, and dietary subgroup filtering are 100% deterministic code, living in `packages/domain`. AI capability (Google Gemini) is scoped entirely to `apps/api`, for structured text extraction from unstructured recipe text/URLs/images — never for core arithmetic or eligibility calculation. AI-imported recipes are never auto-persisted; they return a draft the client must explicitly review and submit.
 
 ---
 
@@ -39,19 +39,22 @@
 | Category                     | Technology                 | Version    | Purpose & Selection Rationale                                                                                                            |
 | :--------------------------- | :------------------------- | :--------- | :--------------------------------------------------------------------------------------------------------------------------------------- |
 | **Language**                 | TypeScript                 | `^5.7.3`   | Strong static typing across monorepo boundaries, preventing null reference errors and signature mismatches.                              |
-| **Runtime**                  | Node.js                    | `>=20.0.0` | Standard server-side JavaScript runtime with native ES modules support (`Node16`/`NodeNext`).                                            |
+| **Runtime**                  | Node.js                    | `>=18.0.0` | Standard server-side JavaScript runtime with native ES modules support (`Node16`/`NodeNext`).                                            |
 | **Monorepo**                 | npm Workspaces             | Native     | Native package management and workspace linking without third-party monorepo overhead (e.g. Lerna or Nx).                                |
 | **Backend Framework**        | Express.js                 | `^4.21.2`  | Minimalist, stable HTTP web framework for routing, middleware handling, and JSON API delivery.                                           |
 | **Database**                 | SQLite                     | 3.x        | Zero-configuration file-based relational database (`dev.db`, `test.db`, `e2e.db`). Ideal for rapid development and isolated test suites. |
 | **ORM**                      | Prisma                     | `^6.3.1`   | Type-safe database client and auto-generated migrations. Guarantees compile-time type alignment between SQL schema and TypeScript types. |
+| **AI**                       | `@google/genai` (Gemini)   | `^2.13.0`  | Structured extraction of recipe drafts from raw text, webpage URLs, and photos; never used for domain arithmetic.                        |
+| **HTML parsing**             | Cheerio                    | `^1.2.0`   | Fallback structured-data scraping for URL import when a page lacks machine-readable recipe markup.                                       |
+| **Multipart parsing**        | Busboy                     | `^1.6.0`   | Streaming multipart parser for image uploads, enabling size-limit enforcement without buffering the whole file.                          |
 | **Frontend UI Framework**    | React                      | `^18.3.1`  | Declarative UI framework for building reactive components.                                                                               |
 | **Frontend Build Tool**      | Vite                       | `^6.1.0`   | Ultra-fast HMR dev server and optimized Rollup production bundler.                                                                       |
-| **State & Data Fetching**    | TanStack Query             | `^5.66.0`  | Automatic caching, stale-time management, background refetching, and mutation cache invalidation (`['recipes']`).                        |
+| **State & Data Fetching**    | TanStack Query             | `^5.101.4` | Automatic caching, stale-time management, background refetching, and mutation cache invalidation (`['recipes']`).                        |
 | **Styling**                  | Tailwind CSS               | `^3.4.17`  | Utility-first CSS framework for design system enforcement.                                                                               |
-| **UI Components**            | shadcn/ui (Radix + Lucide) | Custom     | Accessible, accessible-by-default primitives (`Button`, `Card`, `Input`, `Label`, `Select`, `Checkbox`, `Alert`).                        |
+| **UI Components**            | shadcn/ui (Radix + Lucide) | Custom     | Accessible-by-default primitives (`Button`, `Card`, `Input`, `Label`, `Select`, `Checkbox`).                                             |
 | **Icons**                    | Lucide React               | `^0.475.0` | Clean, accessible vector icon set.                                                                                                       |
 | **Unit/Integration Testing** | Vitest                     | `^3.0.5`   | Native ESM test runner with JSDom support for React Testing Library and Supertest API tests.                                             |
-| **E2E Testing**              | Playwright                 | `^1.50.1`  | Full-stack browser automation testing driving real frontend/backend servers and isolated DB.                                             |
+| **E2E Testing**              | Playwright                 | `^1.61.1`  | Full-stack browser automation testing driving real frontend/backend servers and isolated DB, with Gemini fixture interception.           |
 | **Linting**                  | ESLint + `jsx-a11y`        | `^9.20.1`  | Strict JavaScript/TypeScript linting with automated accessibility checks.                                                                |
 | **Formatting**               | Prettier                   | `^3.5.1`   | Code style consistency across all workspace files.                                                                                       |
 | **Git Hooks**                | Husky + lint-staged        | `^9.1.7`   | Pre-commit formatting and linting enforcement.                                                                                           |
@@ -62,91 +65,56 @@
 
 ```
 cookout-ai/
-├── .github/
-│   └── workflows/
-│       └── ci.yml                 # GitHub Actions CI workflow (lint, typecheck, unit test, build, e2e)
+├── .github/workflows/ci.yml        # GitHub Actions CI (format, lint, typecheck, vitest, build, e2e)
+├── CLAUDE.md                       # Guidance for Claude Code when working in this repo
+├── .claude/skills/                 # Project skills (vendored + installed via `npx skills add`)
 ├── apps/
-│   ├── api/                       # Express HTTP API application workspace
+│   ├── api/                        # Express HTTP API application workspace
 │   │   ├── src/
-│   │   │   ├── middleware/
-│   │   │   │   └── errorHandler.ts # Express error-handling middleware
-│   │   │   ├── app.ts             # Express app setup, CORS, JSON parsing, API route definitions
-│   │   │   ├── app.test.ts        # Vitest + Supertest API integration test suite (15 tests)
-│   │   │   ├── index.ts           # HTTP server listener (port 3001)
-│   │   │   ├── prisma.ts          # Shared PrismaClient singleton instance
-│   │   │   └── recipeMapper.ts    # Mappers converting Prisma models <-> Domain entities
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   └── web/                       # Vite + React web application workspace
-│       ├── e2e/
-│       │   └── recipe-lifecycle.spec.ts # Playwright E2E full-stack lifecycle test
+│   │   │   ├── __fixtures__/       # Recorded Gemini response fixtures (USE_GEMINI_FIXTURES=true)
+│   │   │   ├── middleware/errorHandler.ts
+│   │   │   ├── app.ts              # Express app setup, CORS, JSON parsing, all route definitions
+│   │   │   ├── geminiClient.ts     # Gemini API client, fixture interception, production guard
+│   │   │   ├── ssrfGuard.ts        # SSRF protection for URL-import fetches
+│   │   │   ├── imageValidator.ts   # Streaming Busboy size limit + magic-byte sniffing
+│   │   │   ├── importText.ts / importUrl.ts / importImage.ts  # AI import route handlers
+│   │   │   ├── index.ts            # HTTP server listener (port 3001)
+│   │   │   ├── prisma.ts           # Shared PrismaClient singleton instance
+│   │   │   └── recipeMapper.ts     # Mappers converting Prisma models <-> Domain entities
+│   │   └── package.json
+│   └── web/                        # Vite + React web application workspace
+│       ├── e2e/                    # Playwright specs: recipe-lifecycle, ai-import, event-planner
 │       ├── src/
 │       │   ├── components/
-│       │   │   ├── ui/            # shadcn UI primitive components (Button, Card, Input, etc.)
-│       │   │   ├── Navigation.tsx # Main header navigation with tab switcher
-│       │   │   ├── RecipeForm.tsx # Recipe creation and pre-filled editing form
-│       │   │   ├── RecipeList.tsx # Recipe card grid with Edit and Delete actions
-│       │   │   └── ShoppingListBuilder.tsx # Multi-recipe selector and shopping list viewer
-│       │   ├── lib/
-│       │   │   ├── api.ts         # Shared HTTP client for REST API endpoints
-│       │   │   ├── queries.ts     # TanStack Query custom hooks (useRecipes, useUpdateRecipe, etc.)
-│       │   │   └── utils.ts       # Tailwind class merge helper (cn)
-│       │   ├── App.tsx            # Main application component & layout state
-│       │   ├── App.test.tsx       # Vitest + React Testing Library integration tests (10 tests)
-│       │   ├── main.tsx           # React DOM root entry point
-│       │   └── index.css          # Global Tailwind CSS directives & theme design tokens
-│       ├── index.html
-│       ├── package.json
-│       ├── playwright.config.ts   # Playwright E2E configuration (isolated ports 3010/3011, e2e.db)
-│       └── vite.config.ts         # Vite build and proxy configuration
+│       │   │   ├── ui/             # shadcn UI primitives (Button, Card, Input, etc.)
+│       │   │   ├── Navigation.tsx  # Tab switcher: Recipes / Shopping List / Event Planner
+│       │   │   ├── RecipeForm.tsx  # Recipe create/edit form + 4-mode AI import (text/url/image/camera)
+│       │   │   ├── RecipeList.tsx
+│       │   │   ├── ShoppingListBuilder.tsx
+│       │   │   └── EventPlanner.tsx
+│       │   ├── lib/                # api.ts (HTTP client), queries.ts (TanStack Query hooks), formatQuantity.ts, utils.ts
+│       │   └── App.tsx
+│       ├── playwright.config.ts    # Isolated ports 3010/3011, e2e.db
+│       └── package.json
 ├── docs/
-│   ├── adr/
-│   │   └── 0001-monorepo-architecture.md # Architectural Decision Record for workspace structure
-│   ├── ideas/
-│   │   └── practical-scaling.md   # Design document for v2 practical scaling heuristics
-│   └── glossary.md                # Domain terminology glossary
-├── packages/
-│   └── domain/                    # Pure TypeScript Domain Package (@cookout-ai/domain)
-│       ├── src/
-│       │   ├── ai/                # AI integration interfaces (stubbed for future OCR/import)
-│       │   ├── errors.ts          # DomainError hierarchy (InvalidQuantityError, InvalidRecipeError, etc.)
-│       │   ├── events/            # Guest group event planning sub-domain
-│       │   │   ├── computeEligibleServings.ts # Pure function for recipe guest eligibility
-│       │   │   ├── events.test.ts # Vitest unit test suite for event planning (16 tests)
-│       │   │   ├── guestGroup.ts  # GuestGroup value object (subset hierarchy model)
-│       │   │   ├── planEventShoppingList.ts # Event planning pipeline orchestrator
-│       │   │   └── types.ts       # Event plan interfaces (EventPlan, IncludedRecipePlan, etc.)
-│       │   ├── recipes/           # Recipe sub-domain
-│       │   │   ├── ingredientLine.ts # IngredientLine value object
-│       │   │   ├── recipe.ts      # Recipe value object
-│       │   │   ├── recipe.test.ts # Vitest unit test suite for Recipe & scaling (18 tests)
-│       │   │   ├── scaleRecipe.ts # Pure recipe scaling service
-│       │   │   └── types.ts       # Recipe and ScaledRecipe interfaces
-│       │   ├── shopping/          # Shopping list sub-domain
-│       │   │   ├── consolidateShoppingList.ts # Cross-recipe ingredient consolidation engine
-│       │   │   ├── consolidateShoppingList.test.ts # Vitest test suite for consolidation (10 tests)
-│       │   │   └── types.ts       # Shopping list DTO interfaces
-│       │   ├── units/             # Unit conversion sub-domain
-│       │   │   ├── quantity.ts    # Quantity value object
-│       │   │   ├── quantity.test.ts # Vitest unit test suite for Quantity (34 tests)
-│       │   │   └── units.ts       # Registry of supported units, categories, and conversion rates
-│       │   └── index.ts           # Main domain package entry point exporting public API
-│       ├── package.json
-│       └── tsconfig.json
+│   ├── adr/0001-monorepo-architecture.md
+│   ├── agents/                     # Config consumed by the Matt Pocock engineering skills
+│   ├── ideas/practical-scaling.md  # Design doc for v2 non-linear rounding heuristics (not yet built)
+│   └── glossary.md
+├── packages/domain/                 # Pure TypeScript Domain Package (@cookout-ai/domain)
+│   └── src/
+│       ├── errors.ts               # DomainError hierarchy
+│       ├── events/                 # GuestGroup, computeEligibleServings, planEventShoppingList
+│       ├── recipes/                # Recipe, IngredientLine, scaleRecipe
+│       ├── shopping/               # ShoppingListItem, consolidateShoppingList
+│       ├── units/                  # Quantity value object, unit registry
+│       └── index.ts                # Public domain exports
 ├── prisma/
-│   ├── dev.db                     # Development SQLite database
-│   ├── test.db                    # Vitest integration test SQLite database (gitignored)
-│   ├── e2e.db                     # Playwright E2E test SQLite database (gitignored)
-│   └── schema.prisma              # Prisma relational schema definition
-├── .prettierrc
-├── eslint.config.mjs
-├── package.json                   # Root package.json defining npm workspaces & scripts
-├── PROJECT_HANDOFF.md             # High-level project handoff overview
-├── PROJECT_OVERVIEW.md            # Repository overview
-├── PROJECT_STATE.md               # THIS FILE — Comprehensive engineering handoff document
-├── README.md                      # Quickstart documentation
-├── ROADMAP.md                     # Milestone completion tracking
-└── vitest.config.ts               # Vitest workspace configuration (env: DATABASE_URL=test.db)
+│   ├── schema.prisma                # Recipe & IngredientLine models
+│   ├── dev.db / test.db / e2e.db    # gitignored SQLite files
+├── scripts/smokeTestLiveGemini.js   # Manual live-API schema-drift check (documented in README, not in CI)
+├── package.json                     # Root workspace configuration
+└── vitest.config.ts                 # Vitest workspace config (`projects: ['apps/*', 'packages/*']`)
 ```
 
 ---
@@ -247,51 +215,24 @@ cookout-ai/
 
 ### 1. `scaleRecipe(recipe: Recipe, targetServings: number): ScaledRecipe`
 
-- **Inputs**: A valid `Recipe` object and a target serving count (`targetServings: number`).
-- **Outputs**: A `ScaledRecipe` object containing scaled ingredient quantities.
-- **Algorithm**:
-  1. Validates `targetServings` (must be a positive integer > 0).
-  2. Calculates `scaleFactor = targetServings / recipe.baseServings`.
-  3. Maps each `IngredientLine` in `recipe.ingredients` to a new `IngredientLine` with `quantity = line.quantity.multiply(scaleFactor)`.
-  4. Returns `ScaledRecipe` DTO.
-- **Business Rules**: `scaleRecipe(recipe, 0)` is strictly rejected (throws `InvalidRecipeError`). Scaling by factor 1.0 produces exact duplicate quantities.
+- **Algorithm**: Validates `targetServings` (must be positive integer > 0); `scaleFactor = targetServings / recipe.baseServings`; maps each `IngredientLine` to `quantity = line.quantity.multiply(scaleFactor)`.
+- **Business Rules**: `scaleRecipe(recipe, 0)` is strictly rejected (throws `InvalidRecipeError`).
 - **Time Complexity**: $O(N)$ where $N$ is the number of ingredient lines.
 
 ### 2. `computeEligibleServings(recipe: Recipe, guestGroup: GuestGroup): number`
 
-- **Inputs**: A `Recipe` object and a `GuestGroup` object.
-- **Outputs**: An integer representing the count of guests eligible to eat the recipe ($0 \le \text{count} \le \text{totalGuests}$).
-- **Algorithm**:
-  - If recipe `dietaryTags` includes `'Vegan'` (or both `'Vegetarian'` and `'Vegan'`) $\rightarrow$ return `guestGroup.totalGuests`.
-  - Else if recipe `dietaryTags` includes `'Vegetarian'` $\rightarrow$ return `guestGroup.totalGuests - guestGroup.veganCount`.
-  - Else (untagged/meat recipe) $\rightarrow$ return `guestGroup.omnivoreCount` (`totalGuests - vegetarianCount`).
-- **Business Rules**: Vegan dishes are safe for everyone. Vegetarian dishes are safe for omnivores and vegetarians, but exclude vegans. Untagged dishes exclude all vegetarians (which includes vegans under the subset hierarchy).
+- **Algorithm**: Vegan-tagged recipes → all guests eligible. Vegetarian-tagged → `totalGuests - veganCount`. Untagged → `omnivoreCount` (`totalGuests - vegetarianCount`).
 - **Time Complexity**: $O(1)$.
 
 ### 3. `consolidateShoppingList(scaledRecipes: ScaledRecipe[]): ShoppingListItem[]`
 
-- **Inputs**: Array of `ScaledRecipe` objects.
-- **Outputs**: Array of consolidated `ShoppingListItem` objects.
-- **Algorithm**:
-  1. Groups all ingredient lines by `ingredientId`.
-  2. For each `ingredientId`, initializes total quantity using the first ingredient line's `quantity` (establishing primary display name and primary unit).
-  3. Accumulates subsequent quantities using `totalQuantity = totalQuantity.add(line.quantity)`.
-  4. If a line uses a different unit in the same category (e.g. `2 cup` + `100 ml`), `Quantity.add()` converts the incoming quantity to the primary unit before adding.
-  5. Tracks unique `sourceRecipeIds`.
-  6. Returns array of `ShoppingListItem`s.
-- **Edge Cases**: Incompatible units across different categories (e.g. `500 g` + `2 cup`) throw `UnitMismatchError`.
-- **Time Complexity**: $O(R \times I)$ where $R$ is recipe count and $I$ is average ingredients per recipe.
+- **Algorithm**: Groups ingredient lines by `ingredientId`; accumulates quantities via `Quantity.add()` (auto-converting same-category units); tracks unique `sourceRecipeIds` per item.
+- **Edge Cases**: Cross-category addition (e.g. `500 g` + `2 cup`) throws `UnitMismatchError`.
+- **Time Complexity**: $O(R \times I)$ where $R$ is recipe count, $I$ is average ingredients per recipe.
 
 ### 4. `planEventShoppingList(recipes: Recipe[], guestGroup: GuestGroup): EventPlan`
 
-- **Inputs**: Array of `Recipe` objects and a `GuestGroup` object.
-- **Outputs**: An `EventPlan` object.
-- **Algorithm**:
-  1. Iterates over `recipes`, computing `eligibleServings = computeEligibleServings(recipe, guestGroup)`.
-  2. If `eligibleServings === 0`, appends recipe to `excludedRecipes` with a descriptive reason.
-  3. If `eligibleServings > 0`, scales recipe via `scaleRecipe(recipe, eligibleServings)` and appends to `includedRecipes`.
-  4. Passes all scaled recipes from `includedRecipes` into `consolidateShoppingList()`.
-  5. Returns frozen `EventPlan`.
+- **Algorithm**: For each recipe, computes `eligibleServings`; excludes 0-eligible recipes with a reason; scales and includes the rest; consolidates all included recipes into one shopping list.
 - **Time Complexity**: $O(R \times I)$.
 
 ---
@@ -300,33 +241,27 @@ cookout-ai/
 
 ### Unit & Quantity Rules
 
-1. **Unit Registry Boundaries**: Units belong to one of three categories: `Mass` (`g`, `kg`, `oz`, `lb`), `Volume` (`ml`, `l`, `tsp`, `tbsp`, `cup`, `fl oz`), or `Count` (`count`, `clove`, `egg`, `onion`).
-2. **Category Isolation**: Quantities can only be added or converted within the same `UnitCategory`. Adding `1 kg` + `2 cup` throws `UnitMismatchError`.
-3. **Primary Base Conversion**: All volume units convert via milliliters (`ml`); all mass units convert via grams (`g`).
+1. **Unit Registry Boundaries**: `Mass` (`g`, `kg`, `oz`, `lb`), `Volume` (`ml`, `l`, `tsp`, `tbsp`, `cup`, `fl oz`), `Count` (`count`, `clove`, `egg`, `onion`).
+2. **Category Isolation**: Arithmetic across categories throws `UnitMismatchError`.
+3. **Primary Base Conversion**: Volume converts via `ml`; mass converts via `g`.
 
 ### Recipe & Scaling Rules
 
-1. **Base Servings Requirement**: Base servings must be a positive integer ($> 0$).
-2. **Proportional Scaling**: Ingredient amounts scale linearly ($A_{\text{target}} = A_{\text{base}} \times \frac{S_{\text{target}}}{S_{\text{base}}}$).
-3. **Zero Servings Prohibition**: Scaling to 0 servings is strictly forbidden.
+1. Base servings must be a positive integer.
+2. Ingredient amounts scale linearly ($A_{\text{target}} = A_{\text{base}} \times \frac{S_{\text{target}}}{S_{\text{base}}}$).
+3. Scaling to 0 servings is forbidden.
 
 ### Dietary Subset & Event Planning Rules
 
-1. **Subset Hierarchy**: `0 <= veganCount <= vegetarianCount <= totalGuests`. `vegetarianCount` includes vegans.
-2. **Vegan Universal Eligibility**: Vegan dishes feed 100% of guests (`totalGuests`).
-3. **Vegetarian Partial Eligibility**: Vegetarian dishes feed omnivores and non-vegan vegetarians (`totalGuests - veganCount`).
-4. **Meat Restriction**: Untagged recipes feed only omnivores (`totalGuests - vegetarianCount`).
-5. **Zero-Serving Exclusion**: Dishes with 0 eligible guests are excluded from scaling and shopping list calculations.
+1. **Subset Hierarchy**: `0 <= veganCount <= vegetarianCount <= totalGuests`.
+2. Vegan dishes feed 100% of guests. Vegetarian dishes feed `totalGuests - veganCount`. Untagged recipes feed only `totalGuests - vegetarianCount`.
+3. Dishes with 0 eligible guests are excluded from scaling and shopping-list calculations.
 
 ---
 
 # 7. Error Model
 
-All domain errors inherit from `DomainError` in `packages/domain/src/errors.ts`:
-
-```typescript
-export class DomainError extends Error { ... }
-```
+All domain errors inherit from `DomainError` in `packages/domain/src/errors.ts`.
 
 | Error Class              | Thrown When                                                                                         | Example Scenario                                                         |
 | :----------------------- | :-------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------- |
@@ -336,49 +271,23 @@ export class DomainError extends Error { ... }
 | `InvalidRecipeError`     | Recipe ID/name is empty, baseServings $\le 0$, or ingredient list is empty.                         | `new Recipe('r1', '', 4, [])`                                            |
 | `InvalidGuestGroupError` | Guest count rules are violated (`veganCount > vegetarianCount` or `vegetarianCount > totalGuests`). | `new GuestGroup({ totalGuests: 10, vegetarianCount: 2, veganCount: 5 })` |
 
-### Why Typed Errors Were Chosen
-
-Typed errors allow callers (such as Express error middleware or React form handlers) to perform `instanceof` checks and map domain violations directly to HTTP status codes (e.g. `400 Bad Request`) or user-friendly UI form validation messages without parsing string error messages.
+Typed errors let callers (`Express` error middleware, React form handlers) `instanceof`-check and map domain violations directly to HTTP status codes or UI validation messages without parsing strings.
 
 ---
 
-# 8. Public API
-
-`packages/domain/src/index.ts` exports the public domain surface:
+# 8. Public API (`packages/domain/src/index.ts`)
 
 ```typescript
-// Errors
-export {
-  DomainError,
-  InvalidQuantityError,
-  InvalidUnitError,
-  UnitMismatchError,
-  InvalidRecipeError,
-  InvalidGuestGroupError,
-} from './errors.js';
+export * from './errors.js';
+export * from './units/index.js';
+export * from './recipes/index.js';
+export * from './shopping/index.js';
+export * from './events/index.js';
 
-// Units & Quantities
-export { Quantity } from './units/quantity.js';
-export { SUPPORTED_UNITS, getUnitMeta } from './units/units.ts';
-export type { UnitCategory } from './units/units.ts';
-
-// Recipes & Scaling
-export { Recipe } from './recipes/recipe.js';
-export { IngredientLine } from './recipes/ingredientLine.js';
-export { scaleRecipe } from './recipes/scaleRecipe.js';
-export { DietaryTag } from './recipes/types.js';
-export type { ScaledRecipe } from './recipes/types.js';
-
-// Shopping List Consolidation
-export { consolidateShoppingList } from './shopping/consolidateShoppingList.js';
-export type { ShoppingListItem } from './shopping/types.js';
-
-// Event Planning
-export { GuestGroup } from './events/guestGroup.js';
-export { computeEligibleServings } from './events/computeEligibleServings.js';
-export { planEventShoppingList } from './events/planEventShoppingList.js';
-export type { EventPlan, IncludedRecipePlan, ExcludedRecipePlan } from './events/types.js';
+export const DOMAIN_PACKAGE_NAME = '@cookout-ai/domain';
 ```
+
+There is no AI-related export from the domain package — Gemini integration lives entirely in `apps/api` (see §10), consistent with the "deterministic domain, AI at the edge" rule in §1.
 
 ---
 
@@ -386,22 +295,20 @@ export type { EventPlan, IncludedRecipePlan, ExcludedRecipePlan } from './events
 
 ### Testing Strategy & Frameworks
 
-- **Vitest**: Monorepo unit and integration test runner.
-- **React Testing Library (RTL)**: Frontend UI component testing with JSDom.
+- **Vitest**: Monorepo unit and integration test runner (`projects: ['apps/*', 'packages/*']`).
+- **React Testing Library**: Frontend UI component testing with JSDom.
 - **Supertest**: Express HTTP API integration testing.
 - **Playwright**: End-to-end browser automation testing.
 
 ### Current Test Suite Numbers
 
-- **Total Vitest Tests**: **104 passing tests** across 7 test files.
-  - Domain Unit Tests: 63 tests (`quantity`, `recipe`, `consolidateShoppingList`, `events`).
-  - API Integration Tests: 15 tests (`app.test.ts`).
-  - Web UI Integration Tests: 10 tests (`App.test.tsx`).
-- **Playwright E2E Tests**: **1 full-stack lifecycle test** (`recipe-lifecycle.spec.ts`).
+- **Total Vitest Tests**: **190 passing tests** across 11 test files, spanning `packages/domain` (units/recipes/shopping/events), `apps/api` (health, recipe CRUD, shopping-list, event-plan, AI import text/URL/image), and `apps/web` (App, formatQuantity).
+- **Playwright E2E Tests**: **8 passing tests** across 3 spec files — `recipe-lifecycle.spec.ts` (full CRUD + shopping list math), `ai-import.spec.ts` (fixture-intercepted text/URL/image/camera import + a failure-path case), `event-planner.spec.ts` (happy path + 400 validation).
+- **Vitest cross-file isolation**: `apps/api`'s test files share one physical SQLite file (`prisma/test.db`) via the root `DATABASE_URL`. The root `vitest.config.ts` sets `fileParallelism: false` so all test files run serially rather than racing (a per-project setting in `apps/api/vitest.config.ts` alone is not honored by the root `projects` orchestrator); every file that mutates `Recipe`/`IngredientLine` also resets those tables in a `beforeEach` as defense in depth.
 
 ### Confidence Level
 
-**High**. Unit tests verify exact mathematical and error invariants. API integration tests verify HTTP response codes and database persistence against SQLite (`test.db`). Playwright E2E tests verify real end-to-end network proxying, database mutations, DOM rendering, and float math accuracy against a running stack (`:3010`/`:3011`, `e2e.db`).
+**High**. Unit tests verify exact mathematical and error invariants. API integration tests verify HTTP response codes and database persistence against SQLite. Playwright E2E tests verify real end-to-end network proxying, database mutations, DOM rendering, and Gemini-fixture-driven AI import flows against a running stack (`:3010`/`:3011`, `e2e.db`).
 
 ---
 
@@ -409,23 +316,33 @@ export type { EventPlan, IncludedRecipePlan, ExcludedRecipePlan } from './events
 
 ### Express Endpoints
 
-| Method   | Endpoint             | Description                          | Request Body / Params            | Response                                          |
-| :------- | :------------------- | :----------------------------------- | :------------------------------- | :------------------------------------------------ |
-| `GET`    | `/api/health`        | Health check endpoint                | None                             | `{ status: 'ok', app: 'CookOut AI Backend API' }` |
-| `GET`    | `/api/recipes`       | Fetch all saved recipes              | None                             | `RecipeDto[]` (200 OK)                            |
-| `POST`   | `/api/recipes`       | Create a new recipe                  | `CreateRecipeInput`              | `RecipeDto` (201 Created) or 400 Error            |
-| `GET`    | `/api/recipes/:id`   | Fetch recipe by ID                   | `:id` param                      | `RecipeDto` (200 OK) or 404 Error                 |
-| `PUT`    | `/api/recipes/:id`   | Full replace update recipe           | `:id` param, `CreateRecipeInput` | `RecipeDto` (200 OK) or 400/404 Error             |
-| `DELETE` | `/api/recipes/:id`   | Delete recipe (cascade delete lines) | `:id` param                      | 204 No Content or 404 Error                       |
-| `POST`   | `/api/shopping-list` | Generate consolidated list           | `ShoppingListRequestItem[]`      | `ShoppingListResponseDto` (200 OK)                |
+| Method   | Endpoint                    | Description                                                                                          |
+| :------- | :-------------------------- | :--------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/health`               | Health check                                                                                         |
+| `POST`   | `/api/recipes/import-text`  | Gemini-parsed recipe draft from raw pasted text                                                      |
+| `POST`   | `/api/recipes/import-url`   | Gemini-parsed recipe draft from a webpage URL (SSRF-guarded, Cheerio fallback scraping)              |
+| `POST`   | `/api/recipes/import-image` | Gemini-parsed recipe draft from an uploaded photo (Busboy streaming, 8MB limit, magic-byte sniffing) |
+| `POST`   | `/api/recipes`              | Create a new recipe                                                                                  |
+| `GET`    | `/api/recipes`              | Fetch all saved recipes                                                                              |
+| `GET`    | `/api/recipes/:id`          | Fetch recipe by ID                                                                                   |
+| `PUT`    | `/api/recipes/:id`          | Full replace update recipe                                                                           |
+| `DELETE` | `/api/recipes/:id`          | Delete recipe (cascade delete ingredient lines)                                                      |
+| `POST`   | `/api/shopping-list`        | Generate a consolidated shopping list across recipes                                                 |
+| `POST`   | `/api/events/plan`          | Guest-group event plan: eligible servings + consolidated list                                        |
 
-### Request Flow Into Domain
+None of the `import-*` endpoints persist to the database — they return a draft `CreateRecipeInput`-shaped payload for the client to review and submit via `POST /api/recipes`.
 
-1. **HTTP Arrival**: Express route handler receives JSON request.
-2. **Pre-Mutation Domain Construction**: Handler passes raw body to `validateAndCreateDomainRecipe(req.body, id)` in `recipeMapper.ts`.
-3. **Validation Guarantee**: Domain constructors (`Quantity`, `IngredientLine`, `Recipe`) execute validation. If validation fails, `DomainError` is thrown and returned as `400 Bad Request` _before_ touching the database.
-4. **Prisma Transaction**: `prisma.$transaction()` performs atomic SQLite database updates.
-5. **Domain Remapping**: Updated Prisma model is converted back to domain entity via `toDomainRecipe()`, serialized to JSON, and returned.
+### Request Flow Into Domain (recipe CRUD)
+
+1. Express route handler receives JSON request.
+2. Handler passes raw body to `validateAndCreateDomainRecipe(req.body, id)` in `recipeMapper.ts`.
+3. Domain constructors (`Quantity`, `IngredientLine`, `Recipe`) validate; a `DomainError` becomes `400 Bad Request` before touching the database.
+4. `prisma.$transaction()` performs the atomic SQLite write.
+5. The updated Prisma model is mapped back to a domain entity via `toDomainRecipe()` and returned as JSON.
+
+### AI Import Pipeline
+
+`geminiClient.ts` is the single integration point with `@google/genai`. It supports fixture interception (`USE_GEMINI_FIXTURES=true`, backed by `src/__fixtures__/recordedGeminiFixtures.ts`) so E2E tests and local dev never need a live API key or incur API cost; `checkProductionGuard()` throws at startup if fixtures are enabled with `NODE_ENV=production`. `importUrl.ts` fetches user-supplied URLs behind `ssrfGuard.ts` (blocks internal/private network targets) with a 2MB decompressed-size cap and a 30s timeout; `importImage.ts` validates uploads via streaming Busboy parsing and magic-byte header sniffing (not just file extension) before ever calling Gemini.
 
 ---
 
@@ -433,108 +350,81 @@ export type { EventPlan, IncludedRecipePlan, ExcludedRecipePlan } from './events
 
 ### Architecture & Screens
 
-The frontend is a single-page React application (`App.tsx`) with two primary tab views:
+Single-page React app (`App.tsx`) with three top-level tabs, synced to `window.location.hash`:
 
-1. **Recipes Tab (`#recipes`)**:
-   - **`RecipeForm.tsx`**: Dual-purpose creation and edit form. Supports adding/removing ingredient rows, unit select dropdowns, and dietary tag checkboxes.
-   - **`RecipeList.tsx`**: Responsive grid displaying recipe cards with base servings, dietary tags, ingredient lists, and Edit/Delete action buttons.
-2. **Shopping List Builder Tab (`#shopping-list`)**:
-   - **`ShoppingListBuilder.tsx`**: Multi-select recipe checklist with per-recipe target serving inputs. Generates consolidated shopping list items and per-recipe scaled breakdowns.
+1. **Recipes (`#recipes`)**:
+   - `RecipeForm.tsx` — dual-purpose creation/edit form, plus a 4-mode AI import flow (Text / URL / Image / Camera) that pre-fills the form from a Gemini draft for human review before submission. Camera mode uses a dedicated file input with `capture="environment"` for fast mobile photo capture.
+   - `RecipeList.tsx` — recipe card grid with Edit/Delete actions.
+2. **Shopping List Builder (`#shopping-list`)**: `ShoppingListBuilder.tsx` — multi-recipe selector with per-recipe target servings, generating a consolidated list.
+3. **Event Planner (`#event-planner`)**: `EventPlanner.tsx` — guest-group input (total/vegetarian/vegan counts) against saved recipes, calling `POST /api/events/plan` and rendering included/excluded recipes plus the consolidated event shopping list.
 
 ### State Management & Navigation
 
-- **URL Hash Synchronization**: Syncs `currentTab` state with `window.location.hash` (`#recipes`, `#shopping-list`).
-- **TanStack Query**: `useRecipes()` shares query key `['recipes']` with a 5-minute `staleTime`. Mutations (`useCreateRecipe`, `useUpdateRecipe`, `useDeleteRecipe`) automatically invalidate `['recipes']` on success.
+- **URL Hash Synchronization**: `currentTab` syncs with `window.location.hash`.
+- **TanStack Query**: `useRecipes()` shares query key `['recipes']`. Mutations invalidate `['recipes']` on success.
 
 ---
 
-# 12. Current Features
+# 12. Features NOT Yet Built
 
-1. **Unit Conversion Engine**: Converts units within Mass and Volume categories using exact conversion factors.
-2. **Proportional Recipe Scaling**: Scales ingredient quantities linearly based on target servings.
-3. **Cross-Recipe Shopping List Consolidation**: Merges identical `ingredientId` items across recipes, converting units to primary display units.
-4. **Persisted Recipe CRUD API**: Express REST API backed by Prisma SQLite supporting full Create, Read, Update (`PUT`), and Delete (`DELETE`) operations.
-5. **Polished Accessible Web UI**: Responsive dark-mode interface built with shadcn primitives, keyboard navigation, and `jsx-a11y` compliance.
-6. **Guest Group Diet-Split Planning Domain Module**: Subdomain module calculating recipe eligibility and scaled event shopping lists for mixed omnivore/vegetarian/vegan guest groups.
-7. **Automated Playwright E2E Suite**: Full-stack browser automation test suite verifying end-to-end network request proxying, database persistence, and float math accuracy against isolated servers.
+These are genuinely still open — not implemented anywhere in the codebase as of this writing:
 
----
-
-# 13. Features NOT Yet Built
-
-### High Priority
-
-- **API & UI Integration for Guest Group Event Planning**: Exposing `POST /api/events/plan` endpoint and building event planner UI component (Milestone 11 candidate).
-
-### Medium Priority
-
+- **Pantry Inventory Subtraction**: Deducting on-hand pantry items from a generated shopping list.
+- **Cost Estimation**: Price estimates on shopping list items.
 - **Recipe Search & Filter UI**: Filtering saved recipes by name or dietary tags.
-- **Optimistic UI Updates**: Instantly updating TanStack Query cache before network requests resolve.
-
-### Long Term / Deferred Ideas
-
-- **Practical Scaling Heuristics (v2)**: Non-linear rounding for indivisible ingredients (e.g. recommending 1 whole egg instead of 0.25 egg; documented in [docs/ideas/practical-scaling.md](file:///c:/Users/nebha/Desktop/cookout-ai/docs/ideas/practical-scaling.md)).
-- **Gemini AI Recipe Import**: OCR/text parsing to import unstructured recipe text into domain `Recipe` shapes.
+- **Optimistic UI Updates**: Instantly updating the TanStack Query cache before network requests resolve.
+- **Practical Scaling Heuristics (v2)**: Non-linear rounding for indivisible ingredients (e.g. recommending 1 whole egg instead of 0.25 egg) — documented in `docs/ideas/practical-scaling.md`.
+- **Auth & Multi-Tenancy**: No user login; all recipes are global and shared in one SQLite database.
 
 ---
 
-# 14. Open Design Decisions
+# 13. Open Design Decisions
 
-1. **Duplicate Ingredient IDs in Single Recipe**: Allowed in domain `Recipe` constructor. Deduplication occurs during `consolidateShoppingList()`.
-2. **Dietary Tag Storage in SQLite**: SQLite lacks native array columns. Stored as JSON string (`dietaryTagsJson`) on `Recipe` Prisma table and parsed at API boundary.
-3. **Full-Group Serving Scaling in Event Planning**: Each eligible recipe is scaled to 100% of eligible guests in the group (e.g. two vegetarian mains both scale to full vegetarian count). Guest dish-splitting is deferred to future UI workflow.
+1. **Duplicate Ingredient IDs in a Single Recipe**: Allowed in the domain `Recipe` constructor. Deduplication happens during `consolidateShoppingList()`.
+2. **Dietary Tag Storage in SQLite**: Stored as a JSON string (`dietaryTagsJson`) on the `Recipe` table and parsed at the API boundary, since SQLite has no native array column type.
+3. **Full-Group Serving Scaling in Event Planning**: Each eligible recipe scales to 100% of its eligible guest count (e.g. two vegetarian mains both scale to the full vegetarian count). Per-guest dish-splitting is deferred to a future UI workflow.
 
 ---
 
-# 15. ADR Summary
+# 14. ADR Summary
 
 ### ADR 0001: Monorepo Architecture
 
-- **Decision**: Adopt npm workspaces for monorepo management with three packages (`packages/domain`, `apps/api`, `apps/web`).
-- **Rationale**: Strict separation of concerns. `packages/domain` contains zero framework dependencies and can be published or reused independently.
+- **Decision**: Adopt npm workspaces with three packages (`packages/domain`, `apps/api`, `apps/web`).
+- **Rationale**: Strict separation of concerns; `packages/domain` has zero framework dependencies and could be published or reused independently.
 - **Tradeoffs**: Requires path mapping and module resolution configuration across workspaces.
 
 ---
 
-# 16. Technical Debt
+# 15. Technical Debt
 
-| Debt                                  | Severity | Impact                                                                                 | Mitigation Plan                                                     |
-| :------------------------------------ | :------- | :------------------------------------------------------------------------------------- | :------------------------------------------------------------------ |
-| **JSON Column for Dietary Tags**      | Low      | `dietaryTagsJson` string column in Prisma SQLite requires manual JSON parse/serialize. | Migrate to normalized join table if database changes to PostgreSQL. |
-| **No Authentication / Multi-Tenancy** | Medium   | All recipes in SQLite database are global and shared.                                  | Add User authentication and `userId` foreign key on `Recipe` model. |
-| **Unbounded List Fetching**           | Low      | `GET /api/recipes` returns all recipes without pagination.                             | Implement cursor-based pagination when recipe count exceeds 100.    |
+| Debt                                  | Severity | Impact                                                                                 | Mitigation Plan                                                           |
+| :------------------------------------ | :------- | :------------------------------------------------------------------------------------- | :------------------------------------------------------------------------ |
+| **JSON Column for Dietary Tags**      | Low      | `dietaryTagsJson` string column in Prisma SQLite requires manual JSON parse/serialize. | Migrate to a normalized join table if the database ever moves off SQLite. |
+| **No Authentication / Multi-Tenancy** | Medium   | All recipes in SQLite are global and shared.                                           | Add user authentication and a `userId` foreign key on `Recipe`.           |
+| **Unbounded List Fetching**           | Low      | `GET /api/recipes` returns all recipes without pagination.                             | Implement cursor-based pagination once recipe count exceeds ~100.         |
 
 ---
 
-# 17. Performance
+# 16. Performance
 
-- **Unit Conversions & Consolidation**: $O(N)$ linear complexity. Extremely fast (< 1ms for 100 ingredients).
-- **SQLite Database I/O**: Local disk reads/writes resolve in < 5ms per request.
+- **Unit Conversions & Consolidation**: $O(N)$ linear complexity, sub-millisecond for realistic ingredient counts.
+- **SQLite Database I/O**: Local disk reads/writes resolve in single-digit milliseconds per request.
 - **TanStack Query Caching**: Eliminates redundant network requests when switching tab views.
 
 ---
 
-# 18. Security
+# 17. Security
 
-- **Current Security Posture**: Safe for local and single-user deployment.
+- **Current Security Posture**: Safe for local and single-user deployment; not yet hardened for multi-tenant production use.
 - **Validation**: All incoming API payloads pass strict domain validation before reaching Prisma/SQLite.
+- **AI Import Hardening**: SSRF guard on URL import (blocks internal/private network targets); streaming size limits + magic-byte sniffing on image upload (not just extension/MIME trust); Gemini fixture interception has a hard production guard so recorded fixtures can never leak into a production response.
 - **Risks**: No authentication middleware, authorization checks, or rate limiting currently implemented.
 
 ---
 
-# 19. Future Roadmap
+# 18. Current Assessment
 
-1. **Milestone 11 — Event Planning API & UI**: Expose `POST /api/events/plan` and build frontend Guest Group Event Planner screen.
-2. **Milestone 12 — Gemini AI Recipe Import**: Integrate Google Gemini SDK to parse raw text/images into `CreateRecipeInput` format.
-3. **Milestone 13 — Auth & Multi-Tenancy**: Add user login and personal recipe library isolation.
-
----
-
-# 20. Current Assessment
-
-### Senior Engineering Evaluation
-
-- **Strengths**: Outstanding domain isolation, rock-solid immutability, clean monorepo boundaries, 100% automated test coverage (104 Vitest + Playwright E2E), strict TypeScript typings, zero anti-patterns (`impeccable detect` clean).
-- **Weaknesses**: Lack of authentication and pagination.
-- **Maintainability**: Excellent. Modular architecture and comprehensive tests make adding new features straightforward and safe.
-- **Portfolio Quality**: **Production-Grade / Staff-level software design**. Demonstrates disciplined Domain-Driven Design and full-stack software craftsmanship.
+- **Strengths**: Outstanding domain isolation, immutable value objects throughout, clean monorepo boundaries, comprehensive automated test coverage (190 Vitest + 8 Playwright E2E), strict TypeScript typing, deterministic-domain/AI-at-the-edge separation maintained even as the AI import surface grew to four input modes.
+- **Weaknesses**: Lack of authentication and pagination; no pantry/cost-estimation features yet.
+- **Maintainability**: Excellent — modular architecture and thorough tests make adding new features straightforward and safe.

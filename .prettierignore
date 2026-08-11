@@ -4,3 +4,5 @@ coverage
 .vite
 package-lock.json
 *.db
+.agents
+.claude

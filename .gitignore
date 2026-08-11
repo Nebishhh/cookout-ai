@@ -29,6 +29,9 @@ pnpm-debug.log*
 
 # Testing & Coverage
 coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
 
 # IDE & OS
 .DS_Store

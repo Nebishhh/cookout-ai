@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus,
   Trash2,
@@ -135,7 +136,7 @@ const ImageCaptureField: React.FC<ImageCaptureFieldProps> = ({
 
   return (
     <>
-      <Label htmlFor={copy.inputId} className="text-xs text-slate-300">
+      <Label htmlFor={copy.inputId} className="text-xs text-ink-muted">
         {copy.label}
       </Label>
 
@@ -152,8 +153,10 @@ const ImageCaptureField: React.FC<ImageCaptureFieldProps> = ({
       />
 
       {!selectedFile ? (
-        <button
+        <motion.button
           type="button"
+          animate={{ scale: isDragging ? 1.015 : 1 }}
+          transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
           onDragOver={(e) => {
             e.preventDefault();
             onDragStateChange(true);
@@ -174,31 +177,31 @@ const ImageCaptureField: React.FC<ImageCaptureFieldProps> = ({
           onClick={() => document.getElementById(copy.inputId)?.click()}
           className={`w-full flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors cursor-pointer ${
             isDragging
-              ? 'border-amber-400 bg-amber-500/10'
-              : 'border-slate-700 bg-slate-900/60 hover:border-slate-600 hover:bg-slate-900/80'
+              ? 'border-clay bg-clay-light'
+              : 'border-stone bg-canvas hover:border-stone-dark hover:bg-canvas-dark'
           }`}
         >
-          <copy.DropzoneIcon className="mb-2 h-8 w-8 text-amber-400" />
-          <p className="text-xs font-medium text-slate-200">{copy.dropzoneText}</p>
-          <p className="mt-1 text-[11px] text-slate-400">JPEG, PNG, or WebP (max 8MB)</p>
-        </button>
+          <copy.DropzoneIcon className="mb-2 h-8 w-8 text-clay" />
+          <p className="text-xs font-medium text-ink">{copy.dropzoneText}</p>
+          <p className="mt-1 text-[11px] text-ink-subtle">JPEG, PNG, or WebP (max 8MB)</p>
+        </motion.button>
       ) : (
-        <div className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/90 p-3">
+        <div className="flex items-center justify-between rounded-xl border border-stone bg-canvas p-3">
           <div className="flex items-center space-x-3">
             {previewUrl ? (
               <img
                 src={previewUrl}
                 alt="Recipe preview"
-                className="h-12 w-12 rounded-lg object-cover border border-slate-700"
+                className="h-12 w-12 rounded-lg object-cover border border-stone"
               />
             ) : (
-              <ImageIcon className="h-8 w-8 text-amber-400" />
+              <ImageIcon className="h-8 w-8 text-clay" />
             )}
             <div className="text-left">
-              <p className="text-xs font-medium text-slate-200 truncate max-w-[200px] sm:max-w-[300px]">
+              <p className="text-xs font-medium text-ink truncate max-w-[200px] sm:max-w-[300px]">
                 {selectedFile.name}
               </p>
-              <p className="text-[11px] text-slate-400">{formatFileSize(selectedFile.size)}</p>
+              <p className="text-[11px] text-ink-subtle">{formatFileSize(selectedFile.size)}</p>
             </div>
           </div>
 
@@ -208,7 +211,7 @@ const ImageCaptureField: React.FC<ImageCaptureFieldProps> = ({
             size="sm"
             onClick={onRemoveFile}
             disabled={isImporting}
-            className="h-8 px-2 text-xs text-slate-400 hover:text-red-400"
+            className="h-8 px-2 text-xs text-ink-muted hover:text-clay-hover"
           >
             <X className="h-4 w-4" />
             <span>Remove</span>
@@ -221,16 +224,16 @@ const ImageCaptureField: React.FC<ImageCaptureFieldProps> = ({
           type="button"
           onClick={onImport}
           disabled={isImporting || !selectedFile}
-          className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+          className="space-x-2 bg-clay px-4 text-xs font-semibold text-white hover:bg-clay-hover disabled:opacity-50"
         >
           {isImporting ? (
             <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
               <span>{copy.importPendingLabel}</span>
             </>
           ) : (
             <>
-              <Sparkles className="h-3.5 w-3.5 text-black" />
+              <Sparkles className="h-3.5 w-3.5 text-white" />
               <span>{copy.importIdleLabel}</span>
             </>
           )}
@@ -545,7 +548,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
             variant="ghost"
             size="sm"
             onClick={onCancel}
-            className="space-x-1.5 text-slate-400 hover:text-white"
+            className="space-x-1.5 text-ink-muted hover:text-ink"
           >
             <X className="h-4 w-4" />
             <span>Cancel</span>
@@ -556,10 +559,10 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       <CardContent>
         {/* AI Import Container */}
         {!isEditing && (
-          <div className="mb-6 rounded-2xl border border-terracotta/30 bg-terracotta-light/40 p-4">
+          <div className="mb-6 rounded-2xl border border-clay/30 bg-clay-light/40 p-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 text-terracotta-dark">
-                <Sparkles className="h-4 w-4 text-terracotta" />
+              <div className="flex items-center space-x-2 text-clay-hover">
+                <Sparkles className="h-4 w-4 text-clay" />
                 <span className="text-sm font-semibold">Import Recipe with AI</span>
               </div>
               <Button
@@ -567,7 +570,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowImportSection((prev) => !prev)}
-                className="space-x-1 text-xs text-terracotta-dark hover:bg-sand hover:text-ink"
+                className="space-x-1 text-xs text-clay-hover hover:bg-canvas hover:text-ink"
               >
                 <span>{showImportSection ? 'Hide Import Tools' : 'Paste Recipe Text'}</span>
                 {showImportSection ? (
@@ -590,7 +593,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     }}
                     className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                       importMode === 'text'
-                        ? 'border border-terracotta/30 bg-terracotta-light text-terracotta-dark font-semibold'
+                        ? 'border border-clay/30 bg-clay-light text-clay-hover font-semibold'
                         : 'text-ink-muted hover:text-ink'
                     }`}
                   >
@@ -604,7 +607,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     }}
                     className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                       importMode === 'url'
-                        ? 'border border-terracotta/30 bg-terracotta-light text-terracotta-dark font-semibold'
+                        ? 'border border-clay/30 bg-clay-light text-clay-hover font-semibold'
                         : 'text-ink-muted hover:text-ink'
                     }`}
                   >
@@ -618,7 +621,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     }}
                     className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                       importMode === 'image'
-                        ? 'border border-terracotta/30 bg-terracotta-light text-terracotta-dark font-semibold'
+                        ? 'border border-clay/30 bg-clay-light text-clay-hover font-semibold'
                         : 'text-ink-muted hover:text-ink'
                     }`}
                   >
@@ -632,7 +635,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     }}
                     className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                       importMode === 'camera'
-                        ? 'border border-terracotta/30 bg-terracotta-light text-terracotta-dark font-semibold'
+                        ? 'border border-clay/30 bg-clay-light text-clay-hover font-semibold'
                         : 'text-ink-muted hover:text-ink'
                     }`}
                   >
@@ -640,134 +643,144 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                   </button>
                 </div>
 
-                {importMode === 'text' && (
-                  <>
-                    <Label htmlFor="import-text-input" className="text-xs text-ink-muted">
-                      Paste unformatted recipe text below (ingredients, servings, instructions)
-                    </Label>
-                    <textarea
-                      id="import-text-input"
-                      rows={4}
-                      value={importText}
-                      onChange={(e) => setImportText(e.target.value)}
-                      placeholder="e.g. Grandma's Pancakes&#10;Serves 4&#10;- 2 cups flour&#10;- 2 eggs&#10;- 300 ml milk"
-                      className="w-full rounded-xl border border-stone bg-sand p-3 text-xs text-ink placeholder:text-ink-subtle focus:border-terracotta focus:outline-none focus:ring-1 focus:ring-terracotta"
-                    />
-                    <div className="flex justify-end">
-                      <Button
-                        type="button"
-                        onClick={handleImportText}
-                        disabled={importRecipeTextMutation.isPending || !importText.trim()}
-                        className="space-x-2 bg-terracotta px-4 text-xs font-semibold text-white hover:bg-terracotta-hover disabled:opacity-50"
-                      >
-                        {importRecipeTextMutation.isPending ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
-                            <span>Importing with AI...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="h-3.5 w-3.5 text-white" />
-                            <span>Import with AI</span>
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </>
-                )}
+                <AnimatePresence>
+                  <motion.div
+                    key={importMode}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                    className="space-y-3"
+                  >
+                    {importMode === 'text' && (
+                      <>
+                        <Label htmlFor="import-text-input" className="text-xs text-ink-muted">
+                          Paste unformatted recipe text below (ingredients, servings, instructions)
+                        </Label>
+                        <textarea
+                          id="import-text-input"
+                          rows={4}
+                          value={importText}
+                          onChange={(e) => setImportText(e.target.value)}
+                          placeholder="e.g. Grandma's Pancakes&#10;Serves 4&#10;- 2 cups flour&#10;- 2 eggs&#10;- 300 ml milk"
+                          className="w-full rounded-xl border border-stone bg-canvas p-3 text-xs text-ink placeholder:text-ink-subtle focus:border-clay focus:outline-none focus:ring-1 focus:ring-clay"
+                        />
+                        <div className="flex justify-end">
+                          <Button
+                            type="button"
+                            onClick={handleImportText}
+                            disabled={importRecipeTextMutation.isPending || !importText.trim()}
+                            className="space-x-2 bg-clay px-4 text-xs font-semibold text-white hover:bg-clay-hover disabled:opacity-50"
+                          >
+                            {importRecipeTextMutation.isPending ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                                <span>Importing with AI...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="h-3.5 w-3.5 text-white" />
+                                <span>Import with AI</span>
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </>
+                    )}
 
-                {importMode === 'url' && (
-                  <>
-                    <Label htmlFor="import-url-input" className="text-xs text-slate-300">
-                      Enter recipe webpage URL below (e.g. food blog or recipe site)
-                    </Label>
-                    <Input
-                      id="import-url-input"
-                      type="url"
-                      value={importUrl}
-                      onChange={(e) => setImportUrl(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          if (!importRecipeUrlMutation.isPending && importUrl.trim()) {
-                            handleImportUrl();
-                          }
-                        }
-                      }}
-                      placeholder="https://example.com/recipes/pancakes"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-900/90 p-3 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                    />
-                    <div className="flex justify-end">
-                      <Button
-                        type="button"
-                        onClick={handleImportUrl}
-                        disabled={importRecipeUrlMutation.isPending || !importUrl.trim()}
-                        className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
-                      >
-                        {importRecipeUrlMutation.isPending ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
-                            <span>Importing from URL...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="h-3.5 w-3.5 text-black" />
-                            <span>Import from URL</span>
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </>
-                )}
+                    {importMode === 'url' && (
+                      <>
+                        <Label htmlFor="import-url-input" className="text-xs text-ink-muted">
+                          Enter recipe webpage URL below (e.g. food blog or recipe site)
+                        </Label>
+                        <Input
+                          id="import-url-input"
+                          type="url"
+                          value={importUrl}
+                          onChange={(e) => setImportUrl(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (!importRecipeUrlMutation.isPending && importUrl.trim()) {
+                                handleImportUrl();
+                              }
+                            }
+                          }}
+                          placeholder="https://example.com/recipes/pancakes"
+                        />
+                        <div className="flex justify-end">
+                          <Button
+                            type="button"
+                            onClick={handleImportUrl}
+                            disabled={importRecipeUrlMutation.isPending || !importUrl.trim()}
+                            className="space-x-2 bg-clay px-4 text-xs font-semibold text-white hover:bg-clay-hover disabled:opacity-50"
+                          >
+                            {importRecipeUrlMutation.isPending ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                                <span>Importing from URL...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="h-3.5 w-3.5 text-white" />
+                                <span>Import from URL</span>
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </>
+                    )}
 
-                {importMode === 'image' && (
-                  <ImageCaptureField
-                    mode="image"
-                    selectedFile={selectedImageFile}
-                    previewUrl={imagePreviewUrl}
-                    isDragging={isDragging}
-                    isImporting={importRecipeImageMutation.isPending}
-                    onDragStateChange={setIsDragging}
-                    onFileSelected={handleFileSelection}
-                    onRemoveFile={handleRemoveImageFile}
-                    onImport={handleImportImage}
-                  />
-                )}
+                    {importMode === 'image' && (
+                      <ImageCaptureField
+                        mode="image"
+                        selectedFile={selectedImageFile}
+                        previewUrl={imagePreviewUrl}
+                        isDragging={isDragging}
+                        isImporting={importRecipeImageMutation.isPending}
+                        onDragStateChange={setIsDragging}
+                        onFileSelected={handleFileSelection}
+                        onRemoveFile={handleRemoveImageFile}
+                        onImport={handleImportImage}
+                      />
+                    )}
 
-                {importMode === 'camera' && (
-                  <ImageCaptureField
-                    mode="camera"
-                    selectedFile={selectedImageFile}
-                    previewUrl={imagePreviewUrl}
-                    isDragging={isDragging}
-                    isImporting={importRecipeImageMutation.isPending}
-                    onDragStateChange={setIsDragging}
-                    onFileSelected={handleFileSelection}
-                    onRemoveFile={handleRemoveImageFile}
-                    onImport={handleImportImage}
-                  />
-                )}
+                    {importMode === 'camera' && (
+                      <ImageCaptureField
+                        mode="camera"
+                        selectedFile={selectedImageFile}
+                        previewUrl={imagePreviewUrl}
+                        isDragging={isDragging}
+                        isImporting={importRecipeImageMutation.isPending}
+                        onDragStateChange={setIsDragging}
+                        onFileSelected={handleFileSelection}
+                        onRemoveFile={handleRemoveImageFile}
+                        onImport={handleImportImage}
+                      />
+                    )}
+                  </motion.div>
+                </AnimatePresence>
               </div>
             )}
           </div>
         )}
 
         {reviewNotice && (
-          <Alert className="mb-6 border-amber-500/40 bg-amber-500/10 text-amber-200">
-            <Info className="h-4 w-4 text-amber-400" />
+          <Alert className="mb-6 border-clay/40 bg-clay-light text-clay-hover">
+            <Info className="h-4 w-4 text-clay" />
             <AlertDescription className="text-xs">{reviewNotice}</AlertDescription>
           </Alert>
         )}
 
         {displayError && (
-          <Alert className="mb-6 border-red-500/30 bg-red-500/10">
+          <Alert className="mb-6 border-clay-border bg-clay-light text-clay-hover">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>{displayError}</AlertDescription>
           </Alert>
         )}
 
         {successMessage && (
-          <Alert className="mb-6 border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
+          <Alert className="mb-6 border-olive-border bg-olive-light text-olive-hover">
             <CheckCircle2 className="h-4 w-4" />
             <AlertDescription>{successMessage}</AlertDescription>
           </Alert>
@@ -898,7 +911,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                         variant="ghost"
                         size="sm"
                         onClick={() => handleRemoveIngredient(idx)}
-                        className="h-9 w-9 p-0 text-slate-400 hover:text-red-400"
+                        className="h-9 w-9 p-0 text-ink-subtle hover:text-clay-hover"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { motion } from 'framer-motion';
 import type { RecipeDto } from './lib/api';
 import { Navigation } from './components/Navigation';
 import { RecipeList } from './components/RecipeList';
@@ -79,27 +80,34 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-sand font-sans text-ink antialiased">
+      <div className="min-h-screen bg-canvas font-sans text-ink antialiased">
         <Navigation currentTab={currentTab} onTabChange={handleTabChange} />
 
         <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-          {currentTab === 'recipes' ? (
-            <div className="space-y-10">
-              <RecipeForm
-                recipe={editingRecipe || undefined}
-                onCancel={editingRecipe ? () => setEditingRecipe(null) : undefined}
-                onSuccess={() => setEditingRecipe(null)}
-              />
-              <RecipeList
-                onEditRecipe={(recipe) => setEditingRecipe(recipe)}
-                onSendToShoppingList={handleSendToShoppingList}
-              />
-            </div>
-          ) : currentTab === 'shopping-list' ? (
-            <ShoppingListBuilder initialSelectedRecipeIds={preselectedShoppingListIds} />
-          ) : (
-            <EventPlanner />
-          )}
+          <motion.div
+            key={currentTab}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+          >
+            {currentTab === 'recipes' ? (
+              <div className="space-y-10">
+                <RecipeForm
+                  recipe={editingRecipe || undefined}
+                  onCancel={editingRecipe ? () => setEditingRecipe(null) : undefined}
+                  onSuccess={() => setEditingRecipe(null)}
+                />
+                <RecipeList
+                  onEditRecipe={(recipe) => setEditingRecipe(recipe)}
+                  onSendToShoppingList={handleSendToShoppingList}
+                />
+              </div>
+            ) : currentTab === 'shopping-list' ? (
+              <ShoppingListBuilder initialSelectedRecipeIds={preselectedShoppingListIds} />
+            ) : (
+              <EventPlanner />
+            )}
+          </motion.div>
         </main>
       </div>
     </QueryClientProvider>

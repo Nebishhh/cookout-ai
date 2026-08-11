@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'framer-motion';
 import {
   ShoppingBag,
   AlertCircle,
@@ -118,8 +119,8 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
       </div>
 
       {displayError && (
-        <Alert className="border-terracotta/30 bg-terracotta-light text-terracotta-dark">
-          <AlertCircle className="h-5 w-5 text-terracotta-dark" />
+        <Alert className="border-clay/30 bg-clay-light text-clay-hover">
+          <AlertCircle className="h-5 w-5 text-clay-hover" />
           <AlertDescription className="text-sm">
             <span className="font-semibold">Error: </span>
             {displayError}
@@ -150,7 +151,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
         <CardContent className="pt-6">
           {loadingRecipes ? (
             <div className="flex items-center justify-center py-8 text-ink-muted">
-              <RefreshCw className="mr-2 h-5 w-5 animate-spin text-terracotta" />
+              <RefreshCw className="mr-2 h-5 w-5 animate-spin text-clay" />
               <span className="text-sm font-medium">Loading recipe options...</span>
             </div>
           ) : recipes.length === 0 ? (
@@ -170,7 +171,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                       key={recipe.id}
                       className={`flex flex-col justify-between rounded-xl border p-4 transition-all ${
                         isSelected
-                          ? 'border-terracotta bg-terracotta-light/30 shadow-md'
+                          ? 'border-clay bg-clay-light/30 shadow-warm-md'
                           : 'border-stone bg-paper hover:border-stone-dark'
                       }`}
                     >
@@ -210,7 +211,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                             min={1}
                             value={targetServingsMap[recipe.id] ?? recipe.baseServings}
                             onChange={(e) => handleServingsChange(recipe.id, e.target.value)}
-                            className="mt-1 h-8 rounded-lg bg-sand border-stone px-3 text-xs"
+                            className="mt-1 h-8 rounded-lg bg-canvas border-stone px-3 text-xs"
                           />
                         </div>
                       )}
@@ -224,7 +225,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                   type="button"
                   onClick={handleBuildShoppingList}
                   disabled={buildShoppingListMutation.isPending || selectedRecipeIds.length === 0}
-                  className="space-x-2 bg-terracotta text-white hover:bg-terracotta-hover disabled:opacity-50"
+                  className="space-x-2 bg-clay text-white hover:bg-clay-hover disabled:opacity-50"
                 >
                   <ShoppingBag className="h-4 w-4" />
                   <span>
@@ -241,11 +242,16 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
 
       {/* Shopping List Results */}
       {shoppingListData && (
-        <div className="space-y-8">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+          className="space-y-8"
+        >
           {/* Primary View: Consolidated Shopping List */}
           <Card>
             <CardHeader className="flex-row items-center space-x-3 border-b border-stone pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-terracotta-light text-terracotta">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-clay-light text-clay">
                 <CheckCircle2 className="h-5 w-5" />
               </div>
               <div>
@@ -278,7 +284,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                           return (
                             <span
                               key={rId}
-                              className="rounded bg-sand border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted"
+                              className="rounded bg-canvas border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted"
                             >
                               {matchedRecipe?.sourceRecipeName || rId}
                             </span>
@@ -288,7 +294,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                     </div>
 
                     <div className="mt-2 sm:mt-0">
-                      <span className="rounded-xl border border-terracotta/30 bg-terracotta-light px-4 py-2 font-mono text-sm font-semibold text-terracotta-dark">
+                      <span className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover">
                         {formatQuantityAmount(
                           item.quantity.amount,
                           item.quantity.unit,
@@ -307,7 +313,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
           {/* Secondary View: Per-Recipe Scaled Breakdown */}
           <Card>
             <CardHeader className="flex-row items-center space-x-3 border-b border-stone pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-herb-light text-herb">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-olive-light text-olive">
                 <Layers className="h-5 w-5" />
               </div>
               <div>
@@ -333,14 +339,14 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                         type="button"
                         onClick={() => toggleRecipeExpanded(sr.sourceRecipeId)}
                         aria-expanded={isExpanded}
-                        className="flex w-full items-center justify-between p-4 text-left hover:bg-sand/60"
+                        className="flex w-full items-center justify-between p-4 text-left hover:bg-canvas/60"
                       >
                         <div className="flex items-center space-x-3">
                           <span className="font-serif font-semibold text-ink">
                             {sr.sourceRecipeName}
                           </span>
-                          <span className="flex items-center space-x-1 rounded-full bg-sand border border-stone/60 px-2.5 py-0.5 text-xs text-ink-muted">
-                            <Users className="h-3 w-3 text-terracotta-dark" />
+                          <span className="flex items-center space-x-1 rounded-full bg-canvas border border-stone/60 px-2.5 py-0.5 text-xs text-ink-muted">
+                            <Users className="h-3 w-3 text-clay-hover" />
                             <span>
                               {sr.targetServings} servings (x{sr.scaleFactor})
                             </span>
@@ -354,7 +360,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                       </button>
 
                       {isExpanded && (
-                        <div className="border-t border-stone/60 bg-sand/40 p-4">
+                        <div className="border-t border-stone/60 bg-canvas/40 p-4">
                           <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                             {sr.ingredients.map((ing, i) => (
                               <li
@@ -362,7 +368,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                                 className="flex items-center justify-between rounded-lg border border-stone/60 bg-paper p-2.5 text-xs"
                               >
                                 <span className="font-medium text-ink">{ing.displayName}</span>
-                                <span className="font-mono font-semibold text-terracotta-dark">
+                                <span className="font-mono font-semibold text-clay-hover">
                                   {formatQuantityAmount(
                                     ing.quantity.amount,
                                     ing.quantity.unit,
@@ -382,7 +388,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
               </div>
             </CardContent>
           </Card>
-        </div>
+        </motion.div>
       )}
     </div>
   );

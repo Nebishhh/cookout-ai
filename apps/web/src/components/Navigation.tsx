@@ -1,17 +1,29 @@
 import React from 'react';
-import { UtensilsCrossed, ShoppingBag, Flame, Calendar } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { UtensilsCrossed, ShoppingBag, Flame, Calendar, Sun, Moon } from 'lucide-react';
+import { useTheme } from '../lib/useTheme';
 
 interface NavigationProps {
   currentTab: 'recipes' | 'shopping-list' | 'event-planner';
   onTabChange: (tab: 'recipes' | 'shopping-list' | 'event-planner') => void;
 }
 
+const TABS = [
+  { id: 'recipes', label: 'Recipes', Icon: UtensilsCrossed },
+  { id: 'shopping-list', label: 'Shopping List', Icon: ShoppingBag },
+  { id: 'event-planner', label: 'Event Planner', Icon: Calendar },
+] as const;
+
+const SIGNATURE_TRANSITION = { duration: 0.2, ease: [0.16, 1, 0.3, 1] as const };
+
 export const Navigation: React.FC<NavigationProps> = ({ currentTab, onTabChange }) => {
+  const { theme, toggleTheme } = useTheme();
+
   return (
     <header className="sticky top-0 z-50 border-b border-stone/60 bg-paper/90 backdrop-blur-md">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
         <div className="flex items-center space-x-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-terracotta/30 bg-terracotta-light text-terracotta-dark">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-clay/30 bg-clay-light text-clay-hover">
             <Flame className="h-5 w-5" />
           </div>
           <div>
@@ -20,52 +32,46 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onTabChange 
           </div>
         </div>
 
-        <nav
-          aria-label="Main Navigation"
-          className="flex items-center space-x-1 rounded-xl bg-sand p-1 border border-stone"
-        >
-          <button
-            id="nav-tab-recipes"
-            type="button"
-            onClick={() => onTabChange('recipes')}
-            className={`inline-flex items-center justify-center space-x-2 rounded-lg px-3.5 py-1.5 text-sm font-bold transition-all ${
-              currentTab === 'recipes'
-                ? 'bg-ink text-sand shadow-sm border border-ink'
-                : 'text-ink-muted hover:text-ink hover:bg-paper/60'
-            }`}
+        <div className="flex items-center gap-3">
+          <nav
+            aria-label="Main Navigation"
+            className="flex items-center space-x-1 rounded-xl bg-canvas p-1 border border-stone"
           >
-            <UtensilsCrossed className="h-4 w-4" />
-            <span>Recipes</span>
-          </button>
+            {TABS.map(({ id, label, Icon }) => {
+              const isActive = currentTab === id;
+              return (
+                <button
+                  key={id}
+                  id={`nav-tab-${id}`}
+                  type="button"
+                  onClick={() => onTabChange(id)}
+                  className={`relative inline-flex items-center justify-center space-x-2 rounded-lg px-3.5 py-1.5 text-sm font-bold transition-colors ${
+                    isActive ? 'text-canvas' : 'text-ink-muted hover:text-ink hover:bg-paper/60'
+                  }`}
+                >
+                  {isActive && (
+                    <motion.div
+                      layoutId="nav-active-pill"
+                      className="absolute inset-0 rounded-lg border border-ink bg-ink shadow-warm-sm"
+                      transition={SIGNATURE_TRANSITION}
+                    />
+                  )}
+                  <Icon className="relative z-10 h-4 w-4" />
+                  <span className="relative z-10">{label}</span>
+                </button>
+              );
+            })}
+          </nav>
 
           <button
-            id="nav-tab-shopping-list"
             type="button"
-            onClick={() => onTabChange('shopping-list')}
-            className={`inline-flex items-center justify-center space-x-2 rounded-lg px-3.5 py-1.5 text-sm font-bold transition-all ${
-              currentTab === 'shopping-list'
-                ? 'bg-ink text-sand shadow-sm border border-ink'
-                : 'text-ink-muted hover:text-ink hover:bg-paper/60'
-            }`}
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone bg-canvas text-ink-muted transition-colors hover:bg-paper hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
           >
-            <ShoppingBag className="h-4 w-4" />
-            <span>Shopping List</span>
+            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
-
-          <button
-            id="nav-tab-event-planner"
-            type="button"
-            onClick={() => onTabChange('event-planner')}
-            className={`inline-flex items-center justify-center space-x-2 rounded-lg px-3.5 py-1.5 text-sm font-bold transition-all ${
-              currentTab === 'event-planner'
-                ? 'bg-ink text-sand shadow-sm border border-ink'
-                : 'text-ink-muted hover:text-ink hover:bg-paper/60'
-            }`}
-          >
-            <Calendar className="h-4 w-4" />
-            <span>Event Planner</span>
-          </button>
-        </nav>
+        </div>
       </div>
     </header>
   );

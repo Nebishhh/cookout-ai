@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'framer-motion';
 import {
   Users,
   AlertCircle,
@@ -138,7 +139,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
-        <RefreshCw className="h-8 w-8 animate-spin text-terracotta" />
+        <RefreshCw className="h-8 w-8 animate-spin text-clay" />
         <p className="mt-3 text-sm font-medium text-ink-muted">Loading your recipe collection...</p>
       </div>
     );
@@ -146,8 +147,8 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
 
   if (isError) {
     return (
-      <Alert className="border-terracotta/30 bg-terracotta-light text-terracotta-dark">
-        <AlertCircle className="h-5 w-5 text-terracotta-dark" />
+      <Alert className="border-clay/30 bg-clay-light text-clay-hover">
+        <AlertCircle className="h-5 w-5 text-clay-hover" />
         <AlertDescription className="text-sm">
           <span className="font-semibold">Failed to load recipes: </span>
           {error instanceof Error ? error.message : 'Unknown network error.'}
@@ -156,7 +157,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
             variant="outline"
             size="sm"
             onClick={() => refetch()}
-            className="ml-3 border-terracotta/30 text-xs text-terracotta-dark hover:bg-terracotta/10"
+            className="ml-3 border-clay/30 text-xs text-clay-hover hover:bg-clay/10"
           >
             Retry
           </Button>
@@ -168,7 +169,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   if (recipes.length === 0) {
     return (
       <Card className="flex flex-col items-center justify-center border-stone bg-paper p-12 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-terracotta/30 bg-terracotta-light text-terracotta">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-clay/30 bg-clay-light text-clay">
           <ChefHat className="h-6 w-6" />
         </div>
         <h3 className="mt-4 font-serif text-lg font-bold text-ink">No Recipes Available</h3>
@@ -186,8 +187,8 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   return (
     <div className="space-y-6">
       {deleteRecipeMutation.isError && (
-        <Alert className="border-terracotta/30 bg-terracotta-light text-terracotta-dark">
-          <AlertCircle className="h-5 w-5 text-terracotta-dark" />
+        <Alert className="border-clay/30 bg-clay-light text-clay-hover">
+          <AlertCircle className="h-5 w-5 text-clay-hover" />
           <AlertDescription className="text-sm">
             <span className="font-semibold">Error Deleting Recipe: </span>
             {deleteRecipeMutation.error.message}
@@ -196,8 +197,8 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
       )}
 
       {bulkActionError && (
-        <Alert className="border-terracotta/30 bg-terracotta-light text-terracotta-dark">
-          <AlertCircle className="h-5 w-5 text-terracotta-dark" />
+        <Alert className="border-clay/30 bg-clay-light text-clay-hover">
+          <AlertCircle className="h-5 w-5 text-clay-hover" />
           <AlertDescription className="text-sm">
             <span className="font-semibold">Bulk Action Error: </span>
             {bulkActionError}
@@ -228,7 +229,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
               className="space-x-1.5 text-xs text-ink border-stone"
             >
               {allFilteredAreSelected ? (
-                <CheckSquare className="h-3.5 w-3.5 text-terracotta" />
+                <CheckSquare className="h-3.5 w-3.5 text-clay" />
               ) : (
                 <Square className="h-3.5 w-3.5 text-ink-subtle" />
               )}
@@ -259,7 +260,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
             placeholder="Search recipes by name..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 pr-8 h-9 text-sm bg-sand border-stone"
+            className="pl-9 pr-8 h-9 text-sm bg-canvas border-stone"
           />
           {searchQuery && (
             <button
@@ -276,7 +277,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
         {/* Dietary Tag Toggle Buttons & Clear Filters */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center space-x-1 text-xs text-ink-muted mr-1">
-            <Filter className="h-3.5 w-3.5 text-terracotta-dark" />
+            <Filter className="h-3.5 w-3.5 text-clay-hover" />
             <span>Dietary:</span>
           </div>
           {AVAILABLE_TAGS.map((tag) => {
@@ -290,9 +291,9 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
                 className={`rounded-md px-2.5 py-1 text-xs font-bold uppercase tracking-wider transition-all ${
                   isSelected
                     ? tag === 'Vegan'
-                      ? 'bg-herb-dark text-sand border border-herb-dark shadow-sm'
-                      : 'bg-herb text-sand border border-herb shadow-sm'
-                    : 'bg-sand text-ink-muted border border-stone hover:border-ink-muted hover:text-ink'
+                      ? 'bg-olive-hover text-canvas border border-olive-hover shadow-warm-sm'
+                      : 'bg-olive text-canvas border border-olive shadow-warm-sm'
+                    : 'bg-canvas text-ink-muted border border-stone hover:border-ink-muted hover:text-ink'
                 }`}
               >
                 {tag} {isSelected ? '✓' : ''}
@@ -306,7 +307,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
               variant="ghost"
               size="sm"
               onClick={clearFilters}
-              className="h-7 px-2 text-xs text-terracotta-dark hover:text-terracotta-dark hover:bg-terracotta-light/60 font-semibold"
+              className="h-7 px-2 text-xs text-clay-hover hover:text-clay-hover hover:bg-clay-light/60 font-semibold"
             >
               <X className="mr-1 h-3 w-3" />
               <span>Clear Filters</span>
@@ -317,9 +318,9 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
 
       {/* Floating Bulk Action Bar */}
       {selectedRecipeIds.length > 0 && (
-        <div className="sticky top-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-terracotta/40 bg-paper/95 p-3.5 shadow-xl backdrop-blur-md">
+        <div className="sticky top-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-clay/40 bg-paper/95 p-3.5 shadow-warm-xl backdrop-blur-md">
           <div className="flex items-center space-x-2">
-            <span className="rounded-lg bg-terracotta-dark px-2.5 py-1 text-xs font-bold text-sand shadow-sm">
+            <span className="rounded-lg bg-clay-hover px-2.5 py-1 text-xs font-bold text-canvas shadow-warm-sm">
               {selectedRecipeIds.length} Selected
             </span>
             <span className="text-xs text-ink-muted hidden sm:inline">
@@ -333,7 +334,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
               variant="secondary"
               size="sm"
               onClick={handleSendToShoppingList}
-              className="h-8 space-x-1.5 text-xs font-semibold text-white bg-terracotta hover:bg-terracotta-hover"
+              className="h-8 space-x-1.5 text-xs font-semibold text-white bg-clay hover:bg-clay-hover"
             >
               <ShoppingBag className="h-3.5 w-3.5 text-white" />
               <span>Build Shopping List</span>
@@ -380,7 +381,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
             variant="outline"
             size="sm"
             onClick={clearFilters}
-            className="mt-4 space-x-1.5 text-xs text-terracotta-dark border-terracotta/30 hover:bg-terracotta-light"
+            className="mt-4 space-x-1.5 text-xs text-clay-hover border-clay/30 hover:bg-clay-light"
           >
             <X className="h-3.5 w-3.5" />
             <span>Clear Filters</span>
@@ -389,105 +390,119 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
       ) : (
         /* Recipe Cards Grid */
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredRecipes.map((recipe) => {
+          {filteredRecipes.map((recipe, index) => {
             const isSelected = selectedRecipeIds.includes(recipe.id);
             const cardCheckboxId = `select-recipe-${recipe.id}`;
 
             return (
-              <Card
+              <motion.div
                 key={recipe.id}
-                className={`flex flex-col justify-between p-5 transition-all ${
-                  isSelected
-                    ? 'border-terracotta bg-terracotta-light/30 shadow-md'
-                    : 'border-stone bg-paper hover:border-stone-dark'
-                }`}
+                layout
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                whileHover={{ y: -4 }}
+                transition={{
+                  duration: 0.25,
+                  ease: [0.16, 1, 0.3, 1],
+                  delay: Math.min(index * 0.03, 0.3),
+                }}
               >
-                <div>
-                  <CardHeader className="p-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start space-x-2.5">
-                        <Checkbox
-                          id={cardCheckboxId}
-                          checked={isSelected}
-                          onChange={() => handleSelectRecipe(recipe.id)}
-                          aria-label={`Select recipe ${recipe.name}`}
-                          className="mt-1"
-                        />
-                        <label htmlFor={cardCheckboxId} className="cursor-pointer">
-                          <CardTitle className="font-serif text-base text-ink hover:text-terracotta-dark transition-colors">
-                            {recipe.name}
-                          </CardTitle>
-                        </label>
+                <Card
+                  className={`flex h-full flex-col justify-between p-5 transition-colors ${
+                    isSelected
+                      ? 'border-clay bg-clay-light/30 shadow-warm-md'
+                      : 'border-stone bg-paper hover:border-stone-dark hover:shadow-warm-lg'
+                  }`}
+                >
+                  <div>
+                    <CardHeader className="p-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start space-x-2.5">
+                          <Checkbox
+                            id={cardCheckboxId}
+                            checked={isSelected}
+                            onChange={() => handleSelectRecipe(recipe.id)}
+                            aria-label={`Select recipe ${recipe.name}`}
+                            className="mt-1"
+                          />
+                          <label htmlFor={cardCheckboxId} className="cursor-pointer">
+                            <CardTitle className="font-serif text-base text-ink hover:text-clay-hover transition-colors">
+                              {recipe.name}
+                            </CardTitle>
+                          </label>
+                        </div>
+
+                        <div className="flex items-center space-x-1 rounded-full bg-canvas border border-stone/60 px-2.5 py-1 text-xs font-semibold text-ink-muted shrink-0">
+                          <Users className="h-3 w-3 text-clay-hover" />
+                          <span>{recipe.baseServings} servings</span>
+                        </div>
                       </div>
 
-                      <div className="flex items-center space-x-1 rounded-full bg-sand border border-stone/60 px-2.5 py-1 text-xs font-semibold text-ink-muted shrink-0">
-                        <Users className="h-3 w-3 text-terracotta-dark" />
-                        <span>{recipe.baseServings} servings</span>
-                      </div>
-                    </div>
+                      {recipe.dietaryTags && recipe.dietaryTags.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-1.5 pl-6">
+                          {recipe.dietaryTags.map((tag) => (
+                            <span
+                              key={tag}
+                              className={`rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider shadow-warm-sm ${
+                                tag === 'Vegan'
+                                  ? 'bg-olive-hover text-canvas'
+                                  : 'bg-olive text-canvas'
+                              }`}
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </CardHeader>
 
-                    {recipe.dietaryTags && recipe.dietaryTags.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-1.5 pl-6">
-                        {recipe.dietaryTags.map((tag) => (
-                          <span
-                            key={tag}
-                            className={`rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider shadow-sm ${
-                              tag === 'Vegan' ? 'bg-herb-dark text-sand' : 'bg-herb text-sand'
-                            }`}
-                          >
-                            {tag}
-                          </span>
+                    <CardContent className="mt-4 border-t border-stone/60 p-0 pt-3">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+                        Ingredients ({recipe.ingredients.length})
+                      </span>
+                      <ul className="mt-2 space-y-1 text-xs text-ink">
+                        {recipe.ingredients.map((ing, i) => (
+                          <li key={i} className="flex justify-between py-0.5">
+                            <span className="font-medium text-ink">{ing.displayName}</span>
+                            <span className="font-mono text-ink-muted">
+                              {formatQuantityAmount(ing.amount, ing.unit, ing.category, 'display')}{' '}
+                              {ing.unit}
+                            </span>
+                          </li>
                         ))}
-                      </div>
-                    )}
-                  </CardHeader>
-
-                  <CardContent className="mt-4 border-t border-stone/60 p-0 pt-3">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
-                      Ingredients ({recipe.ingredients.length})
-                    </span>
-                    <ul className="mt-2 space-y-1 text-xs text-ink">
-                      {recipe.ingredients.map((ing, i) => (
-                        <li key={i} className="flex justify-between py-0.5">
-                          <span className="font-medium text-ink">{ing.displayName}</span>
-                          <span className="font-mono text-ink-muted">
-                            {formatQuantityAmount(ing.amount, ing.unit, ing.category, 'display')}{' '}
-                            {ing.unit}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </CardContent>
-                </div>
-
-                <div className="mt-4 flex items-center justify-end border-t border-stone/40 pt-3 text-xs">
-                  <div className="flex items-center space-x-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleEditClick(recipe)}
-                      aria-label={`Edit recipe ${recipe.name}`}
-                      className="h-7 px-2 text-xs text-ink-muted hover:text-ink"
-                    >
-                      <Pencil className="mr-1 h-3 w-3" />
-                      <span>Edit</span>
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(recipe)}
-                      disabled={deleteRecipeMutation.isPending}
-                      aria-label={`Delete recipe ${recipe.name}`}
-                      className="h-7 px-2 text-xs text-ink-muted hover:text-terracotta-dark"
-                    >
-                      <Trash2 className="mr-1 h-3 w-3" />
-                      <span>Delete</span>
-                    </Button>
+                      </ul>
+                    </CardContent>
                   </div>
-                </div>
-              </Card>
+
+                  <div className="mt-4 flex items-center justify-end border-t border-stone/40 pt-3 text-xs">
+                    <div className="flex items-center space-x-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleEditClick(recipe)}
+                        aria-label={`Edit recipe ${recipe.name}`}
+                        className="h-7 px-2 text-xs text-ink-muted hover:text-ink"
+                      >
+                        <Pencil className="mr-1 h-3 w-3" />
+                        <span>Edit</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDelete(recipe)}
+                        disabled={deleteRecipeMutation.isPending}
+                        aria-label={`Delete recipe ${recipe.name}`}
+                        className="h-7 px-2 text-xs text-ink-muted hover:text-clay-hover"
+                      >
+                        <Trash2 className="mr-1 h-3 w-3" />
+                        <span>Delete</span>
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              </motion.div>
             );
           })}
         </div>

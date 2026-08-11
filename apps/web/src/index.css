@@ -3,46 +3,102 @@
 @tailwind utilities;
 
 @layer base {
+  /* "Cast-Iron Harvest" — light */
   :root {
-    --background: 41 33% 89%; /* #EFE8D8 */
-    --foreground: 20 10% 13%; /* #231F1D */
+    --canvas: 45 50% 92%; /* #F5F0E1 */
+    --canvas-light: 44 56% 95%; /* #F9F5EA */
+    --canvas-dark: 43 44% 87%; /* #EDE5D1 */
 
-    --card: 40 44% 93%; /* #F6F0E4 */
-    --card-foreground: 20 10% 13%;
+    --paper: 40 65% 95%; /* #FBF6EC */
+    --paper-pure: 43 100% 99%; /* #FFFDF8 */
+    --paper-dark: 40 44% 89%; /* #F0E8D8 */
 
-    --popover: 40 44% 93%;
-    --popover-foreground: 20 10% 13%;
+    --ink: 30 24% 11%; /* #241D16 */
+    --ink-muted: 30 15% 36%; /* #6B5D4F */
+    --ink-subtle: 32 12% 56%; /* #9C8F80 */
 
-    --primary: 15 57% 46%; /* #B85332 */
-    --primary-foreground: 0 0% 100%;
+    --clay: 22 66% 40%; /* #A85423 */
+    --clay-hover: 22 68% 32%; /* #8A431A */
+    --clay-light: 27 56% 89%; /* #F3E2D4 */
+    --clay-border: 26 49% 73%; /* #DCB79A */
 
-    --secondary: 40 44% 93%;
-    --secondary-foreground: 20 10% 13%;
+    --olive: 80 26% 33%; /* #5C6B3F */
+    --olive-hover: 79 28% 26%; /* #48542F */
+    --olive-light: 76 28% 90%; /* #E8ECDD */
+    --olive-border: 78 23% 72%; /* #BFC9A8 */
 
-    --muted: 40 25% 85%;
-    --muted-foreground: 24 9% 33%; /* #5C544D */
+    --stone: 38 29% 71%; /* #CBBBA0 */
+    --stone-light: 39 36% 83%; /* #E3D8C4 */
+    --stone-dark: 40 22% 60%; /* #AFA083 */
 
-    --accent: 14 55% 94%; /* #F7EBE7 */
-    --accent-foreground: 14 61% 38%; /* #9E4226 */
-
-    --destructive: 14 61% 38%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 41 22% 72%; /* #C7BEA9 */
-    --input: 41 22% 83%; /* #DDD6C7 */
-    --ring: 15 57% 46%;
+    --input: 39 34% 80%; /* #DDD1BA */
 
     --radius: 0.75rem;
+    --grain-opacity: 0.08;
+    --noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* "Hearth" — dark, tailored not inverted */
+  .dark {
+    --canvas: 30 22% 9%; /* #1C1712 */
+    --canvas-light: 30 21% 11%; /* #231D17 */
+    --canvas-dark: 30 24% 7%; /* #15110D */
+
+    --paper: 30 19% 13%; /* #26201A */
+    --paper-pure: 30 19% 15%; /* #2C251E */
+    --paper-dark: 27 21% 10%; /* #201A15 */
+
+    --ink: 35 48% 91%; /* #F3EADD */
+    --ink-muted: 32 19% 65%; /* #B8A896 */
+    --ink-subtle: 32 13% 49%; /* #8C7D6C */
+
+    --clay: 23 67% 55%; /* #D97A3F */
+    --clay-hover: 24 75% 64%; /* #E8935C */
+    --clay-light: 26 32% 17%; /* #3A2A1E */
+    --clay-border: 29 31% 27%; /* #5C4530 */
+
+    --olive: 83 22% 52%; /* #8CA06B */
+    --olive-hover: 83 24% 61%; /* #A0B382 */
+    --olive-light: 87 22% 16%; /* #2A3220 */
+    --olive-border: 79 28% 26%; /* #48542F */
+
+    --stone: 30 18% 19%; /* #3A3128 */
+    --stone-light: 31 18% 23%; /* #463C31 */
+    --stone-dark: 26 18% 15%; /* #2E2620 */
+
+    --input: 32 20% 17%; /* #332B22 */
+
+    --grain-opacity: 0.05;
+  }
+}
+
+@layer utilities {
+  .bg-grain {
+    position: relative;
+  }
+  .bg-grain::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: var(--noise);
+    opacity: var(--grain-opacity);
+    mix-blend-mode: overlay;
+    pointer-events: none;
+    border-radius: inherit;
   }
 }
 
 body {
   margin: 0;
-  font-family:
-    'Plus Jakarta Sans',
-    system-ui,
-    -apple-system,
-    sans-serif;
-  background-color: #efe8d8;
-  color: #231f1d;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

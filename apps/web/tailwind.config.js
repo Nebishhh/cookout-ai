@@ -12,79 +12,101 @@ export default {
     },
     extend: {
       fontFamily: {
-        serif: ['Fraunces', 'Georgia', 'serif'],
-        sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+        serif: ['Calistoga', 'Georgia', 'serif'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'monospace'],
       },
       colors: {
-        sand: {
-          DEFAULT: '#EFE8D8',
-          light: '#F5EFE3',
-          dark: '#E2D9C5',
+        canvas: {
+          DEFAULT: 'hsl(var(--canvas))',
+          light: 'hsl(var(--canvas-light))',
+          dark: 'hsl(var(--canvas-dark))',
         },
         paper: {
-          DEFAULT: '#F6F0E4',
-          pure: '#FCFAF5',
-          dark: '#EBE3D3',
+          DEFAULT: 'hsl(var(--paper))',
+          pure: 'hsl(var(--paper-pure))',
+          dark: 'hsl(var(--paper-dark))',
         },
         ink: {
-          DEFAULT: '#231F1D',
-          muted: '#5C544D',
-          subtle: '#8C8278',
+          DEFAULT: 'hsl(var(--ink))',
+          muted: 'hsl(var(--ink-muted))',
+          subtle: 'hsl(var(--ink-subtle))',
         },
-        terracotta: {
-          DEFAULT: '#B85332',
-          hover: '#9E4226',
-          dark: '#9E4226',
-          light: '#F7EBE7',
-          border: '#E8C0B5',
+        clay: {
+          DEFAULT: 'hsl(var(--clay))',
+          hover: 'hsl(var(--clay-hover))',
+          light: 'hsl(var(--clay-light))',
+          border: 'hsl(var(--clay-border))',
         },
-        herb: {
-          DEFAULT: '#3F5B44',
-          dark: '#24402A',
-          hover: '#314735',
-          light: '#EAEFEA',
-          border: '#B3C7B7',
+        olive: {
+          DEFAULT: 'hsl(var(--olive))',
+          hover: 'hsl(var(--olive-hover))',
+          light: 'hsl(var(--olive-light))',
+          border: 'hsl(var(--olive-border))',
         },
         stone: {
-          DEFAULT: '#C7BEA9',
-          light: '#E2DBD0',
-          dark: '#ABA18C',
+          DEFAULT: 'hsl(var(--stone))',
+          light: 'hsl(var(--stone-light))',
+          dark: 'hsl(var(--stone-dark))',
         },
-        border: '#C7BEA9',
-        input: '#DDD6C7',
-        ring: '#B85332',
-        background: '#EFE8D8',
-        foreground: '#231F1D',
+        border: 'hsl(var(--stone))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--clay))',
+        background: 'hsl(var(--canvas))',
+        foreground: 'hsl(var(--ink))',
         primary: {
-          DEFAULT: '#B85332',
+          DEFAULT: 'hsl(var(--clay))',
           foreground: '#FFFFFF',
         },
         secondary: {
-          DEFAULT: '#F6F0E4',
-          foreground: '#231F1D',
+          DEFAULT: 'hsl(var(--paper))',
+          foreground: 'hsl(var(--ink))',
         },
         destructive: {
-          DEFAULT: '#9E4226',
+          DEFAULT: 'hsl(var(--clay-hover))',
           foreground: '#FFFFFF',
         },
         muted: {
-          DEFAULT: '#F6F0E4',
-          foreground: '#5C544D',
+          DEFAULT: 'hsl(var(--paper))',
+          foreground: 'hsl(var(--ink-muted))',
         },
         accent: {
-          DEFAULT: '#F7EBE7',
-          foreground: '#9E4226',
+          DEFAULT: 'hsl(var(--clay-light))',
+          foreground: 'hsl(var(--clay-hover))',
         },
         card: {
-          DEFAULT: '#F6F0E4',
-          foreground: '#231F1D',
+          DEFAULT: 'hsl(var(--paper))',
+          foreground: 'hsl(var(--ink))',
         },
       },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
+        pill: '999px',
+      },
+      boxShadow: {
+        // warm, soft, double-layered — tinted toward ink instead of neutral black,
+        // structure matches the real double-layer values found in the Phase 0 reference audit
+        'warm-sm': '0 1px 2px 0 hsl(var(--ink) / 0.06), 0 1px 1px -1px hsl(var(--ink) / 0.08)',
+        warm: '0 1px 3px 0 hsl(var(--ink) / 0.08), 0 1px 2px -1px hsl(var(--ink) / 0.08)',
+        'warm-md': '0 4px 8px -2px hsl(var(--ink) / 0.10), 0 2px 4px -2px hsl(var(--ink) / 0.08)',
+        'warm-lg': '0 12px 20px -4px hsl(var(--ink) / 0.14), 0 4px 8px -4px hsl(var(--ink) / 0.10)',
+        'warm-xl':
+          '0 20px 32px -8px hsl(var(--ink) / 0.18), 0 8px 16px -8px hsl(var(--ink) / 0.12)',
+      },
+      keyframes: {
+        'stagger-in': {
+          '0%': { opacity: '0', transform: 'translateY(6px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+      },
+      animation: {
+        'stagger-in': 'stagger-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both',
+      },
+      transitionTimingFunction: {
+        // motion.dev's own primary-CTA curve — reserved for signature moments
+        signature: 'cubic-bezier(0.16, 1, 0.3, 1)',
       },
     },
   },

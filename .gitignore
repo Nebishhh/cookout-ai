@@ -33,6 +33,10 @@ test-results/
 playwright-report/
 *.tsbuildinfo
 
+# Python (skill scripts, e.g. ui-ux-pro-max's search.py)
+__pycache__/
+*.pyc
+
 # IDE & OS
 .DS_Store
 Thumbs.db

@@ -1,11 +1,17 @@
 import * as React from 'react';
+import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
-const Alert = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+type AlertProps = React.ComponentProps<typeof motion.div>;
+
+const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
   ({ className, role = 'alert', ...props }, ref) => (
-    <div
+    <motion.div
       ref={ref}
       role={role}
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
       className={cn(
         'relative w-full rounded-2xl border p-4 text-sm [&>svg~*]:pl-7 [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg]:text-foreground',
         className

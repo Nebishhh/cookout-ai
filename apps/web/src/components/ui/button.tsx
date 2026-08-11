@@ -9,16 +9,16 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'default', size = 'default', ...props }, ref) => {
     const baseStyles =
-      'inline-flex items-center justify-center whitespace-nowrap rounded-xl text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:pointer-events-none disabled:opacity-50';
+      'inline-flex items-center justify-center whitespace-nowrap rounded-xl text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta focus-visible:ring-offset-2 focus-visible:ring-offset-sand disabled:pointer-events-none disabled:opacity-50';
 
     const variants = {
-      default: 'bg-orange-500 text-black shadow-sm hover:bg-orange-400',
-      primary: 'bg-orange-500 text-black shadow-sm hover:bg-orange-400',
-      destructive: 'bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30',
-      outline:
-        'border border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white',
-      secondary: 'bg-slate-800 text-slate-200 hover:bg-slate-700',
-      ghost: 'text-slate-400 hover:bg-slate-800/60 hover:text-white',
+      default: 'bg-terracotta text-white shadow-sm hover:bg-terracotta-hover',
+      primary: 'bg-terracotta text-white shadow-sm hover:bg-terracotta-hover',
+      destructive:
+        'bg-terracotta-light text-terracotta-dark border border-terracotta/30 hover:bg-terracotta/20',
+      outline: 'border border-stone bg-paper text-ink hover:bg-sand hover:text-ink',
+      secondary: 'bg-sand text-ink hover:bg-stone/30',
+      ghost: 'text-ink-muted hover:bg-sand hover:text-ink',
     };
 
     const sizes = {

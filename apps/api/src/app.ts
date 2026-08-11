@@ -60,7 +60,10 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
       });
     }
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '') {
+    if (
+      process.env.USE_GEMINI_FIXTURES !== 'true' &&
+      (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '')
+    ) {
       return res.status(500).json({
         error: 'ServerConfigurationError',
         message: 'Server is not configured for AI recipe import: GEMINI_API_KEY is missing.',
@@ -157,52 +160,59 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
       });
     }
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '') {
+    if (
+      process.env.USE_GEMINI_FIXTURES !== 'true' &&
+      (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '')
+    ) {
       return res.status(500).json({
         error: 'ServerConfigurationError',
         message: 'Server is not configured for AI recipe import: GEMINI_API_KEY is missing.',
       });
     }
 
-    // Step 1: Fetch HTML (with SSRF, protocol, DNS IP, manual redirect, timeout, size limit, content-type checks)
-    let html: string;
-    try {
-      html = await fetchRecipeHtml(url.trim());
-    } catch (err) {
-      if (err instanceof SsrfValidationError) {
-        return res.status(400).json({
-          error: err.name,
-          message: err.message,
-        });
-      }
-      if (err instanceof FetchError) {
-        return res.status(err.statusCode).json({
-          error: err.name,
-          message: err.message,
-        });
-      }
-      return res.status(502).json({
-        error: 'BadGateway',
-        message: `Failed to fetch webpage: ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
-
-    // Step 2: Extract text (JSON-LD priority, HTML-text fallback priority)
     let extractedText: string;
-    try {
-      const extracted = extractRecipeText(html);
-      extractedText = extracted.extractedText;
-    } catch (err) {
-      if (err instanceof ExtractionError) {
-        return res.status(err.statusCode).json({
-          error: err.name,
-          message: err.message,
+    if (process.env.USE_GEMINI_FIXTURES === 'true') {
+      extractedText = `URL_TEST ${url}`;
+    } else {
+      // Step 1: Fetch HTML (with SSRF, protocol, DNS IP, manual redirect, timeout, size limit, content-type checks)
+      let html: string;
+      try {
+        html = await fetchRecipeHtml(url.trim());
+      } catch (err) {
+        if (err instanceof SsrfValidationError) {
+          return res.status(400).json({
+            error: err.name,
+            message: err.message,
+          });
+        }
+        if (err instanceof FetchError) {
+          return res.status(err.statusCode).json({
+            error: err.name,
+            message: err.message,
+          });
+        }
+        return res.status(502).json({
+          error: 'BadGateway',
+          message: `Failed to fetch webpage: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
-      return res.status(502).json({
-        error: 'ExtractionError',
-        message: `Failed to extract text from webpage: ${err instanceof Error ? err.message : String(err)}`,
-      });
+
+      // Step 2: Extract text (JSON-LD priority, HTML-text fallback priority)
+      try {
+        const extracted = extractRecipeText(html);
+        extractedText = extracted.extractedText;
+      } catch (err) {
+        if (err instanceof ExtractionError) {
+          return res.status(err.statusCode).json({
+            error: err.name,
+            message: err.message,
+          });
+        }
+        return res.status(502).json({
+          error: 'ExtractionError',
+          message: `Failed to extract text from webpage: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
     }
 
     // Step 3: Call parseRecipeTextWithGeminiTimeout (30s timeout)

@@ -18,7 +18,13 @@ import { Checkbox } from './ui/checkbox';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
 
-export const ShoppingListBuilder: React.FC = () => {
+export interface ShoppingListBuilderProps {
+  initialSelectedRecipeIds?: string[];
+}
+
+export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
+  initialSelectedRecipeIds,
+}) => {
   const {
     data: recipes = [],
     isLoading: loadingRecipes,
@@ -30,6 +36,22 @@ export const ShoppingListBuilder: React.FC = () => {
   // Selected recipe IDs and target servings map: { [recipeId]: number }
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
   const [targetServingsMap, setTargetServingsMap] = useState<Record<string, number>>({});
+
+  React.useEffect(() => {
+    if (initialSelectedRecipeIds && initialSelectedRecipeIds.length > 0 && recipes.length > 0) {
+      setSelectedRecipeIds((prev) => Array.from(new Set([...prev, ...initialSelectedRecipeIds])));
+      setTargetServingsMap((prev) => {
+        const next = { ...prev };
+        initialSelectedRecipeIds.forEach((id) => {
+          const matched = recipes.find((r) => r.id === id);
+          if (matched && !(id in next)) {
+            next[id] = matched.baseServings;
+          }
+        });
+        return next;
+      });
+    }
+  }, [initialSelectedRecipeIds, recipes]);
 
   const buildShoppingListMutation = useBuildShoppingList();
 
@@ -86,16 +108,18 @@ export const ShoppingListBuilder: React.FC = () => {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-2xl font-bold tracking-tight text-white">Shopping List Builder</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <h2 className="font-serif text-2xl font-bold tracking-tight text-ink">
+          Shopping List Builder
+        </h2>
+        <p className="mt-1 text-sm text-ink-muted">
           Select recipes, set target serving counts, and get a consolidated ingredient shopping
           list.
         </p>
       </div>
 
       {displayError && (
-        <Alert className="border-red-500/30 bg-red-500/10 text-red-400">
-          <AlertCircle className="h-5 w-5 text-red-400" />
+        <Alert className="border-terracotta/30 bg-terracotta-light text-terracotta-dark">
+          <AlertCircle className="h-5 w-5 text-terracotta-dark" />
           <AlertDescription className="text-sm">
             <span className="font-semibold">Error: </span>
             {displayError}
@@ -105,16 +129,18 @@ export const ShoppingListBuilder: React.FC = () => {
 
       {/* Recipe Picker Section */}
       <Card>
-        <CardHeader className="flex-row items-center justify-between border-b border-slate-800/80 pb-4">
+        <CardHeader className="flex-row items-center justify-between border-b border-stone pb-4">
           <div>
-            <CardTitle className="text-lg">1. Select Recipes & Target Servings</CardTitle>
+            <CardTitle className="font-serif text-lg font-bold text-ink">
+              1. Select Recipes & Target Servings
+            </CardTitle>
           </div>
           <Button
             type="button"
             variant="ghost"
             size="sm"
             onClick={() => refetch()}
-            className="space-x-1.5 text-xs text-slate-400 hover:text-white"
+            className="space-x-1.5 text-xs text-ink-muted hover:text-ink"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loadingRecipes ? 'animate-spin' : ''}`} />
             <span>Reload Recipes</span>
@@ -123,12 +149,12 @@ export const ShoppingListBuilder: React.FC = () => {
 
         <CardContent className="pt-6">
           {loadingRecipes ? (
-            <div className="flex items-center justify-center py-8 text-slate-400">
-              <RefreshCw className="mr-2 h-5 w-5 animate-spin text-orange-500" />
+            <div className="flex items-center justify-center py-8 text-ink-muted">
+              <RefreshCw className="mr-2 h-5 w-5 animate-spin text-terracotta" />
               <span className="text-sm font-medium">Loading recipe options...</span>
             </div>
           ) : recipes.length === 0 ? (
-            <div className="py-8 text-center text-sm text-slate-400">
+            <div className="py-8 text-center text-sm text-ink-muted">
               No recipes available yet. Go to the Recipes tab to create some!
             </div>
           ) : (
@@ -144,8 +170,8 @@ export const ShoppingListBuilder: React.FC = () => {
                       key={recipe.id}
                       className={`flex flex-col justify-between rounded-xl border p-4 transition-all ${
                         isSelected
-                          ? 'border-orange-500/60 bg-orange-500/10 shadow-md shadow-orange-500/10'
-                          : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
+                          ? 'border-terracotta bg-terracotta-light/30 shadow-md'
+                          : 'border-stone bg-paper hover:border-stone-dark'
                       }`}
                     >
                       <div>
@@ -162,10 +188,10 @@ export const ShoppingListBuilder: React.FC = () => {
                               htmlFor={checkboxId}
                               className="cursor-pointer text-left font-normal normal-case tracking-normal"
                             >
-                              <span className="text-sm font-semibold text-white block">
+                              <span className="font-serif text-sm font-semibold text-ink block">
                                 {recipe.name}
                               </span>
-                              <span className="text-xs text-slate-400 block">
+                              <span className="text-xs text-ink-muted block">
                                 Base: {recipe.baseServings} servings
                               </span>
                             </Label>
@@ -174,8 +200,8 @@ export const ShoppingListBuilder: React.FC = () => {
                       </div>
 
                       {isSelected && (
-                        <div className="mt-4 border-t border-slate-800/80 pt-3">
-                          <Label htmlFor={targetServingsId} className="text-[11px] text-slate-300">
+                        <div className="mt-4 border-t border-stone/60 pt-3">
+                          <Label htmlFor={targetServingsId} className="text-[11px] text-ink-muted">
                             Target Servings
                           </Label>
                           <Input
@@ -184,7 +210,7 @@ export const ShoppingListBuilder: React.FC = () => {
                             min={1}
                             value={targetServingsMap[recipe.id] ?? recipe.baseServings}
                             onChange={(e) => handleServingsChange(recipe.id, e.target.value)}
-                            className="mt-1 h-8 rounded-lg bg-slate-900 px-3 text-xs"
+                            className="mt-1 h-8 rounded-lg bg-sand border-stone px-3 text-xs"
                           />
                         </div>
                       )}
@@ -193,12 +219,12 @@ export const ShoppingListBuilder: React.FC = () => {
                 })}
               </div>
 
-              <div className="mt-6 flex justify-end border-t border-slate-800/80 pt-4">
+              <div className="mt-6 flex justify-end border-t border-stone pt-4">
                 <Button
                   type="button"
                   onClick={handleBuildShoppingList}
                   disabled={buildShoppingListMutation.isPending || selectedRecipeIds.length === 0}
-                  className="space-x-2 text-black"
+                  className="space-x-2 bg-terracotta text-white hover:bg-terracotta-hover disabled:opacity-50"
                 >
                   <ShoppingBag className="h-4 w-4" />
                   <span>
@@ -218,13 +244,15 @@ export const ShoppingListBuilder: React.FC = () => {
         <div className="space-y-8">
           {/* Primary View: Consolidated Shopping List */}
           <Card>
-            <CardHeader className="flex-row items-center space-x-3 border-b border-slate-800/80 pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/20 text-orange-400">
+            <CardHeader className="flex-row items-center space-x-3 border-b border-stone pb-4">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-terracotta-light text-terracotta">
                 <CheckCircle2 className="h-5 w-5" />
               </div>
               <div>
-                <CardTitle className="text-lg">Consolidated Shopping List</CardTitle>
-                <CardDescription className="text-xs">
+                <CardTitle className="font-serif text-lg font-bold text-ink">
+                  Consolidated Shopping List
+                </CardTitle>
+                <CardDescription className="text-xs text-ink-muted">
                   Total ingredients merged across {shoppingListData.scaledRecipes.length} scaled
                   recipe(s).
                 </CardDescription>
@@ -232,17 +260,17 @@ export const ShoppingListBuilder: React.FC = () => {
             </CardHeader>
 
             <CardContent className="pt-6">
-              <div className="divide-y divide-slate-800/60">
+              <div className="divide-y divide-stone/60">
                 {shoppingListData.shoppingList.map((item, idx) => (
                   <div
                     key={idx}
                     className="flex flex-col justify-between py-3.5 sm:flex-row sm:items-center"
                   >
                     <div>
-                      <span className="text-base font-semibold text-white">{item.displayName}</span>
-                      <span className="ml-2 text-xs text-slate-500">({item.ingredientId})</span>
+                      <span className="text-base font-semibold text-ink">{item.displayName}</span>
+                      <span className="ml-2 text-xs text-ink-muted">({item.ingredientId})</span>
                       <div className="mt-1 flex flex-wrap gap-1.5">
-                        <span className="text-[11px] text-slate-400">From recipes:</span>
+                        <span className="text-[11px] text-ink-muted">From recipes:</span>
                         {item.sourceRecipeIds.map((rId) => {
                           const matchedRecipe = shoppingListData.scaledRecipes.find(
                             (sr) => sr.sourceRecipeId === rId
@@ -250,7 +278,7 @@ export const ShoppingListBuilder: React.FC = () => {
                           return (
                             <span
                               key={rId}
-                              className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-300"
+                              className="rounded bg-sand border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted"
                             >
                               {matchedRecipe?.sourceRecipeName || rId}
                             </span>
@@ -260,8 +288,14 @@ export const ShoppingListBuilder: React.FC = () => {
                     </div>
 
                     <div className="mt-2 sm:mt-0">
-                      <span className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-2 font-mono text-sm font-semibold text-orange-400">
-                        {formatQuantityAmount(item.quantity.amount)} {item.quantity.unit}
+                      <span className="rounded-xl border border-terracotta/30 bg-terracotta-light px-4 py-2 font-mono text-sm font-semibold text-terracotta-dark">
+                        {formatQuantityAmount(
+                          item.quantity.amount,
+                          item.quantity.unit,
+                          item.quantity.category,
+                          'consolidated'
+                        )}{' '}
+                        {item.quantity.unit}
                       </span>
                     </div>
                   </div>
@@ -272,13 +306,15 @@ export const ShoppingListBuilder: React.FC = () => {
 
           {/* Secondary View: Per-Recipe Scaled Breakdown */}
           <Card>
-            <CardHeader className="flex-row items-center space-x-3 border-b border-slate-800/80 pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/20 text-amber-400">
+            <CardHeader className="flex-row items-center space-x-3 border-b border-stone pb-4">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-herb-light text-herb">
                 <Layers className="h-5 w-5" />
               </div>
               <div>
-                <CardTitle className="text-lg">Per-Recipe Scaled Breakdown</CardTitle>
-                <CardDescription className="text-xs">
+                <CardTitle className="font-serif text-lg font-bold text-ink">
+                  Per-Recipe Scaled Breakdown
+                </CardTitle>
+                <CardDescription className="text-xs text-ink-muted">
                   Individual scaled ingredient quantities for each recipe.
                 </CardDescription>
               </div>
@@ -291,43 +327,49 @@ export const ShoppingListBuilder: React.FC = () => {
                   return (
                     <div
                       key={sr.sourceRecipeId}
-                      className="overflow-hidden rounded-xl border border-slate-800 bg-slate-800/30"
+                      className="overflow-hidden rounded-xl border border-stone bg-paper"
                     >
                       <button
                         type="button"
                         onClick={() => toggleRecipeExpanded(sr.sourceRecipeId)}
                         aria-expanded={isExpanded}
-                        className="flex w-full items-center justify-between p-4 text-left hover:bg-slate-800/50"
+                        className="flex w-full items-center justify-between p-4 text-left hover:bg-sand/60"
                       >
                         <div className="flex items-center space-x-3">
-                          <span className="font-semibold text-white">{sr.sourceRecipeName}</span>
-                          <span className="flex items-center space-x-1 rounded-full bg-slate-800 px-2.5 py-0.5 text-xs text-slate-300">
-                            <Users className="h-3 w-3 text-orange-400" />
+                          <span className="font-serif font-semibold text-ink">
+                            {sr.sourceRecipeName}
+                          </span>
+                          <span className="flex items-center space-x-1 rounded-full bg-sand border border-stone/60 px-2.5 py-0.5 text-xs text-ink-muted">
+                            <Users className="h-3 w-3 text-terracotta-dark" />
                             <span>
                               {sr.targetServings} servings (x{sr.scaleFactor})
                             </span>
                           </span>
                         </div>
                         {isExpanded ? (
-                          <ChevronUp className="h-4 w-4 text-slate-400" />
+                          <ChevronUp className="h-4 w-4 text-ink-muted" />
                         ) : (
-                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                          <ChevronDown className="h-4 w-4 text-ink-muted" />
                         )}
                       </button>
 
                       {isExpanded && (
-                        <div className="border-t border-slate-800/80 bg-slate-900/40 p-4">
+                        <div className="border-t border-stone/60 bg-sand/40 p-4">
                           <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                             {sr.ingredients.map((ing, i) => (
                               <li
                                 key={i}
-                                className="flex items-center justify-between rounded-lg border border-slate-800/60 bg-slate-900/80 p-2.5 text-xs"
+                                className="flex items-center justify-between rounded-lg border border-stone/60 bg-paper p-2.5 text-xs"
                               >
-                                <span className="font-medium text-slate-200">
-                                  {ing.displayName}
-                                </span>
-                                <span className="font-mono text-orange-400">
-                                  {formatQuantityAmount(ing.quantity.amount)} {ing.quantity.unit}
+                                <span className="font-medium text-ink">{ing.displayName}</span>
+                                <span className="font-mono font-semibold text-terracotta-dark">
+                                  {formatQuantityAmount(
+                                    ing.quantity.amount,
+                                    ing.quantity.unit,
+                                    ing.quantity.category,
+                                    'display'
+                                  )}{' '}
+                                  {ing.quantity.unit}
                                 </span>
                               </li>
                             ))}

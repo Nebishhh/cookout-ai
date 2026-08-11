@@ -334,7 +334,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       } as Response);
 
       // Mock Gemini call to reject with a timeout error via parseRecipeTextWithGeminiTimeout
-      vi.mocked(geminiModule.parseRecipeTextWithGeminiTimeout).mockRejectedValue(
+      vi.mocked(geminiModule.parseRecipeTextWithGeminiTimeout).mockRejectedValueOnce(
         new Error('Gemini API request timed out after 30 seconds.')
       );
 

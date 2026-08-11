@@ -1,6 +1,5 @@
 import React from 'react';
 import { UtensilsCrossed, ShoppingBag, Flame, Calendar } from 'lucide-react';
-import { Button } from './ui/button';
 
 interface NavigationProps {
   currentTab: 'recipes' | 'shopping-list' | 'event-planner';
@@ -9,66 +8,63 @@ interface NavigationProps {
 
 export const Navigation: React.FC<NavigationProps> = ({ currentTab, onTabChange }) => {
   return (
-    <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur-md">
+    <header className="sticky top-0 z-50 border-b border-stone/60 bg-paper/90 backdrop-blur-md">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
         <div className="flex items-center space-x-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-orange-500/30 bg-orange-500/10 text-orange-400">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-terracotta/30 bg-terracotta-light text-terracotta-dark">
             <Flame className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight text-white">CookOut AI</h1>
-            <p className="text-xs text-slate-400">Recipe Scaling & Shopping List Builder</p>
+            <h1 className="font-serif text-xl font-bold tracking-tight text-ink">CookOut AI</h1>
+            <p className="text-xs text-ink-muted">Recipe Scaling & Shopping List Builder</p>
           </div>
         </div>
 
         <nav
           aria-label="Main Navigation"
-          className="flex items-center space-x-1 rounded-xl bg-slate-900 p-1 border border-slate-800"
+          className="flex items-center space-x-1 rounded-xl bg-sand p-1 border border-stone"
         >
-          <Button
+          <button
             id="nav-tab-recipes"
             type="button"
-            variant={currentTab === 'recipes' ? 'default' : 'ghost'}
             onClick={() => onTabChange('recipes')}
-            className={`space-x-2 text-sm font-semibold ${
+            className={`inline-flex items-center justify-center space-x-2 rounded-lg px-3.5 py-1.5 text-sm font-bold transition-all ${
               currentTab === 'recipes'
-                ? 'bg-orange-500 text-black shadow-sm'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                ? 'bg-ink text-sand shadow-sm border border-ink'
+                : 'text-ink-muted hover:text-ink hover:bg-paper/60'
             }`}
           >
             <UtensilsCrossed className="h-4 w-4" />
             <span>Recipes</span>
-          </Button>
+          </button>
 
-          <Button
+          <button
             id="nav-tab-shopping-list"
             type="button"
-            variant={currentTab === 'shopping-list' ? 'default' : 'ghost'}
             onClick={() => onTabChange('shopping-list')}
-            className={`space-x-2 text-sm font-semibold ${
+            className={`inline-flex items-center justify-center space-x-2 rounded-lg px-3.5 py-1.5 text-sm font-bold transition-all ${
               currentTab === 'shopping-list'
-                ? 'bg-orange-500 text-black shadow-sm'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                ? 'bg-ink text-sand shadow-sm border border-ink'
+                : 'text-ink-muted hover:text-ink hover:bg-paper/60'
             }`}
           >
             <ShoppingBag className="h-4 w-4" />
             <span>Shopping List</span>
-          </Button>
+          </button>
 
-          <Button
+          <button
             id="nav-tab-event-planner"
             type="button"
-            variant={currentTab === 'event-planner' ? 'default' : 'ghost'}
             onClick={() => onTabChange('event-planner')}
-            className={`space-x-2 text-sm font-semibold ${
+            className={`inline-flex items-center justify-center space-x-2 rounded-lg px-3.5 py-1.5 text-sm font-bold transition-all ${
               currentTab === 'event-planner'
-                ? 'bg-orange-500 text-black shadow-sm'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                ? 'bg-ink text-sand shadow-sm border border-ink'
+                : 'text-ink-muted hover:text-ink hover:bg-paper/60'
             }`}
           >
             <Calendar className="h-4 w-4" />
             <span>Event Planner</span>
-          </Button>
+          </button>
         </nav>
       </div>
     </header>

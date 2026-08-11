@@ -1603,4 +1603,277 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       expect(screen.getByText(/imported via ai — please review all fields/i)).toBeInTheDocument();
     });
   });
+
+  describe('Bulk Recipe Operations UI Tests', () => {
+    it('executes bulk delete concurrently, resets selectedRecipeIds to empty on full success, and removes deleted items', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const deletedIds: string[] = [];
+
+      const mockRecipes = [
+        { id: 'r1', name: 'Recipe One', baseServings: 2, dietaryTags: [], ingredients: [] },
+        { id: 'r2', name: 'Recipe Two', baseServings: 4, dietaryTags: [], ingredients: [] },
+        { id: 'r3', name: 'Recipe Three', baseServings: 6, dietaryTags: [], ingredients: [] },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (options?.method === 'DELETE') {
+          const id = url.toString().split('/').pop();
+          if (id) deletedIds.push(id);
+          return {
+            ok: true,
+            status: 204,
+            headers: new Headers(),
+            json: async () => null,
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => mockRecipes.filter((r) => !deletedIds.includes(r.id)),
+        } as Response;
+      });
+
+      render(<App />);
+
+      expect(await screen.findByText('Recipe One')).toBeInTheDocument();
+      expect(screen.getByText('Recipe Two')).toBeInTheDocument();
+      expect(screen.getByText('Recipe Three')).toBeInTheDocument();
+
+      // Select r1 and r2 using checkboxes
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe recipe one/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe recipe two/i }));
+
+      // Floating bulk bar should show "2 Selected"
+      expect(screen.getByText('2 Selected')).toBeInTheDocument();
+
+      // Click "Delete Selected"
+      fireEvent.click(screen.getByRole('button', { name: /delete selected/i }));
+
+      await waitFor(() => {
+        expect(deletedIds).toContain('r1');
+        expect(deletedIds).toContain('r2');
+      });
+
+      // Confirm selectedRecipeIds reset to empty (floating bulk bar disappears)
+      await waitFor(() => {
+        expect(screen.queryByText('2 Selected')).not.toBeInTheDocument();
+      });
+
+      // Recipe Three remains in list
+      expect(screen.getByText('Recipe Three')).toBeInTheDocument();
+    });
+
+    it('surfaces partial failure during bulk delete without silencing errors and keeps failed recipe IDs selected', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const deletedIds: string[] = [];
+
+      const mockRecipes = [
+        { id: 'r1', name: 'Recipe One', baseServings: 2, dietaryTags: [], ingredients: [] },
+        { id: 'r2', name: 'Recipe Two (Fails)', baseServings: 4, dietaryTags: [], ingredients: [] },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (options?.method === 'DELETE') {
+          const id = url.toString().split('/').pop();
+          if (id === 'r1') {
+            deletedIds.push('r1');
+            return {
+              ok: true,
+              status: 204,
+              headers: new Headers(),
+              json: async () => null,
+            } as Response;
+          }
+          return {
+            ok: false,
+            status: 500,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ error: 'InternalServerError', message: 'Database failure on r2' }),
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => mockRecipes.filter((r) => !deletedIds.includes(r.id)),
+        } as Response;
+      });
+
+      render(<App />);
+
+      expect(await screen.findByText('Recipe One')).toBeInTheDocument();
+      expect(screen.getByText('Recipe Two (Fails)')).toBeInTheDocument();
+
+      // Select both recipes
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe recipe one/i }));
+      fireEvent.click(
+        screen.getByRole('checkbox', { name: /select recipe recipe two \(fails\)/i })
+      );
+
+      expect(screen.getByText('2 Selected')).toBeInTheDocument();
+
+      // Click "Delete Selected"
+      fireEvent.click(screen.getByRole('button', { name: /delete selected/i }));
+
+      // Error banner should be surfaced reporting partial failure details
+      await waitFor(() => {
+        expect(screen.getByText(/bulk action error:/i)).toBeInTheDocument();
+        expect(
+          screen.getByText(/successfully deleted 1 recipe\(s\)\. failed to delete 1 recipe\(s\)/i)
+        ).toBeInTheDocument();
+      });
+
+      // Succeeded recipe r1 removed, failed recipe r2 remains selected
+      expect(screen.getByText('1 Selected')).toBeInTheDocument();
+    });
+
+    it('resets selectedRecipeIds to empty after clicking Build Shopping List from bulk bar', async () => {
+      const mockRecipes = [
+        { id: 'r1', name: 'Recipe One', baseServings: 2, dietaryTags: [], ingredients: [] },
+        { id: 'r2', name: 'Recipe Two', baseServings: 4, dietaryTags: [], ingredients: [] },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockRecipes,
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      expect(await screen.findByText('Recipe One')).toBeInTheDocument();
+
+      // Select recipes
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe recipe one/i }));
+      expect(screen.getByText('1 Selected')).toBeInTheDocument();
+
+      // Click "Build Shopping List" button in floating bulk bar
+      fireEvent.click(screen.getByRole('button', { name: /build shopping list/i }));
+
+      // Navigates to Shopping List Builder tab
+      expect(await screen.findByText('Shopping List Builder')).toBeInTheDocument();
+
+      // Switch back to Recipes tab
+      fireEvent.click(screen.getByRole('button', { name: 'Recipes' }));
+      expect(await screen.findByText('Create New Recipe')).toBeInTheDocument();
+
+      // Verify selectedRecipeIds was reset (floating bulk bar is gone)
+      expect(screen.queryByText('1 Selected')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Search & Dietary Filter UI Tests', () => {
+    it('filters recipe list by search query name in real time', async () => {
+      const mockRecipes = [
+        { id: 'r1', name: 'Classic Pancakes', baseServings: 4, dietaryTags: [], ingredients: [] },
+        { id: 'r2', name: 'Steak Dinner', baseServings: 2, dietaryTags: [], ingredients: [] },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockRecipes,
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      expect(await screen.findByText('Classic Pancakes')).toBeInTheDocument();
+      expect(screen.getByText('Steak Dinner')).toBeInTheDocument();
+
+      // Search for "Pancake"
+      const searchInput = screen.getByPlaceholderText(/search recipes by name/i);
+      fireEvent.change(searchInput, { target: { value: 'Pancake' } });
+
+      // Classic Pancakes remains, Steak Dinner is excluded
+      expect(screen.getByText('Classic Pancakes')).toBeInTheDocument();
+      expect(screen.queryByText('Steak Dinner')).not.toBeInTheDocument();
+    });
+
+    it('filters recipe list by active dietary tag toggle', async () => {
+      const mockRecipes = [
+        { id: 'r1', name: 'Vegan Bowl', baseServings: 2, dietaryTags: ['Vegan'], ingredients: [] },
+        { id: 'r2', name: 'Beef Stew', baseServings: 4, dietaryTags: [], ingredients: [] },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockRecipes,
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      expect(await screen.findByText('Vegan Bowl')).toBeInTheDocument();
+      expect(screen.getByText('Beef Stew')).toBeInTheDocument();
+
+      // Click "Filter by Vegan" toggle button
+      const veganToggle = screen.getByRole('button', { name: /filter by vegan/i });
+      fireEvent.click(veganToggle);
+
+      // Vegan Bowl remains, non-vegan Beef Stew is excluded
+      expect(screen.getByText('Vegan Bowl')).toBeInTheDocument();
+      expect(screen.queryByText('Beef Stew')).not.toBeInTheDocument();
+
+      // Click toggle button again to deactivate filter
+      fireEvent.click(veganToggle);
+      expect(screen.getByText('Beef Stew')).toBeInTheDocument();
+    });
+
+    it('renders zero-results empty state when search query matches no recipes and allows clearing filters', async () => {
+      const mockRecipes = [
+        { id: 'r1', name: 'Oatmeal', baseServings: 1, dietaryTags: [], ingredients: [] },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+        if (url.toString().includes('/api/recipes')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockRecipes,
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      expect(await screen.findByText('Oatmeal')).toBeInTheDocument();
+
+      // Search for a non-matching string
+      const searchInput = screen.getByPlaceholderText(/search recipes by name/i);
+      fireEvent.change(searchInput, { target: { value: 'NonExistentRecipe' } });
+
+      // Zero results card displayed
+      expect(await screen.findByText('No recipes match your search/filter')).toBeInTheDocument();
+      expect(screen.queryByText('Oatmeal')).not.toBeInTheDocument();
+
+      // Click "Clear Filters" button
+      const clearButtons = screen.getAllByRole('button', { name: /clear filters/i });
+      fireEvent.click(clearButtons[0]);
+
+      // Oatmeal is restored and search input is cleared
+      expect(await screen.findByText('Oatmeal')).toBeInTheDocument();
+      expect(searchInput).toHaveValue('');
+    });
+  });
 });

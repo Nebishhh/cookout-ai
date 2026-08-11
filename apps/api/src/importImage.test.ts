@@ -279,16 +279,13 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
     vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockResolvedValue(
       MOCK_VALID_GEMINI_RECIPE_JSON
     );
-
-    const countBefore = await prisma.recipe.count();
+    const createSpy = vi.spyOn(prisma.recipe, 'create');
 
     const res = await request(app)
       .post('/api/recipes/import-image')
       .attach('file', VALID_JPEG_BUFFER, { filename: 'recipe.jpg', contentType: 'image/jpeg' });
 
     expect(res.status).toBe(200);
-
-    const countAfter = await prisma.recipe.count();
-    expect(countAfter).toBe(countBefore);
+    expect(createSpy).not.toHaveBeenCalled();
   });
 });

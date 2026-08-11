@@ -387,10 +387,10 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       <CardContent>
         {/* AI Import Container */}
         {!isEditing && (
-          <div className="mb-6 rounded-2xl border border-amber-500/20 bg-slate-800/40 p-4">
+          <div className="mb-6 rounded-2xl border border-terracotta/30 bg-terracotta-light/40 p-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 text-amber-300">
-                <Sparkles className="h-4 w-4 text-amber-400" />
+              <div className="flex items-center space-x-2 text-terracotta-dark">
+                <Sparkles className="h-4 w-4 text-terracotta" />
                 <span className="text-sm font-semibold">Import Recipe with AI</span>
               </div>
               <Button
@@ -398,7 +398,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowImportSection((prev) => !prev)}
-                className="space-x-1 text-xs text-amber-300 hover:bg-slate-800 hover:text-white"
+                className="space-x-1 text-xs text-terracotta-dark hover:bg-sand hover:text-ink"
               >
                 <span>{showImportSection ? 'Hide Import Tools' : 'Paste Recipe Text'}</span>
                 {showImportSection ? (
@@ -412,7 +412,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
             {showImportSection && (
               <div className="mt-3 space-y-3">
                 {/* Sub-mode selector tabs */}
-                <div className="flex space-x-2 border-b border-slate-700/60 pb-2">
+                <div className="flex space-x-2 border-b border-stone/60 pb-2">
                   <button
                     type="button"
                     onClick={() => {
@@ -421,8 +421,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     }}
                     className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                       importMode === 'text'
-                        ? 'border border-amber-500/30 bg-amber-500/20 text-amber-300'
-                        : 'text-slate-400 hover:text-slate-200'
+                        ? 'border border-terracotta/30 bg-terracotta-light text-terracotta-dark font-semibold'
+                        : 'text-ink-muted hover:text-ink'
                     }`}
                   >
                     Paste Text
@@ -435,8 +435,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     }}
                     className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                       importMode === 'url'
-                        ? 'border border-amber-500/30 bg-amber-500/20 text-amber-300'
-                        : 'text-slate-400 hover:text-slate-200'
+                        ? 'border border-terracotta/30 bg-terracotta-light text-terracotta-dark font-semibold'
+                        : 'text-ink-muted hover:text-ink'
                     }`}
                   >
                     URL Link
@@ -449,8 +449,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     }}
                     className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                       importMode === 'image'
-                        ? 'border border-amber-500/30 bg-amber-500/20 text-amber-300'
-                        : 'text-slate-400 hover:text-slate-200'
+                        ? 'border border-terracotta/30 bg-terracotta-light text-terracotta-dark font-semibold'
+                        : 'text-ink-muted hover:text-ink'
                     }`}
                   >
                     Upload Image
@@ -463,8 +463,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                     }}
                     className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
                       importMode === 'camera'
-                        ? 'border border-amber-500/30 bg-amber-500/20 text-amber-300'
-                        : 'text-slate-400 hover:text-slate-200'
+                        ? 'border border-terracotta/30 bg-terracotta-light text-terracotta-dark font-semibold'
+                        : 'text-ink-muted hover:text-ink'
                     }`}
                   >
                     Take Picture
@@ -473,7 +473,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
                 {importMode === 'text' && (
                   <>
-                    <Label htmlFor="import-text-input" className="text-xs text-slate-300">
+                    <Label htmlFor="import-text-input" className="text-xs text-ink-muted">
                       Paste unformatted recipe text below (ingredients, servings, instructions)
                     </Label>
                     <textarea
@@ -482,23 +482,23 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                       value={importText}
                       onChange={(e) => setImportText(e.target.value)}
                       placeholder="e.g. Grandma's Pancakes&#10;Serves 4&#10;- 2 cups flour&#10;- 2 eggs&#10;- 300 ml milk"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-900/90 p-3 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      className="w-full rounded-xl border border-stone bg-sand p-3 text-xs text-ink placeholder:text-ink-subtle focus:border-terracotta focus:outline-none focus:ring-1 focus:ring-terracotta"
                     />
                     <div className="flex justify-end">
                       <Button
                         type="button"
                         onClick={handleImportText}
                         disabled={importRecipeTextMutation.isPending || !importText.trim()}
-                        className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                        className="space-x-2 bg-terracotta px-4 text-xs font-semibold text-white hover:bg-terracotta-hover disabled:opacity-50"
                       >
                         {importRecipeTextMutation.isPending ? (
                           <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
                             <span>Importing with AI...</span>
                           </>
                         ) : (
                           <>
-                            <Sparkles className="h-3.5 w-3.5 text-black" />
+                            <Sparkles className="h-3.5 w-3.5 text-white" />
                             <span>Import with AI</span>
                           </>
                         )}
@@ -839,7 +839,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                   />
                   <Label
                     htmlFor={`tag-${tag}`}
-                    className="text-sm font-normal cursor-pointer text-slate-200"
+                    className="text-sm font-semibold cursor-pointer text-ink"
                   >
                     {tag}
                   </Label>
@@ -867,7 +867,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
               {ingredients.map((ing, idx) => (
                 <div
                   key={idx}
-                  className="grid grid-cols-1 gap-2 sm:grid-cols-12 sm:items-center sm:gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3"
+                  className="grid grid-cols-1 gap-2 sm:grid-cols-12 sm:items-center sm:gap-3 rounded-xl border border-stone bg-paper p-3"
                 >
                   <div className="sm:col-span-3">
                     <Input
@@ -903,6 +903,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
                   <div className="sm:col-span-2">
                     <Select
+                      aria-label="Unit"
                       value={ing.unit}
                       onChange={(e) => handleIngredientChange(idx, 'unit', e.target.value)}
                     >

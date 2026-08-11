@@ -29,6 +29,7 @@ export default defineConfig({
       env: {
         PORT: '3011',
         DATABASE_URL: e2eDbUrl,
+        USE_GEMINI_FIXTURES: 'true',
       },
     },
     {

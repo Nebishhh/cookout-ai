@@ -1,97 +1,217 @@
 import React, { useState } from 'react';
-import { Users, AlertCircle, RefreshCw, ChefHat, Pencil, Trash2 } from 'lucide-react';
+import {
+  Users,
+  AlertCircle,
+  RefreshCw,
+  ChefHat,
+  Pencil,
+  Trash2,
+  Search,
+  X,
+  ShoppingBag,
+  CheckSquare,
+  Square,
+  Filter,
+} from 'lucide-react';
 import type { RecipeDto } from '../lib/api';
-import { useRecipes, useDeleteRecipe } from '../lib/queries';
+import { api } from '../lib/api';
+import { useRecipes, useDeleteRecipe, RECIPES_QUERY_KEY } from '../lib/queries';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatQuantityAmount } from '../lib/formatQuantity';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Checkbox } from './ui/checkbox';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
-import { Alert, AlertTitle, AlertDescription } from './ui/alert';
-import { RecipeForm } from './RecipeForm';
+import { Alert, AlertDescription } from './ui/alert';
 
 export interface RecipeListProps {
   onEditRecipe?: (recipe: RecipeDto) => void;
+  onSendToShoppingList?: (recipeIds: string[]) => void;
 }
 
-export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
+export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToShoppingList }) => {
   const { data: recipes = [], isLoading, isError, error, refetch } = useRecipes();
   const deleteRecipeMutation = useDeleteRecipe();
-  const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
+  const queryClient = useQueryClient();
+
+  // Search & Filter State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  // Bulk Selection State
+  const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
+  const [bulkActionError, setBulkActionError] = useState<string | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
+  // Available dietary tag options
+  const AVAILABLE_TAGS = ['Vegetarian', 'Vegan'];
+
+  // Client-side filtering logic
+  const filteredRecipes = recipes.filter((recipe) => {
+    const matchesName = recipe.name.toLowerCase().includes(searchQuery.toLowerCase().trim());
+
+    const matchesTags =
+      selectedTags.length === 0 ||
+      (recipe.dietaryTags && selectedTags.some((tag) => recipe.dietaryTags.includes(tag)));
+
+    return matchesName && matchesTags;
+  });
+
+  const isFilterActive = searchQuery.trim() !== '' || selectedTags.length > 0;
+
+  const toggleTagFilter = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
+  };
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setSelectedTags([]);
+  };
+
+  const handleSelectRecipe = (id: string) => {
+    setSelectedRecipeIds((prev) =>
+      prev.includes(id) ? prev.filter((itemId) => itemId !== id) : [...prev, id]
+    );
+  };
+
+  const handleToggleSelectAll = () => {
+    const filteredIds = filteredRecipes.map((r) => r.id);
+    const allFilteredSelected =
+      filteredIds.length > 0 && filteredIds.every((id) => selectedRecipeIds.includes(id));
+
+    if (allFilteredSelected) {
+      setSelectedRecipeIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      setSelectedRecipeIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
 
   const handleDelete = (recipe: RecipeDto) => {
     if (window.confirm(`Are you sure you want to delete "${recipe.name}"?`)) {
-      deleteRecipeMutation.mutate(recipe.id);
+      deleteRecipeMutation.mutate(recipe.id, {
+        onSuccess: () => {
+          setSelectedRecipeIds((prev) => prev.filter((id) => id !== recipe.id));
+        },
+      });
     }
+  };
+
+  const handleBulkDelete = async () => {
+    const count = selectedRecipeIds.length;
+    if (count === 0) return;
+
+    if (
+      !window.confirm(`Are you sure you want to delete ${count} recipe${count > 1 ? 's' : ''}?`)
+    ) {
+      return;
+    }
+
+    setIsBulkDeleting(true);
+    setBulkActionError(null);
+
+    // Concurrently execute all deletions using api.deleteRecipe
+    const results = await Promise.allSettled(selectedRecipeIds.map((id) => api.deleteRecipe(id)));
+
+    const succeededIds: string[] = [];
+    const failedErrors: string[] = [];
+
+    results.forEach((res, idx) => {
+      const recipeId = selectedRecipeIds[idx];
+      if (res.status === 'fulfilled') {
+        succeededIds.push(recipeId);
+      } else {
+        const errReason = res.reason instanceof Error ? res.reason.message : 'Unknown error';
+        failedErrors.push(errReason);
+      }
+    });
+
+    if (succeededIds.length > 0) {
+      await queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+    }
+
+    setIsBulkDeleting(false);
+
+    if (failedErrors.length === 0) {
+      // Full success: reset selections to empty
+      setSelectedRecipeIds([]);
+    } else {
+      // Partial failure: remove succeeded IDs from selection, display error banner
+      setSelectedRecipeIds((prev) => prev.filter((id) => !succeededIds.includes(id)));
+      setBulkActionError(
+        `Successfully deleted ${succeededIds.length} recipe(s). Failed to delete ${failedErrors.length} recipe(s): ${failedErrors.join('; ')}`
+      );
+    }
+  };
+
+  const handleSendToShoppingList = () => {
+    if (selectedRecipeIds.length === 0) return;
+    if (onSendToShoppingList) {
+      onSendToShoppingList(selectedRecipeIds);
+    }
+    setSelectedRecipeIds([]);
   };
 
   const handleEditClick = (recipe: RecipeDto) => {
     if (onEditRecipe) {
       onEditRecipe(recipe);
-    } else {
-      setEditingRecipe(recipe);
     }
   };
 
-  if (editingRecipe) {
+  if (isLoading) {
     return (
-      <RecipeForm
-        recipe={editingRecipe}
-        onCancel={() => setEditingRecipe(null)}
-        onSuccess={() => setEditingRecipe(null)}
-      />
+      <div className="flex flex-col items-center justify-center py-16 text-center">
+        <RefreshCw className="h-8 w-8 animate-spin text-terracotta" />
+        <p className="mt-3 text-sm font-medium text-ink-muted">Loading your recipe collection...</p>
+      </div>
     );
   }
 
-  if (isLoading && recipes.length === 0) {
+  if (isError) {
     return (
-      <Card className="flex flex-col items-center justify-center p-12 text-center">
-        <RefreshCw className="h-8 w-8 animate-spin text-orange-500" />
-        <p className="mt-4 text-sm font-medium text-slate-300">Loading recipes...</p>
-      </Card>
-    );
-  }
-
-  if (isError && recipes.length === 0) {
-    return (
-      <Alert className="border-red-500/30 bg-red-500/10 p-8 text-center text-red-400">
-        <div className="flex flex-col items-center">
-          <AlertCircle className="h-10 w-10 text-red-400" />
-          <AlertTitle className="mt-3 text-lg font-semibold text-white">
-            Failed to Load Recipes
-          </AlertTitle>
-          <AlertDescription className="mt-1 text-sm text-red-300">
-            {error instanceof Error ? error.message : 'Unknown error'}
-          </AlertDescription>
+      <Alert className="border-terracotta/30 bg-terracotta-light text-terracotta-dark">
+        <AlertCircle className="h-5 w-5 text-terracotta-dark" />
+        <AlertDescription className="text-sm">
+          <span className="font-semibold">Failed to load recipes: </span>
+          {error instanceof Error ? error.message : 'Unknown network error.'}
           <Button
             type="button"
-            variant="secondary"
+            variant="outline"
+            size="sm"
             onClick={() => refetch()}
-            className="mt-6 space-x-2"
+            className="ml-3 border-terracotta/30 text-xs text-terracotta-dark hover:bg-terracotta/10"
           >
-            <RefreshCw className="h-4 w-4" />
-            <span>Try Again</span>
+            Retry
           </Button>
-        </div>
+        </AlertDescription>
       </Alert>
     );
   }
 
   if (recipes.length === 0) {
     return (
-      <Card className="flex flex-col items-center justify-center border-dashed p-12 text-center">
-        <ChefHat className="h-12 w-12 text-slate-600" />
-        <h3 className="mt-4 text-lg font-semibold text-white">No Recipes Found</h3>
-        <p className="mt-1 text-sm text-slate-400">
-          Create your first recipe using the form to get started!
+      <Card className="flex flex-col items-center justify-center border-stone bg-paper p-12 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-terracotta/30 bg-terracotta-light text-terracotta">
+          <ChefHat className="h-6 w-6" />
+        </div>
+        <h3 className="mt-4 font-serif text-lg font-bold text-ink">No Recipes Available</h3>
+        <p className="mt-1 max-w-sm text-xs text-ink-muted">
+          Your recipe book is empty. Add a new recipe above to start scaling and building shopping
+          lists.
         </p>
       </Card>
     );
   }
 
+  const allFilteredAreSelected =
+    filteredRecipes.length > 0 && filteredRecipes.every((r) => selectedRecipeIds.includes(r.id));
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {deleteRecipeMutation.isError && (
-        <Alert className="border-red-500/30 bg-red-500/10 text-red-400">
-          <AlertCircle className="h-5 w-5 text-red-400" />
+        <Alert className="border-terracotta/30 bg-terracotta-light text-terracotta-dark">
+          <AlertCircle className="h-5 w-5 text-terracotta-dark" />
           <AlertDescription className="text-sm">
             <span className="font-semibold">Error Deleting Recipe: </span>
             {deleteRecipeMutation.error.message}
@@ -99,106 +219,303 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe }) => {
         </Alert>
       )}
 
-      <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+      {bulkActionError && (
+        <Alert className="border-terracotta/30 bg-terracotta-light text-terracotta-dark">
+          <AlertCircle className="h-5 w-5 text-terracotta-dark" />
+          <AlertDescription className="text-sm">
+            <span className="font-semibold">Bulk Action Error: </span>
+            {bulkActionError}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Header Section */}
+      <div className="flex flex-col gap-4 border-b border-stone pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white">
-            Saved Recipes ({recipes.length})
+          <h2 className="font-serif text-2xl font-bold tracking-tight text-ink">
+            Saved Recipes{' '}
+            {isFilterActive
+              ? `(${filteredRecipes.length} of ${recipes.length})`
+              : `(${recipes.length})`}
           </h2>
-          <p className="mt-1 text-sm text-slate-400">All available recipes in database</p>
+          <p className="mt-1 text-sm text-ink-muted">
+            {isFilterActive ? 'Filtered recipe results' : 'All available recipes in database'}
+          </p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => refetch()}
-          className="space-x-1.5"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          <span>Refresh</span>
-        </Button>
+        <div className="flex items-center space-x-2">
+          {filteredRecipes.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleToggleSelectAll}
+              className="space-x-1.5 text-xs text-ink border-stone"
+            >
+              {allFilteredAreSelected ? (
+                <CheckSquare className="h-3.5 w-3.5 text-terracotta" />
+              ) : (
+                <Square className="h-3.5 w-3.5 text-ink-subtle" />
+              )}
+              <span>{allFilteredAreSelected ? 'Deselect All' : 'Select All'}</span>
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            className="space-x-1.5 border-stone text-ink"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </Button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {recipes.map((recipe) => (
-          <Card
-            key={recipe.id}
-            className="flex flex-col justify-between p-5 transition-colors hover:border-slate-700"
+      {/* Search & Dietary Filter Controls Bar */}
+      <div className="flex flex-col gap-3 rounded-xl border border-stone bg-paper p-4 sm:flex-row sm:items-center sm:justify-between">
+        {/* Search Input */}
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-subtle" />
+          <Input
+            id="recipe-search-input"
+            type="text"
+            placeholder="Search recipes by name..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9 pr-8 h-9 text-sm bg-sand border-stone"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search input"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-subtle hover:text-ink"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Dietary Tag Toggle Buttons & Clear Filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center space-x-1 text-xs text-ink-muted mr-1">
+            <Filter className="h-3.5 w-3.5 text-terracotta-dark" />
+            <span>Dietary:</span>
+          </div>
+          {AVAILABLE_TAGS.map((tag) => {
+            const isSelected = selectedTags.includes(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => toggleTagFilter(tag)}
+                aria-label={`Filter by ${tag}`}
+                className={`rounded-md px-2.5 py-1 text-xs font-bold uppercase tracking-wider transition-all ${
+                  isSelected
+                    ? tag === 'Vegan'
+                      ? 'bg-herb-dark text-sand border border-herb-dark shadow-sm'
+                      : 'bg-herb text-sand border border-herb shadow-sm'
+                    : 'bg-sand text-ink-muted border border-stone hover:border-ink-muted hover:text-ink'
+                }`}
+              >
+                {tag} {isSelected ? '✓' : ''}
+              </button>
+            );
+          })}
+
+          {isFilterActive && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clearFilters}
+              className="h-7 px-2 text-xs text-terracotta-dark hover:text-terracotta-dark hover:bg-terracotta-light/60 font-semibold"
+            >
+              <X className="mr-1 h-3 w-3" />
+              <span>Clear Filters</span>
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Floating Bulk Action Bar */}
+      {selectedRecipeIds.length > 0 && (
+        <div className="sticky top-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-terracotta/40 bg-paper/95 p-3.5 shadow-xl backdrop-blur-md">
+          <div className="flex items-center space-x-2">
+            <span className="rounded-lg bg-terracotta-dark px-2.5 py-1 text-xs font-bold text-sand shadow-sm">
+              {selectedRecipeIds.length} Selected
+            </span>
+            <span className="text-xs text-ink-muted hidden sm:inline">
+              Choose an action for selected recipes:
+            </span>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleSendToShoppingList}
+              className="h-8 space-x-1.5 text-xs font-semibold text-white bg-terracotta hover:bg-terracotta-hover"
+            >
+              <ShoppingBag className="h-3.5 w-3.5 text-white" />
+              <span>Build Shopping List</span>
+            </Button>
+
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={handleBulkDelete}
+              disabled={isBulkDeleting}
+              className="h-8 space-x-1.5 text-xs font-semibold"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>{isBulkDeleting ? 'Deleting...' : 'Delete Selected'}</span>
+            </Button>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedRecipeIds([])}
+              className="h-8 px-2 text-xs text-ink-muted hover:text-ink"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span className="sr-only">Deselect All</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Zero Filter Results Empty State */}
+      {filteredRecipes.length === 0 ? (
+        <Card className="flex flex-col items-center justify-center border-stone bg-paper/60 p-10 text-center">
+          <Search className="h-10 w-10 text-ink-subtle" />
+          <h3 className="mt-3 font-serif text-base font-semibold text-ink">
+            No recipes match your search/filter
+          </h3>
+          <p className="mt-1 text-xs text-ink-muted max-w-sm">
+            Try adjusting your search query or dietary tag filters to find what you are looking for.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={clearFilters}
+            className="mt-4 space-x-1.5 text-xs text-terracotta-dark border-terracotta/30 hover:bg-terracotta-light"
           >
-            <div>
-              <CardHeader className="p-0">
-                <div className="flex items-start justify-between">
-                  <CardTitle className="text-base">{recipe.name}</CardTitle>
-                  <div className="flex items-center space-x-1 rounded-full bg-slate-800/80 px-2.5 py-1 text-xs font-semibold text-slate-300">
-                    <Users className="h-3 w-3 text-orange-400" />
-                    <span>{recipe.baseServings} servings</span>
-                  </div>
+            <X className="h-3.5 w-3.5" />
+            <span>Clear Filters</span>
+          </Button>
+        </Card>
+      ) : (
+        /* Recipe Cards Grid */
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {filteredRecipes.map((recipe) => {
+            const isSelected = selectedRecipeIds.includes(recipe.id);
+            const cardCheckboxId = `select-recipe-${recipe.id}`;
+
+            return (
+              <Card
+                key={recipe.id}
+                className={`flex flex-col justify-between p-5 transition-all ${
+                  isSelected
+                    ? 'border-terracotta bg-terracotta-light/30 shadow-md'
+                    : 'border-stone bg-paper hover:border-stone-dark'
+                }`}
+              >
+                <div>
+                  <CardHeader className="p-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start space-x-2.5">
+                        <Checkbox
+                          id={cardCheckboxId}
+                          checked={isSelected}
+                          onChange={() => handleSelectRecipe(recipe.id)}
+                          aria-label={`Select recipe ${recipe.name}`}
+                          className="mt-1"
+                        />
+                        <label htmlFor={cardCheckboxId} className="cursor-pointer">
+                          <CardTitle className="font-serif text-base text-ink hover:text-terracotta-dark transition-colors">
+                            {recipe.name}
+                          </CardTitle>
+                        </label>
+                      </div>
+
+                      <div className="flex items-center space-x-1 rounded-full bg-sand border border-stone/60 px-2.5 py-1 text-xs font-semibold text-ink-muted shrink-0">
+                        <Users className="h-3 w-3 text-terracotta-dark" />
+                        <span>{recipe.baseServings} servings</span>
+                      </div>
+                    </div>
+
+                    {recipe.dietaryTags && recipe.dietaryTags.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5 pl-6">
+                        {recipe.dietaryTags.map((tag) => (
+                          <span
+                            key={tag}
+                            className={`rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider shadow-sm ${
+                              tag === 'Vegan' ? 'bg-herb-dark text-sand' : 'bg-herb text-sand'
+                            }`}
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </CardHeader>
+
+                  <CardContent className="mt-4 border-t border-stone/60 p-0 pt-3">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+                      Ingredients ({recipe.ingredients.length})
+                    </span>
+                    <ul className="mt-2 space-y-1 text-xs text-ink">
+                      {recipe.ingredients.map((ing, i) => (
+                        <li key={i} className="flex justify-between py-0.5">
+                          <span className="font-medium text-ink">{ing.displayName}</span>
+                          <span className="font-mono text-ink-muted">
+                            {formatQuantityAmount(ing.amount, ing.unit, ing.category, 'display')}{' '}
+                            {ing.unit}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </CardContent>
                 </div>
 
-                {recipe.dietaryTags && recipe.dietaryTags.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {recipe.dietaryTags.map((tag) => (
-                      <span
-                        key={tag}
-                        className={`rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${
-                          tag === 'Vegan'
-                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
-                            : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                        }`}
-                      >
-                        {tag}
-                      </span>
-                    ))}
+                <div className="mt-4 flex items-center justify-end border-t border-stone/40 pt-3 text-xs">
+                  <div className="flex items-center space-x-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleEditClick(recipe)}
+                      aria-label={`Edit recipe ${recipe.name}`}
+                      className="h-7 px-2 text-xs text-ink-muted hover:text-ink"
+                    >
+                      <Pencil className="mr-1 h-3 w-3" />
+                      <span>Edit</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDelete(recipe)}
+                      disabled={deleteRecipeMutation.isPending}
+                      aria-label={`Delete recipe ${recipe.name}`}
+                      className="h-7 px-2 text-xs text-ink-muted hover:text-terracotta-dark"
+                    >
+                      <Trash2 className="mr-1 h-3 w-3" />
+                      <span>Delete</span>
+                    </Button>
                   </div>
-                )}
-              </CardHeader>
-
-              <CardContent className="mt-4 border-t border-slate-800/60 p-0 pt-3">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                  Ingredients ({recipe.ingredients.length})
-                </span>
-                <ul className="mt-2 space-y-1 text-xs text-slate-300">
-                  {recipe.ingredients.map((ing, i) => (
-                    <li key={i} className="flex justify-between py-0.5">
-                      <span className="font-medium text-slate-200">{ing.displayName}</span>
-                      <span className="font-mono text-slate-400">
-                        {formatQuantityAmount(ing.amount)} {ing.unit}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </div>
-
-            <div className="mt-4 flex items-center justify-end border-t border-slate-800/40 pt-3 text-xs">
-              <div className="flex items-center space-x-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleEditClick(recipe)}
-                  aria-label={`Edit recipe ${recipe.name}`}
-                  className="h-7 px-2 text-xs text-slate-400 hover:text-white"
-                >
-                  <Pencil className="mr-1 h-3 w-3" />
-                  <span>Edit</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDelete(recipe)}
-                  disabled={deleteRecipeMutation.isPending}
-                  aria-label={`Delete recipe ${recipe.name}`}
-                  className="h-7 px-2 text-xs text-slate-400 hover:text-red-400"
-                >
-                  <Trash2 className="mr-1 h-3 w-3" />
-                  <span>Delete</span>
-                </Button>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

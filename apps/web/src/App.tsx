@@ -69,9 +69,17 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
     window.location.hash = tab;
   };
 
+  const [preselectedShoppingListIds, setPreselectedShoppingListIds] = useState<string[]>([]);
+
+  const handleSendToShoppingList = (recipeIds: string[]) => {
+    setPreselectedShoppingListIds(recipeIds);
+    setCurrentTab('shopping-list');
+    window.location.hash = 'shopping-list';
+  };
+
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-slate-950 font-sans text-slate-100 antialiased">
+      <div className="min-h-screen bg-sand font-sans text-ink antialiased">
         <Navigation currentTab={currentTab} onTabChange={handleTabChange} />
 
         <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -82,10 +90,13 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
                 onCancel={editingRecipe ? () => setEditingRecipe(null) : undefined}
                 onSuccess={() => setEditingRecipe(null)}
               />
-              <RecipeList onEditRecipe={(recipe) => setEditingRecipe(recipe)} />
+              <RecipeList
+                onEditRecipe={(recipe) => setEditingRecipe(recipe)}
+                onSendToShoppingList={handleSendToShoppingList}
+              />
             </div>
           ) : currentTab === 'shopping-list' ? (
-            <ShoppingListBuilder />
+            <ShoppingListBuilder initialSelectedRecipeIds={preselectedShoppingListIds} />
           ) : (
             <EventPlanner />
           )}

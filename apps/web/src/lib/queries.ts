@@ -76,6 +76,45 @@ export function useDeleteRecipe() {
   });
 }
 
+export interface BulkDeleteResult {
+  succeededIds: string[];
+  failedErrors: string[];
+}
+
+/**
+ * Mutation hook for deleting multiple recipes concurrently (DELETE /api/recipes/:id per id).
+ * Resolves with a partial-failure result rather than throwing, so callers can report which
+ * ids succeeded and which failed. Invalidates the shared ['recipes'] query cache once if any
+ * deletion succeeded.
+ */
+export function useBulkDeleteRecipes() {
+  const queryClient = useQueryClient();
+
+  return useMutation<BulkDeleteResult, Error, string[]>({
+    mutationFn: async (ids: string[]) => {
+      const results = await Promise.allSettled(ids.map((id) => api.deleteRecipe(id)));
+
+      const succeededIds: string[] = [];
+      const failedErrors: string[] = [];
+
+      results.forEach((res, idx) => {
+        if (res.status === 'fulfilled') {
+          succeededIds.push(ids[idx]);
+        } else {
+          failedErrors.push(res.reason instanceof Error ? res.reason.message : 'Unknown error');
+        }
+      });
+
+      return { succeededIds, failedErrors };
+    },
+    onSuccess: ({ succeededIds }) => {
+      if (succeededIds.length > 0) {
+        queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+      }
+    },
+  });
+}
+
 /**
  * Mutation hook for generating a consolidated shopping list (POST /api/shopping-list).
  */

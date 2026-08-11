@@ -14,9 +14,7 @@ import {
   Filter,
 } from 'lucide-react';
 import type { RecipeDto } from '../lib/api';
-import { api } from '../lib/api';
-import { useRecipes, useDeleteRecipe, RECIPES_QUERY_KEY } from '../lib/queries';
-import { useQueryClient } from '@tanstack/react-query';
+import { useRecipes, useDeleteRecipe, useBulkDeleteRecipes } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -32,7 +30,7 @@ export interface RecipeListProps {
 export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToShoppingList }) => {
   const { data: recipes = [], isLoading, isError, error, refetch } = useRecipes();
   const deleteRecipeMutation = useDeleteRecipe();
-  const queryClient = useQueryClient();
+  const bulkDeleteMutation = useBulkDeleteRecipes();
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -41,7 +39,6 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   // Bulk Selection State
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
   const [bulkActionError, setBulkActionError] = useState<string | null>(null);
-  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Available dietary tag options
   const AVAILABLE_TAGS = ['Vegetarian', 'Vegan'];
@@ -108,30 +105,9 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
       return;
     }
 
-    setIsBulkDeleting(true);
     setBulkActionError(null);
 
-    // Concurrently execute all deletions using api.deleteRecipe
-    const results = await Promise.allSettled(selectedRecipeIds.map((id) => api.deleteRecipe(id)));
-
-    const succeededIds: string[] = [];
-    const failedErrors: string[] = [];
-
-    results.forEach((res, idx) => {
-      const recipeId = selectedRecipeIds[idx];
-      if (res.status === 'fulfilled') {
-        succeededIds.push(recipeId);
-      } else {
-        const errReason = res.reason instanceof Error ? res.reason.message : 'Unknown error';
-        failedErrors.push(errReason);
-      }
-    });
-
-    if (succeededIds.length > 0) {
-      await queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
-    }
-
-    setIsBulkDeleting(false);
+    const { succeededIds, failedErrors } = await bulkDeleteMutation.mutateAsync(selectedRecipeIds);
 
     if (failedErrors.length === 0) {
       // Full success: reset selections to empty
@@ -368,11 +344,11 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
               variant="destructive"
               size="sm"
               onClick={handleBulkDelete}
-              disabled={isBulkDeleting}
+              disabled={bulkDeleteMutation.isPending}
               className="h-8 space-x-1.5 text-xs font-semibold"
             >
               <Trash2 className="h-3.5 w-3.5" />
-              <span>{isBulkDeleting ? 'Deleting...' : 'Delete Selected'}</span>
+              <span>{bulkDeleteMutation.isPending ? 'Deleting...' : 'Delete Selected'}</span>
             </Button>
 
             <Button

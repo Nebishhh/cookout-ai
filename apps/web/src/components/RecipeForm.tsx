@@ -36,6 +36,210 @@ const SUPPORTED_UNITS_BY_CATEGORY = [
   { category: 'Count', units: ['count', 'clove', 'egg', 'onion'] },
 ];
 
+interface ImportableIngredient {
+  ingredientId: string;
+  displayName: string;
+  amount: number;
+  unit: string;
+}
+
+function toIngredientInputs(ingredients: ImportableIngredient[]): IngredientInput[] {
+  return ingredients.map((ing) => ({
+    ingredientId: ing.ingredientId,
+    displayName: ing.displayName,
+    amount: ing.amount,
+    unit: ing.unit,
+  }));
+}
+
+interface ImportDraft {
+  name: string;
+  baseServings: number;
+  dietaryTags?: string[];
+  ingredients: ImportableIngredient[];
+}
+
+/**
+ * Maps an AI-parsed import draft (text/URL/image/camera) onto the recipe form's field
+ * shape. The single seam for "how a draft becomes form state" — every import mode
+ * applies its result through this, rather than repeating the field mapping.
+ */
+function applyImportDraft(draft: ImportDraft) {
+  return {
+    name: draft.name,
+    baseServings: draft.baseServings,
+    dietaryTags: draft.dietaryTags ?? [],
+    ingredients: toIngredientInputs(draft.ingredients),
+  };
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const IMAGE_CAPTURE_COPY = {
+  image: {
+    inputId: 'import-image-input',
+    capture: undefined as 'environment' | undefined,
+    label:
+      'Upload an image of a recipe card, cookbook page, or handwritten note (JPEG, PNG, WebP up to 8MB)',
+    DropzoneIcon: Upload,
+    dropzoneText: 'Drag and drop an image file here, or click to browse',
+    importIdleLabel: 'Import from Image',
+    importPendingLabel: 'Analyzing Image with AI...',
+  },
+  camera: {
+    inputId: 'import-camera-input',
+    capture: 'environment' as 'environment' | undefined,
+    label:
+      'Take a photo of a recipe card, cookbook page, or handwritten note using your camera (JPEG, PNG, WebP up to 8MB)',
+    DropzoneIcon: Camera,
+    dropzoneText: 'Tap to open camera & take a picture, or drag and drop a file',
+    importIdleLabel: 'Import from Picture',
+    importPendingLabel: 'Analyzing Photo with AI...',
+  },
+} as const;
+
+interface ImageCaptureFieldProps {
+  mode: 'image' | 'camera';
+  selectedFile: File | null;
+  previewUrl: string | null;
+  isDragging: boolean;
+  isImporting: boolean;
+  onDragStateChange: (dragging: boolean) => void;
+  onFileSelected: (file: File) => void;
+  onRemoveFile: () => void;
+  onImport: () => void;
+}
+
+/**
+ * One seam for both image-upload and camera-capture import modes — they differ only in
+ * copy, icon, and the input's `capture` attribute, all resolved from IMAGE_CAPTURE_COPY.
+ * The drop-zone, preview, and submit-button behavior live here exactly once.
+ */
+const ImageCaptureField: React.FC<ImageCaptureFieldProps> = ({
+  mode,
+  selectedFile,
+  previewUrl,
+  isDragging,
+  isImporting,
+  onDragStateChange,
+  onFileSelected,
+  onRemoveFile,
+  onImport,
+}) => {
+  const copy = IMAGE_CAPTURE_COPY[mode];
+
+  return (
+    <>
+      <Label htmlFor={copy.inputId} className="text-xs text-slate-300">
+        {copy.label}
+      </Label>
+
+      <input
+        id={copy.inputId}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        capture={copy.capture}
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onFileSelected(file);
+        }}
+      />
+
+      {!selectedFile ? (
+        <button
+          type="button"
+          onDragOver={(e) => {
+            e.preventDefault();
+            onDragStateChange(true);
+          }}
+          onDragLeave={() => onDragStateChange(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            onDragStateChange(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) onFileSelected(file);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              document.getElementById(copy.inputId)?.click();
+            }
+          }}
+          onClick={() => document.getElementById(copy.inputId)?.click()}
+          className={`w-full flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors cursor-pointer ${
+            isDragging
+              ? 'border-amber-400 bg-amber-500/10'
+              : 'border-slate-700 bg-slate-900/60 hover:border-slate-600 hover:bg-slate-900/80'
+          }`}
+        >
+          <copy.DropzoneIcon className="mb-2 h-8 w-8 text-amber-400" />
+          <p className="text-xs font-medium text-slate-200">{copy.dropzoneText}</p>
+          <p className="mt-1 text-[11px] text-slate-400">JPEG, PNG, or WebP (max 8MB)</p>
+        </button>
+      ) : (
+        <div className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/90 p-3">
+          <div className="flex items-center space-x-3">
+            {previewUrl ? (
+              <img
+                src={previewUrl}
+                alt="Recipe preview"
+                className="h-12 w-12 rounded-lg object-cover border border-slate-700"
+              />
+            ) : (
+              <ImageIcon className="h-8 w-8 text-amber-400" />
+            )}
+            <div className="text-left">
+              <p className="text-xs font-medium text-slate-200 truncate max-w-[200px] sm:max-w-[300px]">
+                {selectedFile.name}
+              </p>
+              <p className="text-[11px] text-slate-400">{formatFileSize(selectedFile.size)}</p>
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onRemoveFile}
+            disabled={isImporting}
+            className="h-8 px-2 text-xs text-slate-400 hover:text-red-400"
+          >
+            <X className="h-4 w-4" />
+            <span>Remove</span>
+          </Button>
+        </div>
+      )}
+
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          onClick={onImport}
+          disabled={isImporting || !selectedFile}
+          className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+        >
+          {isImporting ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
+              <span>{copy.importPendingLabel}</span>
+            </>
+          ) : (
+            <>
+              <Sparkles className="h-3.5 w-3.5 text-black" />
+              <span>{copy.importIdleLabel}</span>
+            </>
+          )}
+        </Button>
+      </div>
+    </>
+  );
+};
+
 export interface RecipeFormProps {
   recipe?: RecipeDto | null;
   onSuccess?: () => void;
@@ -49,12 +253,9 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
   const [baseServings, setBaseServings] = useState<number>(recipe?.baseServings || 4);
   const [dietaryTags, setDietaryTags] = useState<string[]>(recipe?.dietaryTags || []);
   const [ingredients, setIngredients] = useState<IngredientInput[]>(
-    recipe?.ingredients.map((ing) => ({
-      ingredientId: ing.ingredientId,
-      displayName: ing.displayName,
-      amount: ing.amount,
-      unit: ing.unit,
-    })) || [{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]
+    recipe
+      ? toIngredientInputs(recipe.ingredients)
+      : [{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]
   );
 
   const [importText, setImportText] = useState('');
@@ -89,14 +290,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       setName(recipe.name);
       setBaseServings(recipe.baseServings);
       setDietaryTags(recipe.dietaryTags || []);
-      setIngredients(
-        recipe.ingredients.map((ing) => ({
-          ingredientId: ing.ingredientId,
-          displayName: ing.displayName,
-          amount: ing.amount,
-          unit: ing.unit,
-        }))
-      );
+      setIngredients(toIngredientInputs(recipe.ingredients));
     } else {
       setName('');
       setBaseServings(4);
@@ -188,17 +382,11 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
     importRecipeTextMutation.mutate(importText.trim(), {
       onSuccess: (draft) => {
-        setName(draft.name);
-        setBaseServings(draft.baseServings);
-        setDietaryTags(draft.dietaryTags || []);
-        setIngredients(
-          draft.ingredients.map((ing) => ({
-            ingredientId: ing.ingredientId,
-            displayName: ing.displayName,
-            amount: ing.amount,
-            unit: ing.unit,
-          }))
-        );
+        const applied = applyImportDraft(draft);
+        setName(applied.name);
+        setBaseServings(applied.baseServings);
+        setDietaryTags(applied.dietaryTags);
+        setIngredients(applied.ingredients);
         setImportText('');
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -219,17 +407,11 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
     importRecipeUrlMutation.mutate(importUrl.trim(), {
       onSuccess: (draft) => {
-        setName(draft.name);
-        setBaseServings(draft.baseServings);
-        setDietaryTags(draft.dietaryTags || []);
-        setIngredients(
-          draft.ingredients.map((ing) => ({
-            ingredientId: ing.ingredientId,
-            displayName: ing.displayName,
-            amount: ing.amount,
-            unit: ing.unit,
-          }))
-        );
+        const applied = applyImportDraft(draft);
+        setName(applied.name);
+        setBaseServings(applied.baseServings);
+        setDietaryTags(applied.dietaryTags);
+        setIngredients(applied.ingredients);
         setImportUrl('');
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -250,17 +432,11 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
     importRecipeImageMutation.mutate(selectedImageFile, {
       onSuccess: (draft) => {
-        setName(draft.name);
-        setBaseServings(draft.baseServings);
-        setDietaryTags(draft.dietaryTags || []);
-        setIngredients(
-          draft.ingredients.map((ing) => ({
-            ingredientId: ing.ingredientId,
-            displayName: ing.displayName,
-            amount: ing.amount,
-            unit: ing.unit,
-          }))
-        );
+        const applied = applyImportDraft(draft);
+        setName(applied.name);
+        setBaseServings(applied.baseServings);
+        setDietaryTags(applied.dietaryTags);
+        setIngredients(applied.ingredients);
         handleRemoveImageFile();
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -340,13 +516,6 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         },
       });
     }
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024 * 1024) {
-      return `${(bytes / 1024).toFixed(1)} KB`;
-    }
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const isPending = createRecipeMutation.isPending || updateRecipeMutation.isPending;
@@ -552,228 +721,31 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                 )}
 
                 {importMode === 'image' && (
-                  <>
-                    <Label htmlFor="import-image-input" className="text-xs text-slate-300">
-                      Upload an image of a recipe card, cookbook page, or handwritten note (JPEG,
-                      PNG, WebP up to 8MB)
-                    </Label>
-
-                    <input
-                      id="import-image-input"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleFileSelection(file);
-                      }}
-                    />
-
-                    {!selectedImageFile ? (
-                      <button
-                        type="button"
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          setIsDragging(true);
-                        }}
-                        onDragLeave={() => setIsDragging(false)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setIsDragging(false);
-                          const file = e.dataTransfer.files?.[0];
-                          if (file) handleFileSelection(file);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            document.getElementById('import-image-input')?.click();
-                          }
-                        }}
-                        onClick={() => document.getElementById('import-image-input')?.click()}
-                        className={`w-full flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors cursor-pointer ${
-                          isDragging
-                            ? 'border-amber-400 bg-amber-500/10'
-                            : 'border-slate-700 bg-slate-900/60 hover:border-slate-600 hover:bg-slate-900/80'
-                        }`}
-                      >
-                        <Upload className="mb-2 h-8 w-8 text-amber-400" />
-                        <p className="text-xs font-medium text-slate-200">
-                          Drag and drop an image file here, or click to browse
-                        </p>
-                        <p className="mt-1 text-[11px] text-slate-400">
-                          JPEG, PNG, or WebP (max 8MB)
-                        </p>
-                      </button>
-                    ) : (
-                      <div className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/90 p-3">
-                        <div className="flex items-center space-x-3">
-                          {imagePreviewUrl ? (
-                            <img
-                              src={imagePreviewUrl}
-                              alt="Recipe preview"
-                              className="h-12 w-12 rounded-lg object-cover border border-slate-700"
-                            />
-                          ) : (
-                            <ImageIcon className="h-8 w-8 text-amber-400" />
-                          )}
-                          <div className="text-left">
-                            <p className="text-xs font-medium text-slate-200 truncate max-w-[200px] sm:max-w-[300px]">
-                              {selectedImageFile.name}
-                            </p>
-                            <p className="text-[11px] text-slate-400">
-                              {formatFileSize(selectedImageFile.size)}
-                            </p>
-                          </div>
-                        </div>
-
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={handleRemoveImageFile}
-                          disabled={importRecipeImageMutation.isPending}
-                          className="h-8 px-2 text-xs text-slate-400 hover:text-red-400"
-                        >
-                          <X className="h-4 w-4" />
-                          <span>Remove</span>
-                        </Button>
-                      </div>
-                    )}
-
-                    <div className="flex justify-end">
-                      <Button
-                        type="button"
-                        onClick={handleImportImage}
-                        disabled={importRecipeImageMutation.isPending || !selectedImageFile}
-                        className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
-                      >
-                        {importRecipeImageMutation.isPending ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
-                            <span>Analyzing Image with AI...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="h-3.5 w-3.5 text-black" />
-                            <span>Import from Image</span>
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </>
+                  <ImageCaptureField
+                    mode="image"
+                    selectedFile={selectedImageFile}
+                    previewUrl={imagePreviewUrl}
+                    isDragging={isDragging}
+                    isImporting={importRecipeImageMutation.isPending}
+                    onDragStateChange={setIsDragging}
+                    onFileSelected={handleFileSelection}
+                    onRemoveFile={handleRemoveImageFile}
+                    onImport={handleImportImage}
+                  />
                 )}
 
                 {importMode === 'camera' && (
-                  <>
-                    <Label htmlFor="import-camera-input" className="text-xs text-slate-300">
-                      Take a photo of a recipe card, cookbook page, or handwritten note using your
-                      camera (JPEG, PNG, WebP up to 8MB)
-                    </Label>
-
-                    <input
-                      id="import-camera-input"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      capture="environment"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleFileSelection(file);
-                      }}
-                    />
-
-                    {!selectedImageFile ? (
-                      <button
-                        type="button"
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          setIsDragging(true);
-                        }}
-                        onDragLeave={() => setIsDragging(false)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setIsDragging(false);
-                          const file = e.dataTransfer.files?.[0];
-                          if (file) handleFileSelection(file);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            document.getElementById('import-camera-input')?.click();
-                          }
-                        }}
-                        onClick={() => document.getElementById('import-camera-input')?.click()}
-                        className={`w-full flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors cursor-pointer ${
-                          isDragging
-                            ? 'border-amber-400 bg-amber-500/10'
-                            : 'border-slate-700 bg-slate-900/60 hover:border-slate-600 hover:bg-slate-900/80'
-                        }`}
-                      >
-                        <Camera className="mb-2 h-8 w-8 text-amber-400" />
-                        <p className="text-xs font-medium text-slate-200">
-                          Tap to open camera & take a picture, or drag and drop a file
-                        </p>
-                        <p className="mt-1 text-[11px] text-slate-400">
-                          JPEG, PNG, or WebP (max 8MB)
-                        </p>
-                      </button>
-                    ) : (
-                      <div className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/90 p-3">
-                        <div className="flex items-center space-x-3">
-                          {imagePreviewUrl ? (
-                            <img
-                              src={imagePreviewUrl}
-                              alt="Recipe preview"
-                              className="h-12 w-12 rounded-lg object-cover border border-slate-700"
-                            />
-                          ) : (
-                            <ImageIcon className="h-8 w-8 text-amber-400" />
-                          )}
-                          <div className="text-left">
-                            <p className="text-xs font-medium text-slate-200 truncate max-w-[200px] sm:max-w-[300px]">
-                              {selectedImageFile.name}
-                            </p>
-                            <p className="text-[11px] text-slate-400">
-                              {formatFileSize(selectedImageFile.size)}
-                            </p>
-                          </div>
-                        </div>
-
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={handleRemoveImageFile}
-                          disabled={importRecipeImageMutation.isPending}
-                          className="h-8 px-2 text-xs text-slate-400 hover:text-red-400"
-                        >
-                          <X className="h-4 w-4" />
-                          <span>Remove</span>
-                        </Button>
-                      </div>
-                    )}
-
-                    <div className="flex justify-end">
-                      <Button
-                        type="button"
-                        onClick={handleImportImage}
-                        disabled={importRecipeImageMutation.isPending || !selectedImageFile}
-                        className="space-x-2 bg-amber-500 px-4 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
-                      >
-                        {importRecipeImageMutation.isPending ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-black" />
-                            <span>Analyzing Photo with AI...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="h-3.5 w-3.5 text-black" />
-                            <span>Import from Picture</span>
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </>
+                  <ImageCaptureField
+                    mode="camera"
+                    selectedFile={selectedImageFile}
+                    previewUrl={imagePreviewUrl}
+                    isDragging={isDragging}
+                    isImporting={importRecipeImageMutation.isPending}
+                    onDragStateChange={setIsDragging}
+                    onFileSelected={handleFileSelection}
+                    onRemoveFile={handleRemoveImageFile}
+                    onImport={handleImportImage}
+                  />
                 )}
               </div>
             )}

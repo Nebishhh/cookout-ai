@@ -40,8 +40,10 @@ const MOCK_VALID_GEMINI_RECIPE_JSON = JSON.stringify({
 describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
   const originalApiKey = process.env.GEMINI_API_KEY;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.GEMINI_API_KEY = 'test-fake-gemini-api-key';
+    await prisma.ingredientLine.deleteMany();
+    await prisma.recipe.deleteMany();
   });
 
   afterEach(() => {

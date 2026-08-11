@@ -12,9 +12,11 @@ vi.mock('./geminiClient.js', () => ({
 }));
 
 describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     process.env.GEMINI_API_KEY = 'test-gemini-api-key';
+    await prisma.ingredientLine.deleteMany();
+    await prisma.recipe.deleteMany();
   });
 
   describe('extractRecipeText Module Tests', () => {

@@ -788,7 +788,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         )}
 
         {displayError && (
-          <Alert variant="destructive" className="mb-6 border-red-500/30 bg-red-500/10">
+          <Alert className="mb-6 border-red-500/30 bg-red-500/10">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>{displayError}</AlertDescription>
           </Alert>

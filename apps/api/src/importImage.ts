@@ -2,7 +2,11 @@ import type { Request, Response } from 'express';
 import { DomainError } from '@cookout-ai/domain';
 import { parseAndValidateImageStream, ImageValidationError } from './imageValidator.js';
 import { parseRecipeImageWithGeminiTimeout } from './geminiClient.js';
-import { validateAndCreateDomainRecipe, type CreateRecipeInput } from './recipeMapper.js';
+import {
+  validateAndCreateDomainRecipe,
+  stepsFromInstructions,
+  type CreateRecipeInput,
+} from './recipeMapper.js';
 
 export interface ImportRecipeImageResponseDto {
   name: string;
@@ -14,6 +18,7 @@ export interface ImportRecipeImageResponseDto {
     amount: number;
     unit: string;
   }[];
+  instructions: string[];
 }
 
 export async function handleImportImage(req: Request, res: Response): Promise<void> {
@@ -54,7 +59,11 @@ export async function handleImportImage(req: Request, res: Response): Promise<vo
     // Domain validation via domain layer factory (zero persistence)
     let validDomainRecipe;
     try {
-      validDomainRecipe = validateAndCreateDomainRecipe(parsedJson as unknown as CreateRecipeInput);
+      const candidate = parsedJson as unknown as CreateRecipeInput & { instructions?: unknown };
+      validDomainRecipe = validateAndCreateDomainRecipe({
+        ...candidate,
+        steps: stepsFromInstructions(candidate.instructions),
+      });
     } catch (err) {
       if (
         err instanceof DomainError ||
@@ -79,6 +88,7 @@ export async function handleImportImage(req: Request, res: Response): Promise<vo
         amount: ing.quantity.amount,
         unit: ing.quantity.unit,
       })),
+      instructions: validDomainRecipe.steps.map((step) => step.instruction),
     };
 
     res.status(200).json(responseDto);

@@ -11,6 +11,7 @@ CRITICAL INSTRUCTIONS:
    ["g", "kg", "oz", "lb", "ml", "l", "tsp", "tbsp", "cup", "fl oz", "count", "clove", "egg", "onion"]
    If an ingredient has no unit (e.g., "2 apples"), use "count".
 4. Standardize dietaryTags if explicitly stated or clearly inferrable: ["Vegetarian", "Vegan"]. If omnivore / contains meat / unknown, return an empty array [].
+5. Extract cooking steps as "instructions": an ordered array of plain strings, one instruction per array element, in the order they should be performed. If the input has no instructions (e.g. an ingredients-only recipe card), return an empty array [].
 
 OUTPUT JSON SCHEMA:
 {
@@ -24,6 +25,10 @@ OUTPUT JSON SCHEMA:
       "amount": 500,
       "unit": "g"
     }
+  ],
+  "instructions": [
+    "Preheat the oven to 400°F.",
+    "Season the chicken breast and place on a baking sheet."
   ]
 }`;
 

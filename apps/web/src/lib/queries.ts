@@ -78,6 +78,7 @@ export function useCreateRecipe() {
         baseServings: data.baseServings,
         dietaryTags: data.dietaryTags ?? [],
         ingredients: enrichIngredientsWithCategory(data.ingredients),
+        steps: data.steps ?? [],
       };
       queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) => [
         ...old,
@@ -126,6 +127,7 @@ export function useUpdateRecipe() {
                 baseServings: data.baseServings,
                 dietaryTags: data.dietaryTags ?? [],
                 ingredients: enrichIngredientsWithCategory(data.ingredients),
+                steps: data.steps ?? [],
               }
             : recipe
         )

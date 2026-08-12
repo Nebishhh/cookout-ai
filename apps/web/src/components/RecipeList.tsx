@@ -492,6 +492,22 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
                           </li>
                         ))}
                       </ul>
+
+                      {recipe.steps && recipe.steps.length > 0 && (
+                        <>
+                          <span className="mt-4 block border-t border-stone/40 pt-3 text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+                            Instructions ({recipe.steps.length})
+                          </span>
+                          <ol className="mt-2 space-y-1.5 text-xs text-ink">
+                            {recipe.steps.map((step, i) => (
+                              <li key={i} className="flex gap-2">
+                                <span className="shrink-0 font-mono text-ink-muted">{i + 1}.</span>
+                                <span>{step.instruction}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        </>
+                      )}
                     </CardContent>
                   </div>
 

@@ -15,6 +15,7 @@ import {
   validateAndCreateDomainRecipe,
   toDomainRecipe,
   toRecipeJSON,
+  stepsFromInstructions,
   type CreateRecipeInput,
 } from './recipeMapper.js';
 import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
@@ -113,7 +114,11 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
     // Validate draft structure against domain rules (without persisting)
     let domainRecipe;
     try {
-      domainRecipe = validateAndCreateDomainRecipe(parsedCandidate as CreateRecipeInput);
+      const candidate = parsedCandidate as CreateRecipeInput & { instructions?: unknown };
+      domainRecipe = validateAndCreateDomainRecipe({
+        ...candidate,
+        steps: stepsFromInstructions(candidate.instructions),
+      });
     } catch (err) {
       if (err instanceof DomainError) {
         return res.status(422).json({
@@ -135,6 +140,7 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
         amount: ing.quantity.amount,
         unit: ing.quantity.unit,
       })),
+      instructions: domainRecipe.steps.map((step) => step.instruction),
     });
   } catch (err) {
     next(err);
@@ -260,7 +266,11 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
     // Step 5: Validate draft against domain rules
     let domainRecipe;
     try {
-      domainRecipe = validateAndCreateDomainRecipe(parsedCandidate as CreateRecipeInput);
+      const candidate = parsedCandidate as CreateRecipeInput & { instructions?: unknown };
+      domainRecipe = validateAndCreateDomainRecipe({
+        ...candidate,
+        steps: stepsFromInstructions(candidate.instructions),
+      });
     } catch (err) {
       if (err instanceof DomainError) {
         return res.status(422).json({
@@ -282,6 +292,7 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
         amount: ing.quantity.amount,
         unit: ing.quantity.unit,
       })),
+      instructions: domainRecipe.steps.map((step) => step.instruction),
     });
   } catch (err) {
     next(err);
@@ -312,9 +323,16 @@ app.post('/api/recipes', async (req: Request, res: Response, next: NextFunction)
             position: idx,
           })),
         },
+        steps: {
+          create: domainRecipe.steps.map((step, idx) => ({
+            instruction: step.instruction,
+            position: idx,
+          })),
+        },
       },
       include: {
         ingredients: true,
+        steps: true,
       },
     });
 
@@ -332,6 +350,7 @@ app.get('/api/recipes', async (_req: Request, res: Response, next: NextFunction)
     const prismaRecipes = await prisma.recipe.findMany({
       include: {
         ingredients: true,
+        steps: true,
       },
       orderBy: {
         createdAt: 'desc',
@@ -353,6 +372,7 @@ app.get('/api/recipes/:id', async (req: Request, res: Response, next: NextFuncti
       where: { id },
       include: {
         ingredients: true,
+        steps: true,
       },
     });
 
@@ -388,6 +408,9 @@ app.put('/api/recipes/:id', async (req: Request, res: Response, next: NextFuncti
       await tx.ingredientLine.deleteMany({
         where: { recipeId: id },
       });
+      await tx.recipeStep.deleteMany({
+        where: { recipeId: id },
+      });
 
       return await tx.recipe.update({
         where: { id },
@@ -404,9 +427,16 @@ app.put('/api/recipes/:id', async (req: Request, res: Response, next: NextFuncti
               position: idx,
             })),
           },
+          steps: {
+            create: domainRecipe.steps.map((step, idx) => ({
+              instruction: step.instruction,
+              position: idx,
+            })),
+          },
         },
         include: {
           ingredients: true,
+          steps: true,
         },
       });
     });
@@ -463,6 +493,7 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
         where: { id: recipeId },
         include: {
           ingredients: true,
+          steps: true,
         },
       });
 
@@ -539,6 +570,7 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
         where: { id },
         include: {
           ingredients: true,
+          steps: true,
         },
       });
 

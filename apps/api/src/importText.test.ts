@@ -34,6 +34,7 @@ describe('POST /api/recipes/import-text', () => {
         { ingredientId: 'spaghetti', displayName: 'Spaghetti', amount: 400, unit: 'g' },
         { ingredientId: 'egg', displayName: 'Egg', amount: 4, unit: 'egg' },
       ],
+      instructions: ['Boil the spaghetti.', 'Toss with egg and cheese off the heat.'],
     });
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(validRecipeJSON);
@@ -51,6 +52,7 @@ describe('POST /api/recipes/import-text', () => {
         { ingredientId: 'spaghetti', displayName: 'Spaghetti', amount: 400, unit: 'g' },
         { ingredientId: 'egg', displayName: 'Egg', amount: 4, unit: 'egg' },
       ],
+      instructions: ['Boil the spaghetti.', 'Toss with egg and cheese off the heat.'],
     });
 
     expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledWith(

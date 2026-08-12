@@ -6,6 +6,7 @@ import {
   InvalidRecipeError,
   Quantity,
   Recipe,
+  RecipeStep,
   scaleRecipe,
 } from '../index.js';
 
@@ -108,6 +109,59 @@ describe('Recipe Domain Model & Scaling', () => {
       expect(() => {
         // @ts-expect-error mutating readonly array for test
         recipe.ingredients.push(new IngredientLine('butter', 'Butter', new Quantity(1, 'tbsp')));
+      }).toThrow();
+    });
+  });
+
+  describe('steps', () => {
+    it('defaults to an empty array when omitted', () => {
+      const recipe = new Recipe('recipe-1', 'Pancakes', 4, createValidIngredients());
+      expect(recipe.steps).toEqual([]);
+    });
+
+    it('accepts a valid array of RecipeStep', () => {
+      const steps = [
+        new RecipeStep('Mix dry ingredients.'),
+        new RecipeStep('Add wet ingredients.'),
+      ];
+      const recipe = new Recipe('recipe-1', 'Pancakes', 4, createValidIngredients(), [], steps);
+      expect(recipe.steps).toHaveLength(2);
+      expect(recipe.steps[0].instruction).toBe('Mix dry ingredients.');
+    });
+
+    it('rejects a non-array steps value', () => {
+      expect(
+        () =>
+          // @ts-expect-error testing invalid input type
+          new Recipe('recipe-1', 'Pancakes', 4, createValidIngredients(), [], 'not-an-array')
+      ).toThrow(InvalidRecipeError);
+    });
+
+    it('rejects an array containing non-RecipeStep elements', () => {
+      expect(
+        () =>
+          new Recipe(
+            'recipe-1',
+            'Pancakes',
+            4,
+            createValidIngredients(),
+            [],
+            [
+              // @ts-expect-error testing invalid element type
+              'not-a-recipe-step',
+            ]
+          )
+      ).toThrow(InvalidRecipeError);
+    });
+
+    it('is frozen and rejects mutation', () => {
+      const steps = [new RecipeStep('Mix dry ingredients.')];
+      const recipe = new Recipe('recipe-1', 'Pancakes', 4, createValidIngredients(), [], steps);
+
+      expect(Object.isFrozen(recipe.steps)).toBe(true);
+      expect(() => {
+        // @ts-expect-error mutating readonly array for test
+        recipe.steps.push(new RecipeStep('Extra step.'));
       }).toThrow();
     });
   });

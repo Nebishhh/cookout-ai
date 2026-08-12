@@ -18,11 +18,16 @@ export interface IngredientInput {
   unit: string;
 }
 
+export interface RecipeStepInput {
+  instruction: string;
+}
+
 export interface CreateRecipeInput {
   name: string;
   baseServings: number;
   dietaryTags?: string[];
   ingredients: IngredientInput[];
+  steps?: RecipeStepInput[];
 }
 
 export interface RecipeDto {
@@ -37,6 +42,7 @@ export interface RecipeDto {
     unit: string;
     category: string;
   }>;
+  steps: RecipeStepInput[];
 }
 
 export interface ShoppingListRequestItem {
@@ -169,6 +175,7 @@ export interface ImportRecipeTextResponseDto {
     amount: number;
     unit: string;
   }>;
+  instructions: string[];
 }
 
 export const api = {

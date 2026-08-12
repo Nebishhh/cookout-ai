@@ -15,6 +15,7 @@ describe('CookOut AI API Endpoints', () => {
     // Ensure test database has schema applied
     try {
       await prisma.$executeRawUnsafe('DELETE FROM IngredientLine');
+      await prisma.$executeRawUnsafe('DELETE FROM RecipeStep');
       await prisma.$executeRawUnsafe('DELETE FROM Recipe');
     } catch {
       // Table creation handled by initial migration/db push
@@ -24,6 +25,7 @@ describe('CookOut AI API Endpoints', () => {
   beforeEach(async () => {
     // Clean database before each test
     await prisma.ingredientLine.deleteMany();
+    await prisma.recipeStep.deleteMany();
     await prisma.recipe.deleteMany();
   });
 
@@ -65,6 +67,37 @@ describe('CookOut AI API Endpoints', () => {
       expect(getRes.body.id).toBe(recipeId);
       expect(getRes.body.name).toBe('Classic Pancakes');
       expect(getRes.body.ingredients[0].ingredientId).toBe('flour');
+    });
+
+    it('creates a recipe without steps (defaults to empty array) and one with ordered steps', async () => {
+      const noStepsRecipe = {
+        name: 'Steps-less Recipe',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
+      };
+      const noStepsRes = await request(app).post('/api/recipes').send(noStepsRecipe);
+      expect(noStepsRes.status).toBe(201);
+      expect(noStepsRes.body.steps).toEqual([]);
+
+      const withStepsRecipe = {
+        name: 'Classic Pancakes',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' }],
+        steps: [{ instruction: 'Mix dry ingredients.' }, { instruction: 'Add wet ingredients.' }],
+      };
+      const createRes = await request(app).post('/api/recipes').send(withStepsRecipe);
+      expect(createRes.status).toBe(201);
+      expect(createRes.body.steps).toEqual([
+        { instruction: 'Mix dry ingredients.' },
+        { instruction: 'Add wet ingredients.' },
+      ]);
+
+      const getRes = await request(app).get(`/api/recipes/${createRes.body.id}`);
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.steps).toEqual([
+        { instruction: 'Mix dry ingredients.' },
+        { instruction: 'Add wet ingredients.' },
+      ]);
     });
 
     it('rejects POST /api/recipes with invalid data (400) and persists nothing to database', async () => {
@@ -285,6 +318,32 @@ describe('CookOut AI API Endpoints', () => {
       expect(getRes.status).toBe(200);
       expect(getRes.body.name).toBe('New Fluffy Waffles');
       expect(getRes.body.ingredients[0].ingredientId).toBe('waffle-mix');
+    });
+
+    it('PUT /api/recipes/:id fully replaces the step list (old steps deleted, new steps persisted in order)', async () => {
+      const initialRecipe = {
+        name: 'Old Pancakes',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' }],
+        steps: [{ instruction: 'Old step one.' }, { instruction: 'Old step two.' }],
+      };
+      const createRes = await request(app).post('/api/recipes').send(initialRecipe);
+      const recipeId = createRes.body.id;
+
+      const updatedPayload = {
+        name: 'New Fluffy Waffles',
+        baseServings: 6,
+        ingredients: [
+          { ingredientId: 'waffle-mix', displayName: 'Waffle Mix', amount: 500, unit: 'g' },
+        ],
+        steps: [{ instruction: 'New step one.' }],
+      };
+      const putRes = await request(app).put(`/api/recipes/${recipeId}`).send(updatedPayload);
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.steps).toEqual([{ instruction: 'New step one.' }]);
+
+      const getRes = await request(app).get(`/api/recipes/${recipeId}`);
+      expect(getRes.body.steps).toEqual([{ instruction: 'New step one.' }]);
     });
 
     it('PUT /api/recipes/:id with invalid data (baseServings: 0) returns 400 AND the original recipe is unchanged', async () => {

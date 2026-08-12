@@ -115,7 +115,64 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         baseServings: 2,
         dietaryTags: ['Vegan'],
         ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'g' }],
+        steps: [],
       });
+    });
+  });
+
+  it('adding, reordering, and removing steps produces the correctly ordered payload on submit', async () => {
+    let capturedBody: unknown = null;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (url.toString().endsWith('/api/recipes') && options?.method === 'POST') {
+        capturedBody = JSON.parse(options.body as string);
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ id: 'new-r2', ...(capturedBody as object), dietaryTags: [] }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => [],
+      } as Response;
+    });
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText(/recipe name/i), {
+      target: { value: 'Waffles' },
+    });
+    fireEvent.change(screen.getByLabelText(/id \(e.g. flour\)/i), {
+      target: { value: 'flour' },
+    });
+    fireEvent.change(screen.getByLabelText(/display name/i), {
+      target: { value: 'Flour' },
+    });
+
+    // First step comes pre-existing (blank); fill it, then add a second and third.
+    fireEvent.change(screen.getByLabelText('Step 1'), { target: { value: 'First step.' } });
+    fireEvent.click(screen.getByRole('button', { name: /add step/i }));
+    fireEvent.change(screen.getByLabelText('Step 2'), { target: { value: 'Second step.' } });
+    fireEvent.click(screen.getByRole('button', { name: /add step/i }));
+    fireEvent.change(screen.getByLabelText('Step 3'), { target: { value: 'Third step.' } });
+
+    // Move the third step up once, so order becomes: First, Third, Second.
+    fireEvent.click(screen.getByLabelText('Move step 3 up'));
+
+    // Remove what is now the last step ("Second step.").
+    fireEvent.click(screen.getByLabelText('Remove step 3'));
+
+    fireEvent.click(screen.getByRole('button', { name: /create recipe/i }));
+
+    await waitFor(() => {
+      expect((capturedBody as { steps: unknown }).steps).toEqual([
+        { instruction: 'First step.' },
+        { instruction: 'Third step.' },
+      ]);
     });
   });
 
@@ -353,6 +410,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
             category: 'Volume',
           },
         ],
+        steps: [],
       },
     ];
 
@@ -394,6 +452,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         ingredients: [
           { ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup', category: 'Volume' },
         ],
+        steps: [],
       },
     ];
 
@@ -458,6 +517,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         baseServings: 6,
         dietaryTags: [],
         ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
+        steps: [],
       });
     });
   });
@@ -801,6 +861,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           { ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' },
           { ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' },
         ],
+        instructions: ['Mix dry ingredients.', 'Whisk in eggs and cook on a griddle.'],
       };
 
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
@@ -856,6 +917,10 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       const servingsInput = screen.getByLabelText(/base servings/i);
       expect(nameInput).toHaveValue("Grandma's Pancakes");
       expect(servingsInput).toHaveValue(4);
+
+      // Verify AI-extracted instructions pre-filled the step editor
+      expect(screen.getByLabelText('Step 1')).toHaveValue('Mix dry ingredients.');
+      expect(screen.getByLabelText('Step 2')).toHaveValue('Whisk in eggs and cook on a griddle.');
 
       // Verify review notice displayed
       expect(screen.getByText(/imported via ai — please review all fields/i)).toBeInTheDocument();
@@ -1039,6 +1104,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         ingredients: [
           { ingredientId: 'salt', displayName: 'Salt', amount: 1, unit: 'g', category: 'Mass' },
         ],
+        steps: [],
       };
 
       render(

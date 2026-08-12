@@ -10,12 +10,14 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
+  ArrowUp,
+  ArrowDown,
   Info,
   Upload,
   Image as ImageIcon,
   Camera,
 } from 'lucide-react';
-import type { IngredientInput, RecipeDto } from '../lib/api';
+import type { IngredientInput, RecipeStepInput, RecipeDto } from '../lib/api';
 import {
   useCreateRecipe,
   useUpdateRecipe,
@@ -53,11 +55,16 @@ function toIngredientInputs(ingredients: ImportableIngredient[]): IngredientInpu
   }));
 }
 
+function toStepInputs(steps: RecipeStepInput[]): RecipeStepInput[] {
+  return steps.map((step) => ({ instruction: step.instruction }));
+}
+
 interface ImportDraft {
   name: string;
   baseServings: number;
   dietaryTags?: string[];
   ingredients: ImportableIngredient[];
+  instructions?: string[];
 }
 
 /**
@@ -71,6 +78,7 @@ function applyImportDraft(draft: ImportDraft) {
     baseServings: draft.baseServings,
     dietaryTags: draft.dietaryTags ?? [],
     ingredients: toIngredientInputs(draft.ingredients),
+    steps: (draft.instructions ?? []).map((instruction) => ({ instruction })),
   };
 }
 
@@ -260,6 +268,11 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       ? toIngredientInputs(recipe.ingredients)
       : [{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]
   );
+  const [steps, setSteps] = useState<RecipeStepInput[]>(
+    recipe && recipe.steps && recipe.steps.length > 0
+      ? toStepInputs(recipe.steps)
+      : [{ instruction: '' }]
+  );
 
   const [importText, setImportText] = useState('');
   const [importUrl, setImportUrl] = useState('');
@@ -294,11 +307,15 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       setBaseServings(recipe.baseServings);
       setDietaryTags(recipe.dietaryTags || []);
       setIngredients(toIngredientInputs(recipe.ingredients));
+      setSteps(
+        recipe.steps && recipe.steps.length > 0 ? toStepInputs(recipe.steps) : [{ instruction: '' }]
+      );
     } else {
       setName('');
       setBaseServings(4);
       setDietaryTags([]);
       setIngredients([{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]);
+      setSteps([{ instruction: '' }]);
     }
     setValidationError(null);
     setSuccessMessage(null);
@@ -336,6 +353,30 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     setIngredients((prev) =>
       prev.map((ing, i) => (i === index ? { ...ing, [field]: value } : ing))
     );
+  };
+
+  const handleAddStep = () => {
+    setSteps((prev) => [...prev, { instruction: '' }]);
+  };
+
+  const handleRemoveStep = (index: number) => {
+    setSteps((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleStepChange = (index: number, value: string) => {
+    setSteps((prev) =>
+      prev.map((step, i) => (i === index ? { ...step, instruction: value } : step))
+    );
+  };
+
+  const handleMoveStep = (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    setSteps((prev) => {
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return next;
+    });
   };
 
   const handleFileSelection = (file: File) => {
@@ -390,6 +431,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         setBaseServings(applied.baseServings);
         setDietaryTags(applied.dietaryTags);
         setIngredients(applied.ingredients);
+        setSteps(applied.steps.length > 0 ? applied.steps : [{ instruction: '' }]);
         setImportText('');
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -415,6 +457,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         setBaseServings(applied.baseServings);
         setDietaryTags(applied.dietaryTags);
         setIngredients(applied.ingredients);
+        setSteps(applied.steps.length > 0 ? applied.steps : [{ instruction: '' }]);
         setImportUrl('');
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -440,6 +483,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         setBaseServings(applied.baseServings);
         setDietaryTags(applied.dietaryTags);
         setIngredients(applied.ingredients);
+        setSteps(applied.steps.length > 0 ? applied.steps : [{ instruction: '' }]);
         handleRemoveImageFile();
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -494,6 +538,9 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         amount: ing.amount,
         unit: ing.unit,
       })),
+      steps: steps
+        .filter((step) => step.instruction.trim())
+        .map((step) => ({ instruction: step.instruction.trim() })),
     };
 
     if (isEditing && recipe) {
@@ -514,6 +561,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
           setBaseServings(4);
           setDietaryTags([]);
           setIngredients([{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]);
+          setSteps([{ instruction: '' }]);
           setReviewNotice(null);
           if (onSuccess) onSuccess();
         },
@@ -917,6 +965,79 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                       </Button>
                     )}
                   </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <Label>Instructions (Optional)</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleAddStep}
+                className="space-x-1 text-xs"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add Step</span>
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              {steps.map((step, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-start gap-2 rounded-xl border border-stone bg-paper p-3"
+                >
+                  <span className="mt-2 shrink-0 text-xs font-semibold text-ink-muted">
+                    {idx + 1}.
+                  </span>
+                  <textarea
+                    aria-label={`Step ${idx + 1}`}
+                    placeholder={`Step ${idx + 1} instructions...`}
+                    rows={2}
+                    value={step.instruction}
+                    onChange={(e) => handleStepChange(idx, e.target.value)}
+                    className="flex-1 rounded-lg border border-stone bg-canvas p-2 text-xs text-ink placeholder:text-ink-subtle focus:border-clay focus:outline-none focus:ring-1 focus:ring-clay"
+                  />
+                  <div className="flex flex-col gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleMoveStep(idx, 'up')}
+                      disabled={idx === 0}
+                      aria-label={`Move step ${idx + 1} up`}
+                      className="h-7 w-7 p-0 text-ink-subtle hover:text-clay-hover disabled:opacity-30"
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleMoveStep(idx, 'down')}
+                      disabled={idx === steps.length - 1}
+                      aria-label={`Move step ${idx + 1} down`}
+                      className="h-7 w-7 p-0 text-ink-subtle hover:text-clay-hover disabled:opacity-30"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  {steps.length > 1 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemoveStep(idx)}
+                      aria-label={`Remove step ${idx + 1}`}
+                      className="h-9 w-9 p-0 text-ink-subtle hover:text-clay-hover"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>

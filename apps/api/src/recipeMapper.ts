@@ -4,14 +4,17 @@ import {
   InvalidRecipeError,
   Quantity,
   Recipe,
+  RecipeStep,
 } from '@cookout-ai/domain';
 import type {
   Recipe as PrismaRecipe,
   IngredientLine as PrismaIngredientLine,
+  RecipeStep as PrismaRecipeStep,
 } from '@prisma/client';
 
-export type PrismaRecipeWithIngredients = PrismaRecipe & {
+export type PrismaRecipeWithRelations = PrismaRecipe & {
   ingredients: PrismaIngredientLine[];
+  steps: PrismaRecipeStep[];
 };
 
 export interface CreateIngredientInput {
@@ -21,11 +24,32 @@ export interface CreateIngredientInput {
   unit: string;
 }
 
+export interface CreateStepInput {
+  instruction: string;
+}
+
 export interface CreateRecipeInput {
   name: string;
   baseServings: number;
   dietaryTags?: string[];
   ingredients: CreateIngredientInput[];
+  steps?: CreateStepInput[];
+}
+
+/**
+ * Maps the AI-facing "instructions" field (an ordered array of plain strings, matching
+ * both the Gemini extraction schema and the frontend's ImportRecipeTextResponseDto) onto
+ * the "steps" shape validateAndCreateDomainRecipe expects (matching the real recipe-create
+ * payload shape used by POST /api/recipes). Only the AI-import boundary needs this
+ * translation — a real create/update request already sends "steps" directly.
+ */
+export function stepsFromInstructions(instructions: unknown): CreateStepInput[] {
+  if (!Array.isArray(instructions)) {
+    return [];
+  }
+  return instructions
+    .filter((instruction): instruction is string => typeof instruction === 'string')
+    .map((instruction) => ({ instruction }));
 }
 
 /**
@@ -65,14 +89,23 @@ export function validateAndCreateDomainRecipe(
     }
   }
 
-  return new Recipe(recipeId, input.name, input.baseServings, domainIngredients, tags);
+  const domainSteps = Array.isArray(input.steps)
+    ? input.steps.map((step) => {
+        if (!step || typeof step !== 'object') {
+          throw new InvalidRecipeError('Invalid step entry.');
+        }
+        return new RecipeStep(step.instruction);
+      })
+    : [];
+
+  return new Recipe(recipeId, input.name, input.baseServings, domainIngredients, tags, domainSteps);
 }
 
 /**
  * Reconstructs a domain Recipe object from Prisma database records.
  * Re-enforces domain invariants uniformly regardless of data source.
  */
-export function toDomainRecipe(prismaRecipe: PrismaRecipeWithIngredients): Recipe {
+export function toDomainRecipe(prismaRecipe: PrismaRecipeWithRelations): Recipe {
   let tags: DietaryTag[] = [];
   try {
     const parsed = JSON.parse(prismaRecipe.dietaryTagsJson);
@@ -92,12 +125,16 @@ export function toDomainRecipe(prismaRecipe: PrismaRecipeWithIngredients): Recip
     return new IngredientLine(ing.ingredientId, ing.displayName, quantity);
   });
 
+  const sortedSteps = [...prismaRecipe.steps].sort((a, b) => a.position - b.position);
+  const domainSteps = sortedSteps.map((step) => new RecipeStep(step.instruction));
+
   return new Recipe(
     prismaRecipe.id,
     prismaRecipe.name,
     prismaRecipe.baseServings,
     domainIngredients,
-    tags
+    tags,
+    domainSteps
   );
 }
 
@@ -116,6 +153,9 @@ export function toRecipeJSON(domainRecipe: Recipe) {
       amount: ing.quantity.amount,
       unit: ing.quantity.unit,
       category: ing.quantity.category,
+    })),
+    steps: domainRecipe.steps.map((step) => ({
+      instruction: step.instruction,
     })),
   };
 }

@@ -1,5 +1,6 @@
 import { InvalidRecipeError } from '../errors.js';
 import { IngredientLine } from './ingredientLine.js';
+import { RecipeStep } from './recipeStep.js';
 import type { DietaryTag } from './types.js';
 
 /**
@@ -9,6 +10,9 @@ import type { DietaryTag } from './types.js';
  * - Cross-recipe ingredient consolidation (matching "flour" across two different recipes) is explicitly out of scope.
  * - Dietary tag ENFORCEMENT (e.g. filtering recipes for vegetarian guests) is not implemented here;
  *   tags are stored and carried through scaling without modification or action.
+ * - Recipe steps have no per-step duration/notes yet — RecipeStep deliberately holds only
+ *   instruction text so later per-step fields (duration, notes, temperature) can be added
+ *   without a schema change (matches IngredientLine's child-table-with-position precedent).
  */
 export class Recipe {
   readonly id: string;
@@ -16,13 +20,15 @@ export class Recipe {
   readonly baseServings: number;
   readonly dietaryTags: readonly DietaryTag[];
   readonly ingredients: readonly IngredientLine[];
+  readonly steps: readonly RecipeStep[];
 
   constructor(
     id: string,
     name: string,
     baseServings: number,
     ingredients: IngredientLine[],
-    dietaryTags: DietaryTag[] = []
+    dietaryTags: DietaryTag[] = [],
+    steps: RecipeStep[] = []
   ) {
     if (typeof id !== 'string' || id.trim().length === 0) {
       throw new InvalidRecipeError(`Invalid recipe id: "${id}". id must be a non-empty string.`);
@@ -64,11 +70,22 @@ export class Recipe {
       throw new InvalidRecipeError('dietaryTags must be an array.');
     }
 
+    if (!Array.isArray(steps)) {
+      throw new InvalidRecipeError('Recipe steps must be an array.');
+    }
+
+    for (const step of steps) {
+      if (!(step instanceof RecipeStep)) {
+        throw new InvalidRecipeError('All items in steps array must be instances of RecipeStep.');
+      }
+    }
+
     this.id = id;
     this.name = name;
     this.baseServings = baseServings;
     this.ingredients = Object.freeze([...ingredients]);
     this.dietaryTags = Object.freeze([...dietaryTags]);
+    this.steps = Object.freeze([...steps]);
 
     Object.freeze(this);
   }

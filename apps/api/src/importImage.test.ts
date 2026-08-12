@@ -73,6 +73,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
         { ingredientId: 'blueberries', displayName: 'Fresh Blueberries', amount: 1, unit: 'cup' },
         { ingredientId: 'egg', displayName: 'Large Egg', amount: 2, unit: 'egg' },
       ],
+      instructions: [],
     });
   });
 

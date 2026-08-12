@@ -28,6 +28,7 @@ model Recipe {
   dietaryTagsJson String           @default("[]")
   createdAt       DateTime         @default(now())
   ingredients     IngredientLine[]
+  steps           RecipeStep[]
 }
 
 model IngredientLine {
@@ -39,4 +40,12 @@ model IngredientLine {
   amount       Float
   unit         String
   position     Int
+}
+
+model RecipeStep {
+  id          String @id @default(uuid())
+  recipeId    String
+  recipe      Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  instruction String
+  position    Int
 }

@@ -9,6 +9,9 @@ import {
   type ShoppingListResponseDto,
   type PlanEventInput,
   type EventPlanResponseDto,
+  type CreateEventInput,
+  type EventSummaryDto,
+  type EventDetailDto,
   type ImportRecipeTextResponseDto,
 } from './api';
 
@@ -260,6 +263,96 @@ export function useBuildShoppingList() {
 export function usePlanEvent() {
   return useMutation<EventPlanResponseDto, Error, PlanEventInput>({
     mutationFn: (data: PlanEventInput) => api.planEvent(data),
+  });
+}
+
+export const EVENTS_QUERY_KEY = ['events'] as const;
+
+/**
+ * Query hook for fetching all saved events (GET /api/events), summary shape only.
+ */
+export function useEvents() {
+  return useQuery<EventSummaryDto[]>({
+    queryKey: EVENTS_QUERY_KEY,
+    queryFn: () => api.getEvents(),
+  });
+}
+
+/**
+ * Query hook for fetching a single saved event (GET /api/events/:id).
+ * The response is recomputed live server-side on every call — "recompute live" means this
+ * hook is never patched optimistically by other mutations, only invalidated to refetch.
+ */
+export function useEvent(id: string | null) {
+  return useQuery<EventDetailDto>({
+    queryKey: [...EVENTS_QUERY_KEY, id],
+    queryFn: () => api.getEventById(id as string),
+    enabled: id != null,
+  });
+}
+
+/**
+ * Mutation hook for saving a new event (POST /api/events).
+ * Non-optimistic: the response carries a server-recomputed plan the client can't cheaply
+ * predict, and this is a low-frequency "save" action where correctness beats snappiness.
+ */
+export function useCreateEvent() {
+  const queryClient = useQueryClient();
+
+  return useMutation<EventDetailDto, Error, CreateEventInput>({
+    mutationFn: (data: CreateEventInput) => api.createEvent(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * Mutation hook for updating a saved event's name/guestGroup/recipeIds (PUT /api/events/:id).
+ * Non-optimistic, same rationale as useCreateEvent.
+ */
+export function useUpdateEvent() {
+  const queryClient = useQueryClient();
+
+  return useMutation<EventDetailDto, Error, { id: string; data: CreateEventInput }>({
+    mutationFn: ({ id, data }) => api.updateEvent(id, data),
+    onSuccess: (_updated, { id }) => {
+      queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: [...EVENTS_QUERY_KEY, id] });
+    },
+  });
+}
+
+/**
+ * Mutation hook for deleting a saved event (DELETE /api/events/:id).
+ * Optimistically removes the entry from the ['events'] list cache, rolling back on error —
+ * mirrors useDeleteRecipe exactly, since a deletion's outcome is trivial to predict correctly.
+ */
+export function useDeleteEvent() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string, { previousEvent?: EventSummaryDto }>({
+    mutationFn: (id: string) => api.deleteEvent(id),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: EVENTS_QUERY_KEY });
+      const previousEvent = queryClient
+        .getQueryData<EventSummaryDto[]>(EVENTS_QUERY_KEY)
+        ?.find((event) => event.id === id);
+      queryClient.setQueryData<EventSummaryDto[]>(EVENTS_QUERY_KEY, (old = []) =>
+        old.filter((event) => event.id !== id)
+      );
+      return { previousEvent };
+    },
+    onError: (_err, _id, context) => {
+      const restored = context?.previousEvent;
+      if (!restored) return;
+      queryClient.setQueryData<EventSummaryDto[]>(EVENTS_QUERY_KEY, (old = []) =>
+        old.some((event) => event.id === restored.id) ? old : [...old, restored]
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
+    },
   });
 }
 

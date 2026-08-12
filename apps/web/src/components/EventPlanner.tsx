@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Calendar,
@@ -8,8 +8,19 @@ import {
   AlertTriangle,
   RefreshCw,
   ShoppingBag,
+  Save,
+  Trash2,
+  PlusCircle,
+  Loader2,
 } from 'lucide-react';
-import { useRecipes, usePlanEvent } from '../lib/queries';
+import {
+  useRecipes,
+  usePlanEvent,
+  useEvent,
+  useCreateEvent,
+  useUpdateEvent,
+  useDeleteEvent,
+} from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -18,7 +29,19 @@ import { Checkbox } from './ui/checkbox';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
 
-export const EventPlanner: React.FC = () => {
+export interface EventPlannerProps {
+  selectedEventId?: string | null;
+  onSaved?: (id: string) => void;
+  onCloseDetail?: () => void;
+}
+
+export const EventPlanner: React.FC<EventPlannerProps> = ({
+  selectedEventId = null,
+  onSaved,
+  onCloseDetail,
+}) => {
+  const isViewMode = selectedEventId != null;
+
   const {
     data: recipes = [],
     isLoading: loadingRecipes,
@@ -28,12 +51,35 @@ export const EventPlanner: React.FC = () => {
   } = useRecipes();
 
   // Form state
+  const [name, setName] = useState('');
   const [totalGuests, setTotalGuests] = useState<number>(10);
   const [vegetarianCount, setVegetarianCount] = useState<number>(0);
   const [veganCount, setVeganCount] = useState<number>(0);
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
 
   const planEventMutation = usePlanEvent();
+  const eventQuery = useEvent(selectedEventId);
+  const createEventMutation = useCreateEvent();
+  const updateEventMutation = useUpdateEvent();
+  const deleteEventMutation = useDeleteEvent();
+
+  // Pre-fill the form from the saved event whenever the selected event changes / refetches.
+  useEffect(() => {
+    if (eventQuery.data) {
+      setName(eventQuery.data.name);
+      setTotalGuests(eventQuery.data.guestGroup.totalGuests);
+      setVegetarianCount(eventQuery.data.guestGroup.vegetarianCount);
+      setVeganCount(eventQuery.data.guestGroup.veganCount);
+      setSelectedRecipeIds(eventQuery.data.recipeIds);
+    } else if (!isViewMode) {
+      setName('');
+      setTotalGuests(10);
+      setVegetarianCount(0);
+      setVeganCount(0);
+      setSelectedRecipeIds([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventQuery.data, selectedEventId]);
 
   const toggleRecipeSelection = (recipeId: string) => {
     if (selectedRecipeIds.includes(recipeId)) {
@@ -58,38 +104,106 @@ export const EventPlanner: React.FC = () => {
     setVeganCount(isNaN(parsed) || parsed < 0 ? 0 : parsed);
   };
 
-  const handlePlanEvent = (e: React.FormEvent) => {
+  const guestGroupPayload = { totalGuests, vegetarianCount, veganCount };
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (selectedRecipeIds.length === 0 || totalGuests <= 0) {
+    if (totalGuests <= 0) return;
+
+    if (isViewMode && selectedEventId) {
+      updateEventMutation.mutate({
+        id: selectedEventId,
+        data: { name: name.trim(), guestGroup: guestGroupPayload, recipeIds: selectedRecipeIds },
+      });
       return;
     }
 
+    if (selectedRecipeIds.length === 0) return;
+
     planEventMutation.mutate({
       recipeIds: selectedRecipeIds,
-      guestGroup: {
-        totalGuests,
-        vegetarianCount,
-        veganCount,
+      guestGroup: guestGroupPayload,
+    });
+  };
+
+  const handleSaveEvent = () => {
+    if (!name.trim()) return;
+
+    createEventMutation.mutate(
+      { name: name.trim(), guestGroup: guestGroupPayload, recipeIds: selectedRecipeIds },
+      {
+        onSuccess: (created) => {
+          if (onSaved) onSaved(created.id);
+        },
+      }
+    );
+  };
+
+  const handleDeleteEvent = () => {
+    if (!selectedEventId) return;
+    if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return;
+
+    deleteEventMutation.mutate(selectedEventId, {
+      onSuccess: () => {
+        if (onCloseDetail) onCloseDetail();
       },
     });
+  };
+
+  const handleStartNewEvent = () => {
+    if (onCloseDetail) onCloseDetail();
   };
 
   const displayError =
     (planEventMutation.isError && planEventMutation.error
       ? planEventMutation.error.message
-      : null) || (recipeIsError && recipeQueryError ? recipeQueryError.message : null);
+      : null) ||
+    (createEventMutation.isError && createEventMutation.error
+      ? createEventMutation.error.message
+      : null) ||
+    (updateEventMutation.isError && updateEventMutation.error
+      ? updateEventMutation.error.message
+      : null) ||
+    (deleteEventMutation.isError && deleteEventMutation.error
+      ? deleteEventMutation.error.message
+      : null) ||
+    (eventQuery.isError && eventQuery.error ? eventQuery.error.message : null) ||
+    (recipeIsError && recipeQueryError ? recipeQueryError.message : null);
 
-  const eventPlanData = planEventMutation.data;
+  // In view mode the recomputed-live event detail drives the results; in create mode,
+  // the ephemeral preview mutation drives it. Both expose the same guestGroup /
+  // includedRecipes / excludedRecipes / shoppingList shape.
+  const resultData = isViewMode ? eventQuery.data : planEventMutation.data;
+  const droppedRecipeIds = isViewMode ? (eventQuery.data?.droppedRecipeIds ?? []) : [];
+
+  const canSaveEvent = !isViewMode && Boolean(planEventMutation.data) && name.trim().length > 0;
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="font-serif text-2xl font-bold tracking-tight text-ink">Event Planner</h2>
-        <p className="mt-1 text-sm text-ink-muted">
-          Plan recipes and consolidated shopping lists tailored to guest counts and dietary
-          restrictions.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-serif text-2xl font-bold tracking-tight text-ink">
+            {isViewMode ? `Editing: ${eventQuery.data?.name ?? '...'}` : 'Event Planner'}
+          </h2>
+          <p className="mt-1 text-sm text-ink-muted">
+            {isViewMode
+              ? 'Update the guest breakdown or menu — the plan below always reflects your recipes as they are today.'
+              : 'Plan recipes and consolidated shopping lists tailored to guest counts and dietary restrictions.'}
+          </p>
+        </div>
+        {isViewMode && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleStartNewEvent}
+            className="space-x-1.5 border-stone text-ink"
+          >
+            <PlusCircle className="h-3.5 w-3.5" />
+            <span>Plan New Event</span>
+          </Button>
+        )}
       </div>
 
       {displayError && (
@@ -102,13 +216,26 @@ export const EventPlanner: React.FC = () => {
         </Alert>
       )}
 
+      {droppedRecipeIds.length > 0 && (
+        <Alert className="border-clay/30 bg-clay-light text-clay-hover">
+          <AlertTriangle className="h-5 w-5 text-clay-hover" />
+          <AlertDescription className="text-sm">
+            <span className="font-semibold">
+              {droppedRecipeIds.length} recipe{droppedRecipeIds.length === 1 ? '' : 's'} from this
+              event's original plan no longer exist{droppedRecipeIds.length === 1 ? 's' : ''} and{' '}
+              {droppedRecipeIds.length === 1 ? 'was' : 'were'} skipped.
+            </span>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Guest Group & Recipe Selection Form */}
-      <form onSubmit={handlePlanEvent}>
+      <form onSubmit={handleSubmit}>
         <Card>
           <CardHeader className="flex-row items-center justify-between border-b border-stone pb-4">
             <div>
               <CardTitle className="font-serif text-lg font-bold text-ink">
-                1. Guest Breakdown & Recipe Selection
+                1. Event Name, Guest Breakdown & Recipe Selection
               </CardTitle>
               <CardDescription className="text-xs text-ink-muted">
                 Specify total guests and dietary counts (vegetarians inclusive of vegans), then pick
@@ -128,6 +255,20 @@ export const EventPlanner: React.FC = () => {
           </CardHeader>
 
           <CardContent className="space-y-6 pt-6">
+            <div>
+              <Label htmlFor="input-event-name" className="text-xs text-ink-muted">
+                Event Name
+              </Label>
+              <Input
+                id="input-event-name"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Thanksgiving 2026"
+                className="mt-1 h-9 bg-canvas border-stone"
+              />
+            </div>
+
             {/* Guest Group Inputs */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div>
@@ -249,27 +390,78 @@ export const EventPlanner: React.FC = () => {
               )}
             </div>
 
-            {/* Submit Button */}
-            <div className="flex justify-end border-t border-stone pt-4">
-              <Button
-                type="submit"
-                disabled={planEventMutation.isPending || selectedRecipeIds.length === 0}
-                className="space-x-2 bg-clay text-white hover:bg-clay-hover disabled:opacity-50"
-              >
-                <Calendar className="h-4 w-4" />
-                <span>
-                  {planEventMutation.isPending
-                    ? 'Planning Event...'
-                    : `Plan Event Shopping List (${selectedRecipeIds.length} Selected)`}
-                </span>
-              </Button>
+            {/* Submit / Save / Delete Buttons */}
+            <div className="flex flex-wrap items-center justify-end gap-3 border-t border-stone pt-4">
+              {isViewMode && (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={handleDeleteEvent}
+                  disabled={deleteEventMutation.isPending}
+                  className="space-x-2"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>{deleteEventMutation.isPending ? 'Deleting...' : 'Delete Event'}</span>
+                </Button>
+              )}
+
+              {isViewMode ? (
+                <Button
+                  type="submit"
+                  disabled={updateEventMutation.isPending}
+                  className="space-x-2 bg-clay text-white hover:bg-clay-hover disabled:opacity-50"
+                >
+                  {updateEventMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  <span>{updateEventMutation.isPending ? 'Updating...' : 'Update Event'}</span>
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    type="submit"
+                    disabled={planEventMutation.isPending || selectedRecipeIds.length === 0}
+                    className="space-x-2 bg-clay text-white hover:bg-clay-hover disabled:opacity-50"
+                  >
+                    <Calendar className="h-4 w-4" />
+                    <span>
+                      {planEventMutation.isPending
+                        ? 'Planning Event...'
+                        : `Plan Event Shopping List (${selectedRecipeIds.length} Selected)`}
+                    </span>
+                  </Button>
+                  {planEventMutation.data && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={handleSaveEvent}
+                      disabled={!canSaveEvent || createEventMutation.isPending}
+                      className="space-x-2 bg-olive text-white hover:bg-olive-hover disabled:opacity-50"
+                    >
+                      {createEventMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4" />
+                      )}
+                      <span>{createEventMutation.isPending ? 'Saving...' : 'Save Event'}</span>
+                    </Button>
+                  )}
+                </>
+              )}
             </div>
+            {!isViewMode && planEventMutation.data && !name.trim() && (
+              <p className="text-right text-xs text-clay-hover">
+                Add an event name above to save this plan.
+              </p>
+            )}
           </CardContent>
         </Card>
       </form>
 
       {/* Results View */}
-      {eventPlanData && (
+      {resultData && (
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -283,16 +475,16 @@ export const EventPlanner: React.FC = () => {
               <span>Event Guest Group:</span>
             </div>
             <span className="rounded bg-canvas border border-stone/60 px-2 py-1 font-semibold text-ink">
-              Total: {eventPlanData.guestGroup.totalGuests}
+              Total: {resultData.guestGroup.totalGuests}
             </span>
             <span className="rounded bg-canvas border border-stone/60 px-2 py-1 font-semibold text-ink">
-              Omnivores: {eventPlanData.guestGroup.omnivoreCount}
+              Omnivores: {resultData.guestGroup.omnivoreCount}
             </span>
             <span className="rounded bg-canvas border border-stone/60 px-2 py-1 font-semibold text-ink">
-              Vegetarians: {eventPlanData.guestGroup.vegetarianCount}
+              Vegetarians: {resultData.guestGroup.vegetarianCount}
             </span>
             <span className="rounded bg-canvas border border-stone/60 px-2 py-1 font-semibold text-ink">
-              Vegans: {eventPlanData.guestGroup.veganCount}
+              Vegans: {resultData.guestGroup.veganCount}
             </span>
           </div>
 
@@ -311,13 +503,13 @@ export const EventPlanner: React.FC = () => {
             </CardHeader>
 
             <CardContent className="pt-6">
-              {eventPlanData.includedRecipes.length === 0 ? (
+              {resultData.includedRecipes.length === 0 ? (
                 <div className="py-4 text-sm text-ink-muted">
                   No recipes were included for this guest group.
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {eventPlanData.includedRecipes.map((item) => (
+                  {resultData.includedRecipes.map((item) => (
                     <div
                       key={item.recipeId}
                       className="rounded-xl border border-olive/30 bg-canvas p-4"
@@ -337,7 +529,7 @@ export const EventPlanner: React.FC = () => {
           </Card>
 
           {/* 2. Excluded Recipes (Visually Distinct Warning Treatment) */}
-          {eventPlanData.excludedRecipes.length > 0 && (
+          {resultData.excludedRecipes.length > 0 && (
             <Card className="border-clay/40 bg-clay-light/40 shadow-warm-sm">
               <CardHeader className="flex-row items-center space-x-3 border-b border-clay/30 pb-4">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-clay/40 bg-clay-light text-clay-hover">
@@ -355,7 +547,7 @@ export const EventPlanner: React.FC = () => {
 
               <CardContent className="pt-6">
                 <div className="space-y-3">
-                  {eventPlanData.excludedRecipes.map((item) => (
+                  {resultData.excludedRecipes.map((item) => (
                     <div
                       key={item.recipeId}
                       className="rounded-xl border border-clay/30 bg-paper p-4 text-xs"
@@ -388,13 +580,13 @@ export const EventPlanner: React.FC = () => {
             </CardHeader>
 
             <CardContent className="pt-6">
-              {eventPlanData.shoppingList.length === 0 ? (
+              {resultData.shoppingList.length === 0 ? (
                 <div className="py-4 text-sm text-ink-muted">
                   No ingredients required (all candidate recipes were excluded).
                 </div>
               ) : (
                 <div className="divide-y divide-stone/60">
-                  {eventPlanData.shoppingList.map((item, idx) => (
+                  {resultData.shoppingList.map((item, idx) => (
                     <div
                       key={idx}
                       className="flex flex-col justify-between py-3.5 sm:flex-row sm:items-center"
@@ -405,7 +597,7 @@ export const EventPlanner: React.FC = () => {
                         <div className="mt-1 flex flex-wrap gap-1.5">
                           <span className="text-[11px] text-ink-muted">From recipes:</span>
                           {item.sourceRecipeIds.map((rId) => {
-                            const matchedRecipe = eventPlanData.includedRecipes.find(
+                            const matchedRecipe = resultData.includedRecipes.find(
                               (ir) => ir.recipeId === rId
                             );
                             return (

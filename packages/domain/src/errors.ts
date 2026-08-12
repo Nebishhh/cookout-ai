@@ -53,3 +53,12 @@ export class InvalidGuestGroupError extends DomainError {
     super(message);
   }
 }
+
+/**
+ * Thrown when a persisted Event's fields violate domain invariants.
+ */
+export class InvalidEventError extends DomainError {
+  constructor(message: string) {
+    super(message);
+  }
+}

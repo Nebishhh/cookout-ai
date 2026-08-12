@@ -17,6 +17,7 @@ describe('CookOut AI API Endpoints', () => {
       await prisma.$executeRawUnsafe('DELETE FROM IngredientLine');
       await prisma.$executeRawUnsafe('DELETE FROM RecipeStep');
       await prisma.$executeRawUnsafe('DELETE FROM Recipe');
+      await prisma.$executeRawUnsafe('DELETE FROM Event');
     } catch {
       // Table creation handled by initial migration/db push
     }
@@ -27,6 +28,7 @@ describe('CookOut AI API Endpoints', () => {
     await prisma.ingredientLine.deleteMany();
     await prisma.recipeStep.deleteMany();
     await prisma.recipe.deleteMany();
+    await prisma.event.deleteMany();
   });
 
   describe('GET /api/health', () => {
@@ -652,6 +654,223 @@ describe('CookOut AI API Endpoints', () => {
       expect(potatoItem.quantity.amount).toBe(3000);
       expect(potatoItem.quantity.unit).toBe('g');
       expect(potatoItem.sourceRecipeIds).toEqual([r1Id, r2Id]);
+    });
+  });
+
+  describe('Event CRUD', () => {
+    const validGuestGroup = { totalGuests: 10, vegetarianCount: 2, veganCount: 0 };
+
+    it('POST /api/events creates a persisted event and returns the recomputed plan immediately', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Beef Roast',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+        });
+
+      const res = await request(app)
+        .post('/api/events')
+        .send({
+          name: 'Thanksgiving 2026',
+          guestGroup: validGuestGroup,
+          recipeIds: [recipeRes.body.id],
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('id');
+      expect(res.body.name).toBe('Thanksgiving 2026');
+      expect(res.body.guestGroup).toEqual({
+        totalGuests: 10,
+        vegetarianCount: 2,
+        veganCount: 0,
+        omnivoreCount: 8,
+      });
+      expect(res.body.recipeIds).toEqual([recipeRes.body.id]);
+      expect(res.body.shoppingListId).toBeNull();
+      expect(res.body.droppedRecipeIds).toEqual([]);
+      expect(res.body.includedRecipes).toHaveLength(1);
+      expect(res.body.includedRecipes[0].eligibleServings).toBe(8);
+    });
+
+    it('POST /api/events allows zero recipeIds (menu filled in later)', async () => {
+      const res = await request(app)
+        .post('/api/events')
+        .send({ name: 'Someday BBQ', guestGroup: validGuestGroup, recipeIds: [] });
+
+      expect(res.status).toBe(201);
+      expect(res.body.recipeIds).toEqual([]);
+      expect(res.body.includedRecipes).toHaveLength(0);
+      expect(res.body.excludedRecipes).toHaveLength(0);
+    });
+
+    it('POST /api/events with an invalid guestGroup returns 400', async () => {
+      const res = await request(app)
+        .post('/api/events')
+        .send({
+          name: 'Bad Event',
+          guestGroup: { totalGuests: 10, vegetarianCount: 2, veganCount: 5 },
+          recipeIds: [],
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidGuestGroupError');
+    });
+
+    it('POST /api/events with an empty name returns 400', async () => {
+      const res = await request(app)
+        .post('/api/events')
+        .send({ name: '', guestGroup: validGuestGroup, recipeIds: [] });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidEventError');
+    });
+
+    it('GET /api/events returns summary shape only (no recomputed plan fields)', async () => {
+      await request(app)
+        .post('/api/events')
+        .send({ name: 'Event A', guestGroup: validGuestGroup, recipeIds: [] });
+      await request(app)
+        .post('/api/events')
+        .send({ name: 'Event B', guestGroup: validGuestGroup, recipeIds: [] });
+
+      const res = await request(app).get('/api/events');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(2);
+      expect(res.body[0]).not.toHaveProperty('includedRecipes');
+      expect(res.body[0]).not.toHaveProperty('shoppingList');
+      expect(res.body[0]).toHaveProperty('id');
+      expect(res.body[0]).toHaveProperty('name');
+      expect(res.body[0]).toHaveProperty('guestGroup');
+      expect(res.body[0]).toHaveProperty('recipeIds');
+    });
+
+    it('GET /api/events/:id recomputes the plan live from current recipe data', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Mac and Cheese',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
+        });
+
+      const createRes = await request(app)
+        .post('/api/events')
+        .send({
+          name: 'Potluck',
+          guestGroup: validGuestGroup,
+          recipeIds: [recipeRes.body.id],
+        });
+
+      // Edit the underlying recipe's base servings — the event's live-recomputed plan
+      // should reflect this change without the event itself being touched.
+      await request(app)
+        .put(`/api/recipes/${recipeRes.body.id}`)
+        .send({
+          name: 'Mac and Cheese',
+          baseServings: 2,
+          ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
+        });
+
+      const getRes = await request(app).get(`/api/events/${createRes.body.id}`);
+
+      expect(getRes.status).toBe(200);
+      // eligibleServings unchanged (still 8 omnivores), but scaled ingredient amount
+      // should differ since baseServings changed 4 -> 2 (scale factor 8/4=2 -> 8/2=4).
+      expect(getRes.body.includedRecipes[0].scaledIngredients[0].quantity.amount).toBe(800);
+    });
+
+    it('GET /api/events/:id drops stale recipe references and reports them in droppedRecipeIds', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Temp Recipe',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
+        });
+
+      const createRes = await request(app)
+        .post('/api/events')
+        .send({
+          name: 'Fragile Plan',
+          guestGroup: validGuestGroup,
+          recipeIds: [recipeRes.body.id],
+        });
+
+      await request(app).delete(`/api/recipes/${recipeRes.body.id}`);
+
+      const getRes = await request(app).get(`/api/events/${createRes.body.id}`);
+
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.droppedRecipeIds).toEqual([recipeRes.body.id]);
+      expect(getRes.body.includedRecipes).toHaveLength(0);
+      expect(getRes.body.excludedRecipes).toHaveLength(0);
+    });
+
+    it('GET /api/events/:id with a nonexistent id returns 404', async () => {
+      const res = await request(app).get('/api/events/non-existent-event-id');
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+
+    it('PUT /api/events/:id updates name/guestGroup/recipeIds and GET afterward reflects new values', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Salad',
+          baseServings: 4,
+          ingredients: [
+            { ingredientId: 'lettuce', displayName: 'Lettuce', amount: 1, unit: 'count' },
+          ],
+        });
+
+      const createRes = await request(app)
+        .post('/api/events')
+        .send({ name: 'Old Name', guestGroup: validGuestGroup, recipeIds: [] });
+
+      const putRes = await request(app)
+        .put(`/api/events/${createRes.body.id}`)
+        .send({
+          name: 'New Name',
+          guestGroup: { totalGuests: 20, vegetarianCount: 4, veganCount: 2 },
+          recipeIds: [recipeRes.body.id],
+        });
+
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.name).toBe('New Name');
+      expect(putRes.body.guestGroup.totalGuests).toBe(20);
+      expect(putRes.body.recipeIds).toEqual([recipeRes.body.id]);
+
+      const getRes = await request(app).get(`/api/events/${createRes.body.id}`);
+      expect(getRes.body.name).toBe('New Name');
+    });
+
+    it('PUT /api/events/:id for a nonexistent id returns 404', async () => {
+      const res = await request(app)
+        .put('/api/events/non-existent-event-id')
+        .send({ name: 'X', guestGroup: validGuestGroup, recipeIds: [] });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+
+    it('DELETE /api/events/:id removes the event; subsequent GET returns 404', async () => {
+      const createRes = await request(app)
+        .post('/api/events')
+        .send({ name: 'To Delete', guestGroup: validGuestGroup, recipeIds: [] });
+
+      const deleteRes = await request(app).delete(`/api/events/${createRes.body.id}`);
+      expect(deleteRes.status).toBe(204);
+
+      const getRes = await request(app).get(`/api/events/${createRes.body.id}`);
+      expect(getRes.status).toBe(404);
+    });
+
+    it('DELETE /api/events/:id for a nonexistent id returns 404', async () => {
+      const res = await request(app).delete('/api/events/non-existent-event-id');
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
     });
   });
 });

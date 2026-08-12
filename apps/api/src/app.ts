@@ -18,6 +18,13 @@ import {
   stepsFromInstructions,
   type CreateRecipeInput,
 } from './recipeMapper.js';
+import {
+  validateAndCreateDomainEvent,
+  toDomainEvent,
+  toEventSummaryJSON,
+  serializeEventPlan,
+  type CreateEventInput,
+} from './eventMapper.js';
 import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
 import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
@@ -539,7 +546,7 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
 
 /**
  * Open Question / Scope Notes for Event Planning:
- * - No persistence of event plans (matches the existing shopping-list design precedent — computed fresh on each request).
+ * - This route remains a stateless preview; see POST /api/events for persistence.
  * - No pagination or limit on recipeIds array size — acceptable for v1 scope, note as a future concern for large collections.
  */
 
@@ -587,35 +594,177 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
     const eventPlan = planEventShoppingList(recipes, guestGroup);
 
     // 5. Serialize EventPlan to JSON output
-    res.status(200).json({
-      guestGroup: {
-        totalGuests: eventPlan.guestGroup.totalGuests,
-        vegetarianCount: eventPlan.guestGroup.vegetarianCount,
-        veganCount: eventPlan.guestGroup.veganCount,
-        omnivoreCount: eventPlan.guestGroup.omnivoreCount,
+    res.status(200).json(serializeEventPlan(eventPlan));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Open Question / Scope Notes for persisted Events:
+ * - "Recompute live": only name/guestGroup/recipeIds are persisted. GET routes recompute
+ *   the plan fresh via planEventShoppingList() on every read — never cached.
+ * - A recipeId that no longer resolves to a Recipe is silently dropped from the recomputed
+ *   plan (tracked as droppedRecipeIds in the response) rather than 404ing the whole event.
+ */
+
+// POST /api/events
+app.post('/api/events', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const domainEvent = validateAndCreateDomainEvent(req.body as CreateEventInput);
+
+    const createdPrismaEvent = await prisma.event.create({
+      data: {
+        id: domainEvent.id,
+        name: domainEvent.name,
+        totalGuests: domainEvent.guestGroup.totalGuests,
+        vegetarianCount: domainEvent.guestGroup.vegetarianCount,
+        veganCount: domainEvent.guestGroup.veganCount,
+        recipeIdsJson: JSON.stringify(domainEvent.recipeIds),
       },
-      includedRecipes: eventPlan.includedRecipes.map((item) => ({
-        recipeId: item.scaledRecipe.sourceRecipeId,
-        recipeName: item.scaledRecipe.sourceRecipeName,
-        eligibleServings: item.eligibleServings,
-        scaledIngredients: item.scaledRecipe.ingredients.map((ing) => ({
-          ingredientId: ing.ingredientId,
-          displayName: ing.displayName,
-          quantity: ing.quantity.toJSON(),
-        })),
-      })),
-      excludedRecipes: eventPlan.excludedRecipes.map((item) => ({
-        recipeId: item.recipe.id,
-        recipeName: item.recipe.name,
-        reason: item.reason,
-      })),
-      shoppingList: eventPlan.shoppingList.map((item) => ({
-        ingredientId: item.ingredientId,
-        displayName: item.displayName,
-        quantity: item.quantity.toJSON(),
-        sourceRecipeIds: item.sourceRecipeIds,
-      })),
     });
+
+    const reconstructedEvent = toDomainEvent(createdPrismaEvent);
+
+    const recipes = [];
+    for (const id of reconstructedEvent.recipeIds) {
+      const prismaRecipe = await prisma.recipe.findUnique({
+        where: { id },
+        include: { ingredients: true, steps: true },
+      });
+      if (prismaRecipe) {
+        recipes.push(toDomainRecipe(prismaRecipe));
+      }
+    }
+
+    const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
+
+    res.status(201).json({
+      ...toEventSummaryJSON(reconstructedEvent),
+      ...serializeEventPlan(eventPlan),
+      droppedRecipeIds: [],
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/events — summary shape only, no recomputed plan per row
+app.get('/api/events', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const prismaEvents = await prisma.event.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const domainEvents = prismaEvents.map((e) => toDomainEvent(e));
+    res.json(domainEvents.map((e) => toEventSummaryJSON(e)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/events/:id — recomputes the plan live from current recipe data
+app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
+    const prismaEvent = await prisma.event.findUnique({ where: { id } });
+
+    if (!prismaEvent) {
+      throw new NotFoundError(`Event with id "${id}" not found.`);
+    }
+
+    const domainEvent = toDomainEvent(prismaEvent);
+
+    const recipes = [];
+    const droppedRecipeIds: string[] = [];
+    for (const recipeId of domainEvent.recipeIds) {
+      const prismaRecipe = await prisma.recipe.findUnique({
+        where: { id: recipeId },
+        include: { ingredients: true, steps: true },
+      });
+      if (prismaRecipe) {
+        recipes.push(toDomainRecipe(prismaRecipe));
+      } else {
+        droppedRecipeIds.push(recipeId);
+      }
+    }
+
+    const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
+
+    res.json({
+      ...toEventSummaryJSON(domainEvent),
+      ...serializeEventPlan(eventPlan),
+      droppedRecipeIds,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/events/:id — single scalar-column update, preserves any linked ShoppingList
+app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
+
+    const existingEvent = await prisma.event.findUnique({ where: { id } });
+    if (!existingEvent) {
+      throw new NotFoundError(`Event with id "${id}" not found.`);
+    }
+
+    const domainEvent = validateAndCreateDomainEvent(req.body as CreateEventInput, id);
+
+    const updatedPrismaEvent = await prisma.event.update({
+      where: { id },
+      data: {
+        name: domainEvent.name,
+        totalGuests: domainEvent.guestGroup.totalGuests,
+        vegetarianCount: domainEvent.guestGroup.vegetarianCount,
+        veganCount: domainEvent.guestGroup.veganCount,
+        recipeIdsJson: JSON.stringify(domainEvent.recipeIds),
+      },
+    });
+
+    const reconstructedEvent = toDomainEvent(updatedPrismaEvent);
+
+    const recipes = [];
+    const droppedRecipeIds: string[] = [];
+    for (const recipeId of reconstructedEvent.recipeIds) {
+      const prismaRecipe = await prisma.recipe.findUnique({
+        where: { id: recipeId },
+        include: { ingredients: true, steps: true },
+      });
+      if (prismaRecipe) {
+        recipes.push(toDomainRecipe(prismaRecipe));
+      } else {
+        droppedRecipeIds.push(recipeId);
+      }
+    }
+
+    const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
+
+    res.json({
+      ...toEventSummaryJSON(reconstructedEvent),
+      ...serializeEventPlan(eventPlan),
+      droppedRecipeIds,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/events/:id
+app.delete('/api/events/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
+
+    const existingEvent = await prisma.event.findUnique({ where: { id } });
+    if (!existingEvent) {
+      throw new NotFoundError(`Event with id "${id}" not found.`);
+    }
+
+    await prisma.event.delete({ where: { id } });
+
+    res.status(204).send();
   } catch (err) {
     next(err);
   }

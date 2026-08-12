@@ -704,7 +704,9 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       // Switch to Event Planner tab
       fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
 
-      expect(await screen.findByText('1. Guest Breakdown & Recipe Selection')).toBeInTheDocument();
+      expect(
+        await screen.findByText('1. Event Name, Guest Breakdown & Recipe Selection')
+      ).toBeInTheDocument();
       expect(await screen.findByText('Beef Roast')).toBeInTheDocument();
 
       // Change guest group inputs
@@ -844,6 +846,228 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       expect(
         await screen.findByText('Recipe with id "missing-id-999" not found.')
+      ).toBeInTheDocument();
+    });
+
+    it('saves a previewed event (POST /api/events), lists it, and viewing it fetches the recomputed detail (GET /api/events/:id)', async () => {
+      const mockRecipes = [
+        {
+          id: 'r-meat',
+          name: 'Beef Roast',
+          baseServings: 6,
+          dietaryTags: [],
+          ingredients: [
+            { ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg', category: 'Mass' },
+          ],
+        },
+      ];
+
+      const mockPlanResponse = {
+        guestGroup: { totalGuests: 10, vegetarianCount: 0, veganCount: 0, omnivoreCount: 10 },
+        includedRecipes: [
+          {
+            recipeId: 'r-meat',
+            recipeName: 'Beef Roast',
+            eligibleServings: 10,
+            scaledIngredients: [
+              {
+                ingredientId: 'beef',
+                displayName: 'Beef',
+                quantity: { amount: 1.67, unit: 'kg', category: 'Mass' },
+              },
+            ],
+          },
+        ],
+        excludedRecipes: [],
+        shoppingList: [
+          {
+            ingredientId: 'beef',
+            displayName: 'Beef',
+            quantity: { amount: 1.67, unit: 'kg', category: 'Mass' },
+            sourceRecipeIds: ['r-meat'],
+          },
+        ],
+      };
+
+      const savedEventSummary = {
+        id: 'event-1',
+        name: 'Thanksgiving 2026',
+        guestGroup: mockPlanResponse.guestGroup,
+        recipeIds: ['r-meat'],
+        shoppingListId: null,
+      };
+
+      let postEventsCalled = false;
+      let getEventByIdCalled = false;
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        const u = url.toString();
+        if (u.includes('/api/recipes') && !u.includes('events')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockRecipes,
+          } as Response;
+        }
+        if (u.endsWith('/api/events/plan') && options?.method === 'POST') {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => mockPlanResponse,
+          } as Response;
+        }
+        if (u.endsWith('/api/events') && options?.method === 'POST') {
+          postEventsCalled = true;
+          return {
+            ok: true,
+            status: 201,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ ...savedEventSummary, ...mockPlanResponse, droppedRecipeIds: [] }),
+          } as Response;
+        }
+        if (u.endsWith('/api/events') && (!options?.method || options.method === 'GET')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [savedEventSummary],
+          } as Response;
+        }
+        if (u.endsWith('/api/events/event-1')) {
+          getEventByIdCalled = true;
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ ...savedEventSummary, ...mockPlanResponse, droppedRecipeIds: [] }),
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+
+      expect(await screen.findByText('Beef Roast')).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText(/event name/i), {
+        target: { value: 'Thanksgiving 2026' },
+      });
+      fireEvent.change(screen.getByLabelText(/total guests/i), { target: { value: '10' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe beef roast/i }));
+      fireEvent.click(screen.getByRole('button', { name: /plan event shopping list/i }));
+
+      // "Save Event" only appears once a preview exists
+      const saveButton = await screen.findByRole('button', { name: /save event/i });
+      fireEvent.click(saveButton);
+
+      await waitFor(() => {
+        expect(postEventsCalled).toBe(true);
+      });
+
+      // Saving flips the planner into view mode, showing the saved event's title
+      expect(await screen.findByText('Editing: Thanksgiving 2026')).toBeInTheDocument();
+
+      // The saved event now appears in the EventList above
+      expect(await screen.findByText('Saved Events (1)')).toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(getEventByIdCalled).toBe(true);
+      });
+    });
+
+    it('updating a saved event calls PUT /api/events/:id, and deleting it calls DELETE and exits view mode', async () => {
+      const savedEvent = {
+        id: 'event-1',
+        name: 'Old Name',
+        guestGroup: { totalGuests: 10, vegetarianCount: 0, veganCount: 0, omnivoreCount: 10 },
+        recipeIds: [],
+        shoppingListId: null,
+        includedRecipes: [],
+        excludedRecipes: [],
+        shoppingList: [],
+        droppedRecipeIds: [],
+      };
+
+      let putCalled = false;
+      let deleteCalled = false;
+      let eventDeleted = false;
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        const u = url.toString();
+        if (u.includes('/api/recipes') && !u.includes('events')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => [],
+          } as Response;
+        }
+        if (u.endsWith('/api/events') && (!options?.method || options.method === 'GET')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => (eventDeleted ? [] : [savedEvent]),
+          } as Response;
+        }
+        if (u.endsWith('/api/events/event-1') && options?.method === 'PUT') {
+          putCalled = true;
+          const updated = { ...savedEvent, name: 'New Name' };
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => updated,
+          } as Response;
+        }
+        if (u.endsWith('/api/events/event-1') && options?.method === 'DELETE') {
+          deleteCalled = true;
+          eventDeleted = true;
+          return { ok: true, status: 204, headers: new Headers() } as Response;
+        }
+        if (u.endsWith('/api/events/event-1')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => (putCalled ? { ...savedEvent, name: 'New Name' } : savedEvent),
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+
+      const eventCard = await screen.findByText('Old Name');
+      fireEvent.click(eventCard);
+
+      expect(await screen.findByText('Editing: Old Name')).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(/event name/i), { target: { value: 'New Name' } });
+      fireEvent.click(screen.getByRole('button', { name: /^update event$/i }));
+
+      await waitFor(() => {
+        expect(putCalled).toBe(true);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /^delete event$/i }));
+
+      await waitFor(() => {
+        expect(deleteCalled).toBe(true);
+      });
+
+      // Deleting the currently-viewed event exits view mode (back to create-mode copy)
+      expect(
+        await screen.findByText(
+          'Plan recipes and consolidated shopping lists tailored to guest counts and dietary restrictions.'
+        )
       ).toBeInTheDocument();
     });
   });

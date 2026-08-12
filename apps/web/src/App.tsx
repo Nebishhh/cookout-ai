@@ -7,14 +7,16 @@ import { RecipeList } from './components/RecipeList';
 import { RecipeForm } from './components/RecipeForm';
 import { ShoppingListBuilder } from './components/ShoppingListBuilder';
 import { EventPlanner } from './components/EventPlanner';
+import { EventList } from './components/EventList';
 
 /**
  * Open Questions / Scope Notes:
  * - Query stale time / cache invalidation strategy is using TanStack Query defaults (5-min staleTime configured for shared queries).
  * - No client-side routing guard or authentication exists (matches API's current no-auth scope).
- * - Shopping lists built via POST /api/shopping-list and event plans built via POST /api/events/plan are dynamically generated on request and never persisted.
+ * - Shopping lists built via POST /api/shopping-list are dynamically generated on request and never persisted (persisted ShoppingList support is a later milestone).
+ * - Event plans can now be saved (POST/PUT/GET/DELETE /api/events) and "recompute live" — the saved plan itself is never cached, only its inputs (name/guestGroup/recipeIds).
  * - No confirmation UI beyond basic browser confirm dialog.
- * - No optimistic updates on mutations (out of scope for this milestone).
+ * - No optimistic updates on create/update mutations (deliberate — see queries.ts); delete mutations are optimistic.
  */
 
 interface AppProps {
@@ -36,6 +38,7 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
   );
 
   const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 
   // Sync tab with URL hash (#recipes, #shopping-list, or #event-planner)
   const getInitialTab = (): 'recipes' | 'shopping-list' | 'event-planner' => {
@@ -105,7 +108,18 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
             ) : currentTab === 'shopping-list' ? (
               <ShoppingListBuilder initialSelectedRecipeIds={preselectedShoppingListIds} />
             ) : (
-              <EventPlanner />
+              <div className="space-y-10">
+                <EventList
+                  selectedId={selectedEventId}
+                  onSelect={setSelectedEventId}
+                  onDeleted={() => setSelectedEventId(null)}
+                />
+                <EventPlanner
+                  selectedEventId={selectedEventId}
+                  onSaved={setSelectedEventId}
+                  onCloseDetail={() => setSelectedEventId(null)}
+                />
+              </div>
             )}
           </motion.div>
         </main>

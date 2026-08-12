@@ -49,3 +49,18 @@ model RecipeStep {
   instruction String
   position    Int
 }
+
+// Tradeoff Note: recipeIds is a JSON-encoded string column (recipeIdsJson), mirroring
+// dietaryTagsJson — unlike RecipeStep/IngredientLine, a recipeId carries no per-line data
+// beyond order, which a JSON array already preserves, so a join table adds nothing.
+// "Recompute live" also means Event tolerates ids that no longer resolve to a Recipe
+// (filtered out at read time) rather than depending on DB referential integrity.
+model Event {
+  id              String   @id @default(uuid())
+  name            String
+  totalGuests     Int
+  vegetarianCount Int      @default(0)
+  veganCount      Int      @default(0)
+  recipeIdsJson   String   @default("[]")
+  createdAt       DateTime @default(now())
+}

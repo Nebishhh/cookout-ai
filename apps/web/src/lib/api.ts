@@ -127,6 +127,31 @@ export interface PlanEventInput {
   };
 }
 
+export interface CreateEventInput {
+  name: string;
+  guestGroup: {
+    totalGuests: number;
+    vegetarianCount?: number;
+    veganCount?: number;
+  };
+  recipeIds: string[];
+}
+
+export interface EventSummaryDto {
+  id: string;
+  name: string;
+  guestGroup: GuestGroupDto;
+  recipeIds: string[];
+  shoppingListId: string | null;
+}
+
+export interface EventDetailDto extends EventSummaryDto {
+  includedRecipes: IncludedRecipePlanDto[];
+  excludedRecipes: ExcludedRecipePlanDto[];
+  shoppingList: ShoppingListItemDto[];
+  droppedRecipeIds: string[];
+}
+
 export class ApiError extends Error {
   status: number;
   errorName?: string;
@@ -204,6 +229,22 @@ export const api = {
     request<EventPlanResponseDto>('/api/events/plan', {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  getEvents: () => request<EventSummaryDto[]>('/api/events'),
+  getEventById: (id: string) => request<EventDetailDto>(`/api/events/${id}`),
+  createEvent: (data: CreateEventInput) =>
+    request<EventDetailDto>('/api/events', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateEvent: (id: string, data: CreateEventInput) =>
+    request<EventDetailDto>(`/api/events/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteEvent: (id: string) =>
+    request<void>(`/api/events/${id}`, {
+      method: 'DELETE',
     }),
   importRecipeText: (text: string) =>
     request<ImportRecipeTextResponseDto>('/api/recipes/import-text', {

@@ -20,10 +20,10 @@
 
 - **Architectural Status**: all four planned layers are implemented and tested:
   - Pure, food-agnostic domain kernel (`@cookout-ai/domain`) with zero external runtime dependencies.
-  - Persisted HTTP REST API (`@cookout-ai/api`) backed by Express and Prisma SQLite, including recipe CRUD, shopping-list generation, guest-group event planning, and Google Gemini-powered recipe import.
-  - Accessible, responsive React Web UI (`@cookout-ai/web`) built with shadcn/ui primitives and TanStack Query state management, with three top-level views (Recipes, Shopping List Builder, Event Planner) plus a four-mode AI import flow (text / URL / image upload / camera capture) inside the recipe form.
+  - Persisted HTTP REST API (`@cookout-ai/api`) backed by Express and Prisma SQLite, including recipe CRUD (with step-by-step instructions), persisted "recompute live" event planning, persisted checkable shopping lists (standalone or event-linked), and Google Gemini-powered recipe import (ingredients + instructions).
+  - Accessible, responsive React Web UI (`@cookout-ai/web`) built with shadcn/ui primitives and TanStack Query state management, with three top-level views (Recipes, Shopping List Builder, Event Planner) plus a four-mode AI import flow (text / URL / image upload / camera capture) inside the recipe form. The Shopping List and Event Planner views each run in two modes — build/plan a fresh one, or select a saved one from a sibling list component to view/edit/check off/delete.
   - Full automated testing suite: Vitest unit/integration tests across all three workspaces + a Playwright E2E suite (recipe lifecycle, AI import fixture interception, event planning) running against real servers and an isolated database (`prisma/e2e.db`).
-- **Test counts** (see §9 for the full breakdown): 190 Vitest tests, 8 Playwright E2E tests, all passing.
+- **Test counts** (see §9 for the full breakdown): 261 Vitest tests, 8 Playwright E2E tests, all passing.
 
 ### Overall Architecture Philosophy
 
@@ -80,7 +80,9 @@ cookout-ai/
 │   │   │   ├── importText.ts / importUrl.ts / importImage.ts  # AI import route handlers
 │   │   │   ├── index.ts            # HTTP server listener (port 3001)
 │   │   │   ├── prisma.ts           # Shared PrismaClient singleton instance
-│   │   │   └── recipeMapper.ts     # Mappers converting Prisma models <-> Domain entities
+│   │   │   └── recipeMapper.ts     # Mappers converting Prisma Recipe/RecipeStep <-> Domain entities
+│   │   ├── eventMapper.ts      # Mappers converting Prisma Event <-> Domain Event; serializeEventPlan() shared by the ephemeral preview route and every persisted Event route
+│   │   └── shoppingListMapper.ts # Mappers converting Prisma ShoppingList/ShoppingListItem <-> Domain ShoppingList
 │   │   └── package.json
 │   └── web/                        # Vite + React web application workspace
 │       ├── e2e/                    # Playwright specs: recipe-lifecycle, ai-import, event-planner
@@ -88,12 +90,14 @@ cookout-ai/
 │       │   ├── components/
 │       │   │   ├── ui/             # shadcn UI primitives (Button, Card, Input, etc.)
 │       │   │   ├── Navigation.tsx  # Tab switcher: Recipes / Shopping List / Event Planner
-│       │   │   ├── RecipeForm.tsx  # Recipe create/edit form + 4-mode AI import (text/url/image/camera)
+│       │   │   ├── RecipeForm.tsx  # Recipe create/edit form + ingredients + ordered step editor (add/remove/reorder) + 4-mode AI import (text/url/image/camera)
 │       │   │   ├── RecipeList.tsx
-│       │   │   ├── ShoppingListBuilder.tsx
-│       │   │   └── EventPlanner.tsx
+│       │   │   ├── ShoppingListBuilder.tsx  # Two modes: build a fresh list (unchanged ephemeral preview + "Save Shopping List"), or view/check-off/delete a saved one
+│       │   │   ├── SavedShoppingLists.tsx   # Card grid of saved lists (mirrors RecipeList/EventList), sibling to ShoppingListBuilder
+│       │   │   ├── EventPlanner.tsx  # Two modes: plan/preview a fresh event (unchanged ephemeral preview + "Save Event"), or view/update/delete a saved one + Save/Regenerate/View Shopping List
+│       │   │   └── EventList.tsx     # Card grid of saved events, sibling to EventPlanner
 │       │   ├── lib/                # api.ts (HTTP client), queries.ts (TanStack Query hooks), formatQuantity.ts, utils.ts
-│       │   └── App.tsx
+│       │   └── App.tsx             # Lifts selectedEventId/selectedShoppingListId (nullable-selected-entity pattern, same as editingRecipe) + cross-tab handoff from an event to its linked shopping list
 │       ├── playwright.config.ts    # Isolated ports 3010/3011, e2e.db
 │       └── package.json
 ├── docs/
@@ -104,13 +108,13 @@ cookout-ai/
 ├── packages/domain/                 # Pure TypeScript Domain Package (@cookout-ai/domain)
 │   └── src/
 │       ├── errors.ts               # DomainError hierarchy
-│       ├── events/                 # GuestGroup, computeEligibleServings, planEventShoppingList
-│       ├── recipes/                # Recipe, IngredientLine, scaleRecipe
-│       ├── shopping/               # ShoppingListItem, consolidateShoppingList
+│       ├── events/                 # GuestGroup, computeEligibleServings, planEventShoppingList, Event (persisted)
+│       ├── recipes/                # Recipe, IngredientLine, RecipeStep, scaleRecipe
+│       ├── shopping/               # ShoppingListItem (computed), consolidateShoppingList, ShoppingList + ShoppingListLine (persisted)
 │       ├── units/                  # Quantity value object, unit registry
 │       └── index.ts                # Public domain exports
 ├── prisma/
-│   ├── schema.prisma                # Recipe & IngredientLine models
+│   ├── schema.prisma                # Recipe, IngredientLine, RecipeStep, Event, ShoppingList, ShoppingListItem models
 │   ├── dev.db / test.db / e2e.db    # gitignored SQLite files
 ├── scripts/smokeTestLiveGemini.js   # Manual live-API schema-drift check (documented in README, not in CI)
 ├── package.json                     # Root workspace configuration
@@ -173,9 +177,9 @@ cookout-ai/
 
 - **Purpose**: Represents an immutable culinary recipe definition.
 - **Responsibilities**: Holds metadata (`id`, `name`, `baseServings`), dietary tags (`Vegetarian`, `Vegan`), and an ordered list of `IngredientLine` objects.
-- **Validation Rules**: `id` and `name` must be non-empty strings. `baseServings` must be a positive integer (> 0). `ingredients` must be a non-empty array of `IngredientLine` instances.
-- **Immutability**: Enforced via `Object.freeze(this)` and `Object.freeze([...ingredients])`.
-- **Limitations**: Duplicate `ingredientId`s within a single recipe are allowed. Does not store step-by-step cooking instructions.
+- **Validation Rules**: `id` and `name` must be non-empty strings. `baseServings` must be a positive integer (> 0). `ingredients` must be a non-empty array of `IngredientLine` instances. `steps` (optional, defaults to `[]`) must be an array of `RecipeStep` instances if provided — unlike `ingredients`, a recipe may have zero steps (an instruction-less recipe is a normal, valid, incremental state).
+- **Immutability**: Enforced via `Object.freeze(this)`, `Object.freeze([...ingredients])`, and `Object.freeze([...steps])`.
+- **Limitations**: Duplicate `ingredientId`s within a single recipe are allowed.
 
 ### 3. `IngredientLine`
 
@@ -208,6 +212,38 @@ cookout-ai/
 - **Purpose**: Represents the complete output of an event planning calculation (`planEventShoppingList`).
 - **Responsibilities**: Encapsulates the input `GuestGroup`, arrays of `includedRecipes` and `excludedRecipes` (with exclusion reasons), and the final `shoppingList`.
 - **Immutability**: Enforced via `Object.freeze()`.
+
+### 8. `RecipeStep`
+
+- **Purpose**: Represents a single ordered cooking instruction within a recipe.
+- **Responsibilities**: Holds `instruction` (plain text). Ordering is implicit in array position within `Recipe.steps` — the class itself has no `position` field (that only exists at the Prisma persistence layer), mirroring `IngredientLine`.
+- **Validation Rules**: `instruction` must be a non-empty string.
+- **Immutability**: Enforced via `Object.freeze(this)`.
+- **Design note**: Deliberately holds only text today (no duration/temperature/notes) so those fields can be added later without a schema change.
+
+### 9. `Event` (persisted)
+
+- **Purpose**: A saved event plan's _inputs_ — name, guest group, and selected recipe ids.
+- **Responsibilities**: Holds `id`, `name`, `guestGroup: GuestGroup`, `recipeIds: string[]`.
+- **Validation Rules**: `id`/`name` non-empty strings; `guestGroup` must be a `GuestGroup` instance; `recipeIds` must be an array of non-empty strings (may be empty — an event can be saved before its menu is filled in).
+- **Immutability**: Enforced via `Object.freeze(this)` and `Object.freeze([...recipeIds])`.
+- **Critical design decision — "recompute live"**: `Event` stores only its inputs, never a computed plan. Every read recomputes the plan fresh via `planEventShoppingList()`. Editing a recipe's ingredients retroactively changes every event that references it; a `recipeId` that no longer resolves to a `Recipe` is tolerated (dropped at the API layer, not a domain-layer concern — see §10).
+
+### 10. `ShoppingListLine`
+
+- **Purpose**: A single persisted, checkable line item within a saved `ShoppingList` — the identity-bearing, mutable-over-time counterpart to the computed `ShoppingListItem`.
+- **Responsibilities**: Holds `id`, `ingredientId`, `displayName`, `quantity: Quantity`, `sourceRecipeIds: string[]`, `checked: boolean` (defaults `false`).
+- **Validation Rules**: `id`/`ingredientId`/`displayName` non-empty strings; `quantity` must be a `Quantity` instance; `sourceRecipeIds` an array of non-empty strings (may be empty, leaving room for a future manually-added line with no recipe source); `checked` must be a boolean.
+- **Immutability**: Enforced via `Object.freeze(this)` and `Object.freeze([...sourceRecipeIds])`.
+- **Design note**: `ShoppingListItem` (computed, identity-free) was deliberately left untouched rather than extended — a computation result and a database row with mutable state are different lifecycles, and overloading one type would force fake ids on unsaved items or fake `checked` state on computed-only ones.
+
+### 11. `ShoppingList` (persisted)
+
+- **Purpose**: A saved, named collection of `ShoppingListLine`s — usable standalone or linked to one `Event`.
+- **Responsibilities**: Holds `id`, `name`, `eventId: string | null`, `items: ShoppingListLine[]`.
+- **Validation Rules**: `id`/`name` non-empty strings; `eventId` must be a string or exactly `null` (not `undefined`); `items` must be an array of `ShoppingListLine` instances (may be empty).
+- **Immutability**: Enforced via `Object.freeze(this)` and `Object.freeze([...items])`.
+- **Design note**: A `ShoppingList` is always a deliberate, user-triggered _snapshot_ — unlike `Event`, it is never recomputed on read. Saving or regenerating one copies the currently-computed items into fresh `ShoppingListLine` rows with new ids and `checked: false`; regenerating is a full delete-and-recreate that discards prior checked state (a reviewed tradeoff, not a bug — see §13).
 
 ---
 
@@ -263,13 +299,15 @@ cookout-ai/
 
 All domain errors inherit from `DomainError` in `packages/domain/src/errors.ts`.
 
-| Error Class              | Thrown When                                                                                         | Example Scenario                                                         |
-| :----------------------- | :-------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------- |
-| `InvalidQuantityError`   | Amount is negative, NaN, or non-finite.                                                             | `Quantity.create(-5, 'g')`                                               |
-| `InvalidUnitError`       | Unit string is not registered in `units.ts`.                                                        | `Quantity.create(1, 'invalid_unit')`                                     |
-| `UnitMismatchError`      | Attempting arithmetic across incompatible unit categories.                                          | `qtyGrams.add(qtyCups)`                                                  |
-| `InvalidRecipeError`     | Recipe ID/name is empty, baseServings $\le 0$, or ingredient list is empty.                         | `new Recipe('r1', '', 4, [])`                                            |
-| `InvalidGuestGroupError` | Guest count rules are violated (`veganCount > vegetarianCount` or `vegetarianCount > totalGuests`). | `new GuestGroup({ totalGuests: 10, vegetarianCount: 2, veganCount: 5 })` |
+| Error Class                | Thrown When                                                                                                                                               | Example Scenario                                                         |
+| :------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------- |
+| `InvalidQuantityError`     | Amount is negative, NaN, or non-finite.                                                                                                                   | `Quantity.create(-5, 'g')`                                               |
+| `InvalidUnitError`         | Unit string is not registered in `units.ts`.                                                                                                              | `Quantity.create(1, 'invalid_unit')`                                     |
+| `UnitMismatchError`        | Attempting arithmetic across incompatible unit categories.                                                                                                | `qtyGrams.add(qtyCups)`                                                  |
+| `InvalidRecipeError`       | Recipe ID/name is empty, baseServings $\le 0$, or ingredient list is empty.                                                                               | `new Recipe('r1', '', 4, [])`                                            |
+| `InvalidGuestGroupError`   | Guest count rules are violated (`veganCount > vegetarianCount` or `vegetarianCount > totalGuests`).                                                       | `new GuestGroup({ totalGuests: 10, vegetarianCount: 2, veganCount: 5 })` |
+| `InvalidEventError`        | A persisted `Event`'s fields violate invariants (empty id/name, `guestGroup` not a `GuestGroup` instance, `recipeIds` not an array of non-empty strings). | `new Event({ id: 'e1', name: '', guestGroup, recipeIds: [] })`           |
+| `InvalidShoppingListError` | A persisted `ShoppingList` or `ShoppingListLine`'s fields violate invariants (empty id/name, invalid `eventId`, non-`Quantity` quantity, etc.).           | `new ShoppingList({ id: 'l1', name: '', eventId: null, items: [] })`     |
 
 Typed errors let callers (`Express` error middleware, React form handlers) `instanceof`-check and map domain violations directly to HTTP status codes or UI validation messages without parsing strings.
 
@@ -302,7 +340,7 @@ There is no AI-related export from the domain package — Gemini integration liv
 
 ### Current Test Suite Numbers
 
-- **Total Vitest Tests**: **190 passing tests** across 11 test files, spanning `packages/domain` (units/recipes/shopping/events), `apps/api` (health, recipe CRUD, shopping-list, event-plan, AI import text/URL/image), and `apps/web` (App, formatQuantity).
+- **Total Vitest Tests**: **261 passing tests** across 15 test files, spanning `packages/domain` (units, recipes + recipeStep, shopping + shoppingListLine + shoppingList, events + event), `apps/api` (health, recipe CRUD incl. steps, shopping-list preview, event-plan preview, Event CRUD, ShoppingList CRUD, event-linked ShoppingList, AI import text/URL/image incl. instructions), and `apps/web` (App — incl. recipe steps editor, event save/view/update/delete lifecycle, shopping-list save/view/toggle lifecycle — formatQuantity).
 - **Playwright E2E Tests**: **8 passing tests** across 3 spec files — `recipe-lifecycle.spec.ts` (full CRUD + shopping list math), `ai-import.spec.ts` (fixture-intercepted text/URL/image/camera import + a failure-path case), `event-planner.spec.ts` (happy path + 400 validation).
 - **Vitest cross-file isolation**: `apps/api`'s test files share one physical SQLite file (`prisma/test.db`) via the root `DATABASE_URL`. The root `vitest.config.ts` sets `fileParallelism: false` so all test files run serially rather than racing (a per-project setting in `apps/api/vitest.config.ts` alone is not honored by the root `projects` orchestrator); every file that mutates `Recipe`/`IngredientLine` also resets those tables in a `beforeEach` as defense in depth.
 
@@ -316,21 +354,32 @@ There is no AI-related export from the domain package — Gemini integration liv
 
 ### Express Endpoints
 
-| Method   | Endpoint                    | Description                                                                                          |
-| :------- | :-------------------------- | :--------------------------------------------------------------------------------------------------- |
-| `GET`    | `/api/health`               | Health check                                                                                         |
-| `POST`   | `/api/recipes/import-text`  | Gemini-parsed recipe draft from raw pasted text                                                      |
-| `POST`   | `/api/recipes/import-url`   | Gemini-parsed recipe draft from a webpage URL (SSRF-guarded, Cheerio fallback scraping)              |
-| `POST`   | `/api/recipes/import-image` | Gemini-parsed recipe draft from an uploaded photo (Busboy streaming, 8MB limit, magic-byte sniffing) |
-| `POST`   | `/api/recipes`              | Create a new recipe                                                                                  |
-| `GET`    | `/api/recipes`              | Fetch all saved recipes                                                                              |
-| `GET`    | `/api/recipes/:id`          | Fetch recipe by ID                                                                                   |
-| `PUT`    | `/api/recipes/:id`          | Full replace update recipe                                                                           |
-| `DELETE` | `/api/recipes/:id`          | Delete recipe (cascade delete ingredient lines)                                                      |
-| `POST`   | `/api/shopping-list`        | Generate a consolidated shopping list across recipes                                                 |
-| `POST`   | `/api/events/plan`          | Guest-group event plan: eligible servings + consolidated list                                        |
+| Method   | Endpoint                                    | Description                                                                                                                                                           |
+| :------- | :------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/health`                               | Health check                                                                                                                                                          |
+| `POST`   | `/api/recipes/import-text`                  | Gemini-parsed recipe draft from raw pasted text                                                                                                                       |
+| `POST`   | `/api/recipes/import-url`                   | Gemini-parsed recipe draft from a webpage URL (SSRF-guarded, Cheerio fallback scraping)                                                                               |
+| `POST`   | `/api/recipes/import-image`                 | Gemini-parsed recipe draft from an uploaded photo (Busboy streaming, 8MB limit, magic-byte sniffing)                                                                  |
+| `POST`   | `/api/recipes`                              | Create a new recipe                                                                                                                                                   |
+| `GET`    | `/api/recipes`                              | Fetch all saved recipes                                                                                                                                               |
+| `GET`    | `/api/recipes/:id`                          | Fetch recipe by ID                                                                                                                                                    |
+| `PUT`    | `/api/recipes/:id`                          | Full replace update recipe                                                                                                                                            |
+| `DELETE` | `/api/recipes/:id`                          | Delete recipe (cascade delete ingredient lines)                                                                                                                       |
+| `POST`   | `/api/shopping-list`                        | Ephemeral preview: generate a consolidated shopping list across recipes (never persisted)                                                                             |
+| `POST`   | `/api/events/plan`                          | Ephemeral preview: guest-group event plan — eligible servings + consolidated list (never persisted)                                                                   |
+| `POST`   | `/api/events`                               | Save a new event; returns the recomputed plan immediately (summary + plan combined)                                                                                   |
+| `GET`    | `/api/events`                               | List saved events (summary shape only — no recomputed plan per row)                                                                                                   |
+| `GET`    | `/api/events/:id`                           | Fetch one saved event with its plan recomputed live; reports `droppedRecipeIds` if any recipe was deleted                                                             |
+| `PUT`    | `/api/events/:id`                           | Update a saved event's name/guestGroup/recipeIds (single scalar-column update; preserves any linked ShoppingList)                                                     |
+| `DELETE` | `/api/events/:id`                           | Delete a saved event (cascades its linked ShoppingList, if any)                                                                                                       |
+| `POST`   | `/api/shopping-lists`                       | Save a new standalone shopping list (`eventId` always `null`)                                                                                                         |
+| `GET`    | `/api/shopping-lists`                       | List saved shopping lists, items included                                                                                                                             |
+| `GET`    | `/api/shopping-lists/:id`                   | Fetch one saved shopping list                                                                                                                                         |
+| `DELETE` | `/api/shopping-lists/:id`                   | Delete a saved shopping list (cascades its items; no effect on a linked Event)                                                                                        |
+| `PATCH`  | `/api/shopping-lists/:listId/items/:itemId` | Toggle one item's `checked` state — cheap, targeted, fires on every checkbox tap                                                                                      |
+| `PUT`    | `/api/events/:eventId/shopping-list`        | Idempotent "save/regenerate this event's shopping list" — full delete-and-recreate, discards prior checked state, name defaults to the event's name unless overridden |
 
-None of the `import-*` endpoints persist to the database — they return a draft `CreateRecipeInput`-shaped payload for the client to review and submit via `POST /api/recipes`.
+None of the `import-*` endpoints persist to the database — they return a draft `CreateRecipeInput`-shaped payload (now including `instructions: string[]`) for the client to review and submit via `POST /api/recipes`. Neither `POST /api/shopping-lists` nor `PUT /api/events/:eventId/shopping-list` accept client-supplied quantities — both always re-run `toDomainRecipe → scaleRecipe → consolidateShoppingList` server-side before persisting.
 
 ### Request Flow Into Domain (recipe CRUD)
 
@@ -342,7 +391,14 @@ None of the `import-*` endpoints persist to the database — they return a draft
 
 ### AI Import Pipeline
 
-`geminiClient.ts` is the single integration point with `@google/genai`. It supports fixture interception (`USE_GEMINI_FIXTURES=true`, backed by `src/__fixtures__/recordedGeminiFixtures.ts`) so E2E tests and local dev never need a live API key or incur API cost; `checkProductionGuard()` throws at startup if fixtures are enabled with `NODE_ENV=production`. `importUrl.ts` fetches user-supplied URLs behind `ssrfGuard.ts` (blocks internal/private network targets) with a 2MB decompressed-size cap and a 30s timeout; `importImage.ts` validates uploads via streaming Busboy parsing and magic-byte header sniffing (not just file extension) before ever calling Gemini.
+`geminiClient.ts` is the single integration point with `@google/genai`. It supports fixture interception (`USE_GEMINI_FIXTURES=true`, backed by `src/__fixtures__/recordedGeminiFixtures.ts`) so E2E tests and local dev never need a live API key or incur API cost; `checkProductionGuard()` throws at startup if fixtures are enabled with `NODE_ENV=production`. `importUrl.ts` fetches user-supplied URLs behind `ssrfGuard.ts` (blocks internal/private network targets) with a 2MB decompressed-size cap and a 30s timeout; `importImage.ts` validates uploads via streaming Busboy parsing and magic-byte header sniffing (not just file extension) before ever calling Gemini. The shared `GEMINI_SYSTEM_PROMPT` extracts both `ingredients` and an ordered `instructions: string[]` array; a `stepsFromInstructions()` helper in `recipeMapper.ts` bridges the AI-facing `instructions` field name to the domain-facing `steps` field before validation (these are genuinely different field names at two boundaries — this was a real bug caught during implementation, since calling the recipe validator directly on the raw Gemini JSON silently dropped every extracted instruction).
+
+### Persisted Event & ShoppingList Request Flow
+
+- **"Recompute live"**: `POST /api/events`, `GET /api/events/:id`, and `PUT /api/events/:id` all fetch each of the event's `recipeIds` fresh from the database and call `planEventShoppingList()` on every request — the plan is never cached. Editing a recipe's ingredients is reflected in every event referencing it on the very next read.
+- **Stale recipe tolerance**: if a `recipeId` no longer resolves to a `Recipe` (deleted since the event was saved), it's silently dropped from the recomputed plan rather than 404ing the whole event — the dropped ids are tracked and returned as `droppedRecipeIds` in the response, which the frontend surfaces as a warning banner.
+- **ShoppingList is a snapshot, not a live view**: saving (`POST /api/shopping-lists`) or regenerating (`PUT /api/events/:eventId/shopping-list`) a `ShoppingList` copies the currently-computed items into fresh `ShoppingListLine` rows via `buildShoppingListLinesFromConsolidated()`. Regenerating is a full delete-and-recreate inside a `$transaction` (the old row's cascade-deleted items and the new row gets a fresh id) — no attempt is made to preserve `checked` state across regeneration by matching ingredients; this was explicitly reviewed and kept simple.
+- **`ShoppingList.eventId` is nullable + `@unique`**: usable standalone (`null`) or linked to at most one `Event`. Deleting the `Event` cascades to its linked `ShoppingList`; the reverse relationship doesn't exist.
 
 ---
 
@@ -353,15 +409,19 @@ None of the `import-*` endpoints persist to the database — they return a draft
 Single-page React app (`App.tsx`) with three top-level tabs, synced to `window.location.hash`:
 
 1. **Recipes (`#recipes`)**:
-   - `RecipeForm.tsx` — dual-purpose creation/edit form, plus a 4-mode AI import flow (Text / URL / Image / Camera) that pre-fills the form from a Gemini draft for human review before submission. Camera mode uses a dedicated file input with `capture="environment"` for fast mobile photo capture.
-   - `RecipeList.tsx` — recipe card grid with search-by-name, dietary-tag toggle filters, bulk select/delete, "send to shopping list," and Edit/Delete actions.
-2. **Shopping List Builder (`#shopping-list`)**: `ShoppingListBuilder.tsx` — multi-recipe selector with per-recipe target servings, generating a consolidated list.
-3. **Event Planner (`#event-planner`)**: `EventPlanner.tsx` — guest-group input (total/vegetarian/vegan counts) against saved recipes, calling `POST /api/events/plan` and rendering included/excluded recipes plus the consolidated event shopping list.
+   - `RecipeForm.tsx` — dual-purpose creation/edit form: name, servings, dietary tags, an ingredients editor, an ordered step editor (add/remove/up-down-reorder — order is load-bearing for instructions, unlike ingredients), plus a 4-mode AI import flow (Text / URL / Image / Camera) that pre-fills the form (including steps) from a Gemini draft for human review before submission. Camera mode uses a dedicated file input with `capture="environment"` for fast mobile photo capture.
+   - `RecipeList.tsx` — recipe card grid with search-by-name, dietary-tag toggle filters, bulk select/delete, "send to shopping list," an Instructions section per card, and Edit/Delete actions.
+2. **Shopping List Builder (`#shopping-list`)**: two sibling components sharing the tab —
+   - `SavedShoppingLists.tsx` — card grid of saved lists (item count, checked-count, "linked to event" badge), select/delete.
+   - `ShoppingListBuilder.tsx` — **build mode** (no list selected): unchanged multi-recipe selector with per-recipe target servings and a name field, generating an ephemeral preview via `POST /api/shopping-list`, plus a "Save Shopping List" button once a preview exists. **View mode** (a saved list selected): fetches the list via `GET /api/shopping-lists/:id`, renders each item with a real checkbox wired to the toggle mutation, plus "Delete Shopping List."
+3. **Event Planner (`#event-planner`)**: two sibling components sharing the tab —
+   - `EventList.tsx` — card grid of saved events (guest breakdown, recipe count), select/delete.
+   - `EventPlanner.tsx` — **create/preview mode** (no event selected): unchanged guest-group input against saved recipes, calling `POST /api/events/plan` for a live preview, plus a "Save Event" button once a preview exists. **View mode** (a saved event selected): fetches the event via `GET /api/events/:id` (recomputed live), pre-fills the form for editing, shows a dropped-recipe warning banner if applicable, and adds "Update Event," "Delete Event," and "Save/Regenerate Shopping List" (with a "View Shopping List" link that cross-tab-hands-off into the Shopping List tab's view mode once one exists).
 
 ### State Management & Navigation
 
-- **URL Hash Synchronization**: `currentTab` syncs with `window.location.hash`.
-- **TanStack Query**: `useRecipes()` shares query key `['recipes']`. Mutations invalidate `['recipes']` on success.
+- **URL Hash Synchronization**: `currentTab` syncs with `window.location.hash`. No new top-level tabs were added for saved events/lists — deliberately: the closest precedent (the Recipes tab combining create-form + list + detail) already established the pattern of one tab, multiple sibling components, gated by a lifted nullable-selected-entity id.
+- **TanStack Query**: `useRecipes()` shares query key `['recipes']`. Mutations invalidate `['recipes']` on success. `useEvents()`/`useEvent(id)` and `useShoppingLists()`/`useShoppingList(id)` follow the same list/detail pattern under `['events']`/`['shoppingLists']`. Create/update mutations for Events and ShoppingLists are deliberately **non-optimistic** (their responses carry server-recomputed data the client can't cheaply predict, and they're low-frequency "save" actions); delete mutations are optimistic, mirroring the recipe-delete pattern; the shopping-list-item checkbox toggle is the one optimistic **targeted single-item patch** in this area, since it's the one interaction where instant feedback genuinely matters (checking items off while at the store).
 
 ---
 
@@ -371,9 +431,10 @@ These are genuinely still open — not implemented anywhere in the codebase as o
 
 - **Pantry Inventory Subtraction**: Deducting on-hand pantry items from a generated shopping list.
 - **Cost Estimation**: Price estimates on shopping list items.
-- **Optimistic UI Updates**: Instantly updating the TanStack Query cache before network requests resolve.
 - **Practical Scaling Heuristics (v2)**: Non-linear rounding for indivisible ingredients (e.g. recommending 1 whole egg instead of 0.25 egg) — documented in `docs/ideas/practical-scaling.md`.
-- **Auth & Multi-Tenancy**: No user login; all recipes are global and shared in one SQLite database.
+- **Auth & Multi-Tenancy**: No user login; all recipes, events, and shopping lists are global and shared in one SQLite database.
+- **AI-Extracted Instructions for images/URL beyond text round-trip**: instructions are extracted for all four import modes, but recipe step _editing_ has no drag-and-drop reorder (up/down buttons only) and no per-step duration/temperature fields yet.
+- **Offline tolerance for shopping-list checkbox toggling**: a failed `PATCH` while checking off items at the store just flickers the checkbox back (default optimistic-rollback) — no request queue or background retry.
 
 ---
 
@@ -382,6 +443,10 @@ These are genuinely still open — not implemented anywhere in the codebase as o
 1. **Duplicate Ingredient IDs in a Single Recipe**: Allowed in the domain `Recipe` constructor. Deduplication happens during `consolidateShoppingList()`.
 2. **Dietary Tag Storage in SQLite**: Stored as a JSON string (`dietaryTagsJson`) on the `Recipe` table and parsed at the API boundary, since SQLite has no native array column type.
 3. **Full-Group Serving Scaling in Event Planning**: Each eligible recipe scales to 100% of its eligible guest count (e.g. two vegetarian mains both scale to the full vegetarian count). Per-guest dish-splitting is deferred to a future UI workflow.
+4. **"Recompute Live" for Events**: A saved `Event` stores only its inputs (name, guest group, recipe ids) — never a cached plan. Every read recomputes fresh. Explicitly chosen over snapshotting so that editing a recipe retroactively updates every event referencing it, at the cost of a saved event's plan being able to silently change if you edit its recipes later (a documented tradeoff, not a bug).
+5. **`ShoppingListItem` Left Untouched, New `ShoppingListLine` Class Added**: Rather than extending the existing computed, identity-free `ShoppingListItem` to carry an id and `checked` state, a separate `ShoppingListLine` class was introduced for the persisted concept. A computation result and a database row with mutable state are different lifecycles; overloading one type would force fake ids on unsaved items or fake `checked` state on computed-only ones.
+6. **Regenerating a ShoppingList Discards Checked State**: Both `POST /api/shopping-lists` (implicitly, since it's always a fresh create) and `PUT /api/events/:eventId/shopping-list` (explicitly, on repeat calls) do a full delete-and-recreate rather than attempting to preserve `checked` state by matching ingredients across regenerations. Reviewed and kept simple deliberately — a fuzzy-matching heuristic risks silently carrying over a check that no longer applies.
+7. **No New Top-Level Nav Tabs for Saved Events/ShoppingLists**: Saved-entity browsing lives nested inside the existing Event Planner / Shopping List tabs (a list component above the builder/planner, gated by a lifted nullable-selected-id), matching the precedent already set by the Recipes tab combining create-form + list + detail in one place.
 
 ---
 
@@ -397,11 +462,12 @@ These are genuinely still open — not implemented anywhere in the codebase as o
 
 # 15. Technical Debt
 
-| Debt                                  | Severity | Impact                                                                                 | Mitigation Plan                                                           |
-| :------------------------------------ | :------- | :------------------------------------------------------------------------------------- | :------------------------------------------------------------------------ |
-| **JSON Column for Dietary Tags**      | Low      | `dietaryTagsJson` string column in Prisma SQLite requires manual JSON parse/serialize. | Migrate to a normalized join table if the database ever moves off SQLite. |
-| **No Authentication / Multi-Tenancy** | Medium   | All recipes in SQLite are global and shared.                                           | Add user authentication and a `userId` foreign key on `Recipe`.           |
-| **Unbounded List Fetching**           | Low      | `GET /api/recipes` returns all recipes without pagination.                             | Implement cursor-based pagination once recipe count exceeds ~100.         |
+| Debt                                         | Severity | Impact                                                                                        | Mitigation Plan                                                                |
+| :------------------------------------------- | :------- | :-------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
+| **JSON Column for Dietary Tags**             | Low      | `dietaryTagsJson` string column in Prisma SQLite requires manual JSON parse/serialize.        | Migrate to a normalized join table if the database ever moves off SQLite.      |
+| **No Authentication / Multi-Tenancy**        | Medium   | All recipes in SQLite are global and shared.                                                  | Add user authentication and a `userId` foreign key on `Recipe`.                |
+| **Unbounded List Fetching**                  | Low      | `GET /api/recipes` returns all recipes without pagination.                                    | Implement cursor-based pagination once recipe count exceeds ~100.              |
+| **No Offline Tolerance for Checkbox Toggle** | Low      | A failed `PATCH .../items/:itemId` while shopping just rolls the checkbox back with no retry. | Add a request queue with background retry if this proves annoying in real use. |
 
 ---
 
@@ -410,6 +476,7 @@ These are genuinely still open — not implemented anywhere in the codebase as o
 - **Unit Conversions & Consolidation**: $O(N)$ linear complexity, sub-millisecond for realistic ingredient counts.
 - **SQLite Database I/O**: Local disk reads/writes resolve in single-digit milliseconds per request.
 - **TanStack Query Caching**: Eliminates redundant network requests when switching tab views.
+- **N+1 Avoidance in Event Listing**: `GET /api/events` selects only `shoppingList: { select: { id: true } }` rather than recomputing each event's plan (which would mean fetching every referenced recipe per row) — see §10's "recompute live" note.
 
 ---
 
@@ -424,6 +491,6 @@ These are genuinely still open — not implemented anywhere in the codebase as o
 
 # 18. Current Assessment
 
-- **Strengths**: Outstanding domain isolation, immutable value objects throughout, clean monorepo boundaries, comprehensive automated test coverage (190 Vitest + 8 Playwright E2E), strict TypeScript typing, deterministic-domain/AI-at-the-edge separation maintained even as the AI import surface grew to four input modes.
-- **Weaknesses**: Lack of authentication and pagination; no pantry/cost-estimation features yet.
+- **Strengths**: Outstanding domain isolation, immutable value objects throughout, clean monorepo boundaries, comprehensive automated test coverage (261 Vitest + 8 Playwright E2E), strict TypeScript typing, deterministic-domain/AI-at-the-edge separation maintained even as the AI import surface grew to four input modes and now extracts instructions too. Recipes, events, and shopping lists are all now genuinely persisted and revisitable — not just planning tools that reset on refresh — while still cleanly separating ephemeral preview computation from deliberate, user-triggered save actions.
+- **Weaknesses**: Lack of authentication and pagination; no pantry/cost-estimation features yet; recipe step reordering has no drag-and-drop; shopping-list checkbox toggling has no offline tolerance.
 - **Maintainability**: Excellent — modular architecture and thorough tests make adding new features straightforward and safe.

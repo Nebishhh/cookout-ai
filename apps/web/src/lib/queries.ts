@@ -1,8 +1,10 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { getUnitDefinition } from '@cookout-ai/domain';
 import {
   api,
   type RecipeDto,
   type CreateRecipeInput,
+  type IngredientInput,
   type ShoppingListRequestItem,
   type ShoppingListResponseDto,
   type PlanEventInput,
@@ -14,10 +16,36 @@ import {
  * Open Questions / Scope Notes:
  * - Query stale time / cache invalidation strategy is using TanStack Query defaults —
  *   no custom staleTime or gcTime tuning has been performed yet (future tuning opportunity).
- * - No optimistic updates on mutations are implemented (out of scope for this milestone).
  */
 
 export const RECIPES_QUERY_KEY = ['recipes'] as const;
+
+/** Prefix marking a cache entry as an in-flight optimistic create, not yet assigned a real server id. */
+export const OPTIMISTIC_ID_PREFIX = 'optimistic-';
+
+let optimisticIdCounter = 0;
+/** Doesn't rely on crypto.randomUUID(), which throws outside secure contexts (e.g. plain-HTTP LAN dev). */
+function createOptimisticId(): string {
+  optimisticIdCounter += 1;
+  return `${OPTIMISTIC_ID_PREFIX}${Date.now()}-${optimisticIdCounter}`;
+}
+
+/** Derives each ingredient's UnitCategory client-side so optimistic cache entries render correctly. */
+function enrichIngredientsWithCategory(ingredients: IngredientInput[]): RecipeDto['ingredients'] {
+  return ingredients.map((ing) => {
+    let category = '';
+    try {
+      category = getUnitDefinition(ing.unit).category;
+    } catch {
+      // Invalid unit — the mutation will be rejected server-side and rolled back; leave category blank.
+    }
+    return { ...ing, category };
+  });
+}
+
+function cancelRecipesQueries(queryClient: QueryClient) {
+  return queryClient.cancelQueries({ queryKey: RECIPES_QUERY_KEY });
+}
 
 /**
  * Shared query hook for fetching all recipes (GET /api/recipes).
@@ -33,14 +61,37 @@ export function useRecipes() {
 
 /**
  * Mutation hook for creating a new recipe (POST /api/recipes).
- * Automatically invalidates the shared ['recipes'] query cache on success.
+ * Optimistically appends a draft entry to the ['recipes'] cache, rolling back on error;
+ * reconciles with the server response via invalidation once the request settles.
  */
 export function useCreateRecipe() {
   const queryClient = useQueryClient();
 
-  return useMutation<RecipeDto, Error, CreateRecipeInput>({
+  return useMutation<RecipeDto, Error, CreateRecipeInput, { optimisticId: string }>({
     mutationFn: (data: CreateRecipeInput) => api.createRecipe(data),
-    onSuccess: () => {
+    onMutate: async (data) => {
+      await cancelRecipesQueries(queryClient);
+      const optimisticId = createOptimisticId();
+      const optimisticRecipe: RecipeDto = {
+        id: optimisticId,
+        name: data.name,
+        baseServings: data.baseServings,
+        dietaryTags: data.dietaryTags ?? [],
+        ingredients: enrichIngredientsWithCategory(data.ingredients),
+      };
+      queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) => [
+        ...old,
+        optimisticRecipe,
+      ]);
+      return { optimisticId };
+    },
+    onError: (_err, _data, context) => {
+      if (!context) return;
+      queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) =>
+        old.filter((recipe) => recipe.id !== context.optimisticId)
+      );
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
     },
   });
@@ -48,14 +99,47 @@ export function useCreateRecipe() {
 
 /**
  * Mutation hook for updating an existing recipe (PUT /api/recipes/:id).
- * Automatically invalidates the shared ['recipes'] query cache on success.
+ * Optimistically patches the matching entry in the ['recipes'] cache, rolling back on error;
+ * reconciles with the server response via invalidation once the request settles.
  */
 export function useUpdateRecipe() {
   const queryClient = useQueryClient();
 
-  return useMutation<RecipeDto, Error, { id: string; data: CreateRecipeInput }>({
+  return useMutation<
+    RecipeDto,
+    Error,
+    { id: string; data: CreateRecipeInput },
+    { previousRecipe?: RecipeDto }
+  >({
     mutationFn: ({ id, data }) => api.updateRecipe(id, data),
-    onSuccess: () => {
+    onMutate: async ({ id, data }) => {
+      await cancelRecipesQueries(queryClient);
+      const previousRecipe = queryClient
+        .getQueryData<RecipeDto[]>(RECIPES_QUERY_KEY)
+        ?.find((recipe) => recipe.id === id);
+      queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) =>
+        old.map((recipe) =>
+          recipe.id === id
+            ? {
+                ...recipe,
+                name: data.name,
+                baseServings: data.baseServings,
+                dietaryTags: data.dietaryTags ?? [],
+                ingredients: enrichIngredientsWithCategory(data.ingredients),
+              }
+            : recipe
+        )
+      );
+      return { previousRecipe };
+    },
+    onError: (_err, { id }, context) => {
+      if (!context?.previousRecipe) return;
+      const restored = context.previousRecipe;
+      queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) =>
+        old.map((recipe) => (recipe.id === id ? restored : recipe))
+      );
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
     },
   });
@@ -63,14 +147,32 @@ export function useUpdateRecipe() {
 
 /**
  * Mutation hook for deleting a recipe (DELETE /api/recipes/:id).
- * Automatically invalidates the shared ['recipes'] query cache on success.
+ * Optimistically removes the entry from the ['recipes'] cache, rolling back on error;
+ * reconciles with the server via invalidation once the request settles.
  */
 export function useDeleteRecipe() {
   const queryClient = useQueryClient();
 
-  return useMutation<void, Error, string>({
+  return useMutation<void, Error, string, { previousRecipe?: RecipeDto }>({
     mutationFn: (id: string) => api.deleteRecipe(id),
-    onSuccess: () => {
+    onMutate: async (id) => {
+      await cancelRecipesQueries(queryClient);
+      const previousRecipe = queryClient
+        .getQueryData<RecipeDto[]>(RECIPES_QUERY_KEY)
+        ?.find((recipe) => recipe.id === id);
+      queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) =>
+        old.filter((recipe) => recipe.id !== id)
+      );
+      return { previousRecipe };
+    },
+    onError: (_err, _id, context) => {
+      const restored = context?.previousRecipe;
+      if (!restored) return;
+      queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) =>
+        old.some((recipe) => recipe.id === restored.id) ? old : [...old, restored]
+      );
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
     },
   });
@@ -84,13 +186,13 @@ export interface BulkDeleteResult {
 /**
  * Mutation hook for deleting multiple recipes concurrently (DELETE /api/recipes/:id per id).
  * Resolves with a partial-failure result rather than throwing, so callers can report which
- * ids succeeded and which failed. Invalidates the shared ['recipes'] query cache once if any
- * deletion succeeded.
+ * ids succeeded and which failed. Optimistically removes all targeted entries from the
+ * ['recipes'] cache up front, then re-adds any that failed to delete once results are known.
  */
 export function useBulkDeleteRecipes() {
   const queryClient = useQueryClient();
 
-  return useMutation<BulkDeleteResult, Error, string[]>({
+  return useMutation<BulkDeleteResult, Error, string[], { targetRecipes: RecipeDto[] }>({
     mutationFn: async (ids: string[]) => {
       const results = await Promise.allSettled(ids.map((id) => api.deleteRecipe(id)));
 
@@ -107,10 +209,35 @@ export function useBulkDeleteRecipes() {
 
       return { succeededIds, failedErrors };
     },
-    onSuccess: ({ succeededIds }) => {
-      if (succeededIds.length > 0) {
-        queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+    onMutate: async (ids) => {
+      await cancelRecipesQueries(queryClient);
+      const current = queryClient.getQueryData<RecipeDto[]>(RECIPES_QUERY_KEY) ?? [];
+      const targetRecipes = current.filter((recipe) => ids.includes(recipe.id));
+      queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) =>
+        old.filter((recipe) => !ids.includes(recipe.id))
+      );
+      return { targetRecipes };
+    },
+    onSuccess: ({ succeededIds }, _ids, context) => {
+      const recipesToRestore = context.targetRecipes.filter((r) => !succeededIds.includes(r.id));
+      if (recipesToRestore.length > 0) {
+        queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) => [
+          ...old,
+          ...recipesToRestore,
+        ]);
       }
+    },
+    onError: (_err, _ids, context) => {
+      if (!context || context.targetRecipes.length === 0) return;
+      queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) => {
+        const missing = context.targetRecipes.filter(
+          (recipe) => !old.some((o) => o.id === recipe.id)
+        );
+        return missing.length > 0 ? [...old, ...missing] : old;
+      });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
     },
   });
 }

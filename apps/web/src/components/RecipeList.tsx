@@ -15,7 +15,12 @@ import {
   Filter,
 } from 'lucide-react';
 import type { RecipeDto } from '../lib/api';
-import { useRecipes, useDeleteRecipe, useBulkDeleteRecipes } from '../lib/queries';
+import {
+  useRecipes,
+  useDeleteRecipe,
+  useBulkDeleteRecipes,
+  OPTIMISTIC_ID_PREFIX,
+} from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -44,6 +49,10 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   // Available dietary tag options
   const AVAILABLE_TAGS = ['Vegetarian', 'Vegan'];
 
+  // Recipes still awaiting server confirmation (optimistic create) have no real id yet —
+  // editing/deleting/selecting them would 404 or act on a soon-to-be-replaced entry.
+  const isOptimistic = (id: string) => id.startsWith(OPTIMISTIC_ID_PREFIX);
+
   // Client-side filtering logic
   const filteredRecipes = recipes.filter((recipe) => {
     const matchesName = recipe.name.toLowerCase().includes(searchQuery.toLowerCase().trim());
@@ -69,13 +78,14 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   };
 
   const handleSelectRecipe = (id: string) => {
+    if (isOptimistic(id)) return;
     setSelectedRecipeIds((prev) =>
       prev.includes(id) ? prev.filter((itemId) => itemId !== id) : [...prev, id]
     );
   };
 
   const handleToggleSelectAll = () => {
-    const filteredIds = filteredRecipes.map((r) => r.id);
+    const filteredIds = filteredRecipes.filter((r) => !isOptimistic(r.id)).map((r) => r.id);
     const allFilteredSelected =
       filteredIds.length > 0 && filteredIds.every((id) => selectedRecipeIds.includes(id));
 
@@ -87,6 +97,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   };
 
   const handleDelete = (recipe: RecipeDto) => {
+    if (isOptimistic(recipe.id)) return;
     if (window.confirm(`Are you sure you want to delete "${recipe.name}"?`)) {
       deleteRecipeMutation.mutate(recipe.id, {
         onSuccess: () => {
@@ -131,6 +142,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   };
 
   const handleEditClick = (recipe: RecipeDto) => {
+    if (isOptimistic(recipe.id)) return;
     if (onEditRecipe) {
       onEditRecipe(recipe);
     }
@@ -393,6 +405,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
           {filteredRecipes.map((recipe, index) => {
             const isSelected = selectedRecipeIds.includes(recipe.id);
             const cardCheckboxId = `select-recipe-${recipe.id}`;
+            const pending = isOptimistic(recipe.id);
 
             return (
               <motion.div
@@ -422,6 +435,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
                             id={cardCheckboxId}
                             checked={isSelected}
                             onChange={() => handleSelectRecipe(recipe.id)}
+                            disabled={pending}
                             aria-label={`Select recipe ${recipe.name}`}
                             className="mt-1"
                           />
@@ -432,9 +446,16 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
                           </label>
                         </div>
 
-                        <div className="flex items-center space-x-1 rounded-full bg-canvas border border-stone/60 px-2.5 py-1 text-xs font-semibold text-ink-muted shrink-0">
-                          <Users className="h-3 w-3 text-clay-hover" />
-                          <span>{recipe.baseServings} servings</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {pending && (
+                            <span className="rounded-full bg-clay-light px-2.5 py-1 text-xs font-semibold text-clay-hover">
+                              Saving…
+                            </span>
+                          )}
+                          <div className="flex items-center space-x-1 rounded-full bg-canvas border border-stone/60 px-2.5 py-1 text-xs font-semibold text-ink-muted">
+                            <Users className="h-3 w-3 text-clay-hover" />
+                            <span>{recipe.baseServings} servings</span>
+                          </div>
                         </div>
                       </div>
 
@@ -481,6 +502,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
                         variant="ghost"
                         size="sm"
                         onClick={() => handleEditClick(recipe)}
+                        disabled={pending}
                         aria-label={`Edit recipe ${recipe.name}`}
                         className="h-7 px-2 text-xs text-ink-muted hover:text-ink"
                       >
@@ -492,7 +514,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
                         variant="ghost"
                         size="sm"
                         onClick={() => handleDelete(recipe)}
-                        disabled={deleteRecipeMutation.isPending}
+                        disabled={pending || deleteRecipeMutation.isPending}
                         aria-label={`Delete recipe ${recipe.name}`}
                         className="h-7 px-2 text-xs text-ink-muted hover:text-clay-hover"
                       >

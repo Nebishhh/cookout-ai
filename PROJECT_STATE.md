@@ -354,7 +354,7 @@ Single-page React app (`App.tsx`) with three top-level tabs, synced to `window.l
 
 1. **Recipes (`#recipes`)**:
    - `RecipeForm.tsx` — dual-purpose creation/edit form, plus a 4-mode AI import flow (Text / URL / Image / Camera) that pre-fills the form from a Gemini draft for human review before submission. Camera mode uses a dedicated file input with `capture="environment"` for fast mobile photo capture.
-   - `RecipeList.tsx` — recipe card grid with Edit/Delete actions.
+   - `RecipeList.tsx` — recipe card grid with search-by-name, dietary-tag toggle filters, bulk select/delete, "send to shopping list," and Edit/Delete actions.
 2. **Shopping List Builder (`#shopping-list`)**: `ShoppingListBuilder.tsx` — multi-recipe selector with per-recipe target servings, generating a consolidated list.
 3. **Event Planner (`#event-planner`)**: `EventPlanner.tsx` — guest-group input (total/vegetarian/vegan counts) against saved recipes, calling `POST /api/events/plan` and rendering included/excluded recipes plus the consolidated event shopping list.
 
@@ -371,7 +371,6 @@ These are genuinely still open — not implemented anywhere in the codebase as o
 
 - **Pantry Inventory Subtraction**: Deducting on-hand pantry items from a generated shopping list.
 - **Cost Estimation**: Price estimates on shopping list items.
-- **Recipe Search & Filter UI**: Filtering saved recipes by name or dietary tags.
 - **Optimistic UI Updates**: Instantly updating the TanStack Query cache before network requests resolve.
 - **Practical Scaling Heuristics (v2)**: Non-linear rounding for indivisible ingredients (e.g. recommending 1 whole egg instead of 0.25 egg) — documented in `docs/ideas/practical-scaling.md`.
 - **Auth & Multi-Tenancy**: No user login; all recipes are global and shared in one SQLite database.

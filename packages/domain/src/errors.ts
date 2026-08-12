@@ -62,3 +62,12 @@ export class InvalidEventError extends DomainError {
     super(message);
   }
 }
+
+/**
+ * Thrown when a persisted ShoppingList or ShoppingListLine's fields violate domain invariants.
+ */
+export class InvalidShoppingListError extends DomainError {
+  constructor(message: string) {
+    super(message);
+  }
+}

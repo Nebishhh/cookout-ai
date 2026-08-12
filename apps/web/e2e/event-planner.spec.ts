@@ -55,7 +55,7 @@ test.describe('Event Planner E2E Tests', () => {
     await page.locator('#nav-tab-event-planner').click();
 
     await expect(
-      page.getByRole('heading', { name: '1. Guest Breakdown & Recipe Selection' })
+      page.getByRole('heading', { name: '1. Event Name, Guest Breakdown & Recipe Selection' })
     ).toBeVisible();
 
     // 3. Fill Guest Group Form: Total Guests=8, Vegetarians=4 (inclusive of 2 vegans), Vegans=2 -> (4 Omnivores, 2 Vegetarians, 2 Vegans)

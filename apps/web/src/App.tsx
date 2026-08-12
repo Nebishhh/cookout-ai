@@ -8,12 +8,15 @@ import { RecipeForm } from './components/RecipeForm';
 import { ShoppingListBuilder } from './components/ShoppingListBuilder';
 import { EventPlanner } from './components/EventPlanner';
 import { EventList } from './components/EventList';
+import { SavedShoppingLists } from './components/SavedShoppingLists';
 
 /**
  * Open Questions / Scope Notes:
  * - Query stale time / cache invalidation strategy is using TanStack Query defaults (5-min staleTime configured for shared queries).
  * - No client-side routing guard or authentication exists (matches API's current no-auth scope).
- * - Shopping lists built via POST /api/shopping-list are dynamically generated on request and never persisted (persisted ShoppingList support is a later milestone).
+ * - Shopping lists can now be saved standalone (POST /api/shopping-lists) or linked to an event
+ *   (PUT /api/events/:eventId/shopping-list) with per-item checked state that persists.
+ *   The ephemeral preview route (POST /api/shopping-list) still exists unchanged for "build before deciding to save".
  * - Event plans can now be saved (POST/PUT/GET/DELETE /api/events) and "recompute live" — the saved plan itself is never cached, only its inputs (name/guestGroup/recipeIds).
  * - No confirmation UI beyond basic browser confirm dialog.
  * - No optimistic updates on create/update mutations (deliberate — see queries.ts); delete mutations are optimistic.
@@ -39,6 +42,7 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
 
   const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedShoppingListId, setSelectedShoppingListId] = useState<string | null>(null);
 
   // Sync tab with URL hash (#recipes, #shopping-list, or #event-planner)
   const getInitialTab = (): 'recipes' | 'shopping-list' | 'event-planner' => {
@@ -81,6 +85,12 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
     window.location.hash = 'shopping-list';
   };
 
+  const handleViewShoppingList = (id: string) => {
+    setSelectedShoppingListId(id);
+    setCurrentTab('shopping-list');
+    window.location.hash = 'shopping-list';
+  };
+
   return (
     <QueryClientProvider client={queryClient}>
       <div className="min-h-screen bg-canvas font-sans text-ink antialiased">
@@ -106,7 +116,19 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
                 />
               </div>
             ) : currentTab === 'shopping-list' ? (
-              <ShoppingListBuilder initialSelectedRecipeIds={preselectedShoppingListIds} />
+              <div className="space-y-10">
+                <SavedShoppingLists
+                  selectedId={selectedShoppingListId}
+                  onSelect={setSelectedShoppingListId}
+                  onDeleted={() => setSelectedShoppingListId(null)}
+                />
+                <ShoppingListBuilder
+                  initialSelectedRecipeIds={preselectedShoppingListIds}
+                  selectedShoppingListId={selectedShoppingListId}
+                  onSaved={setSelectedShoppingListId}
+                  onCloseDetail={() => setSelectedShoppingListId(null)}
+                />
+              </div>
             ) : (
               <div className="space-y-10">
                 <EventList
@@ -118,6 +140,7 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
                   selectedEventId={selectedEventId}
                   onSaved={setSelectedEventId}
                   onCloseDetail={() => setSelectedEventId(null)}
+                  onViewShoppingList={handleViewShoppingList}
                 />
               </div>
             )}

@@ -351,6 +351,163 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     expect(await screen.findByText('Recipe not found: r1')).toBeInTheDocument();
   });
 
+  it('saves a built shopping list (POST /api/shopping-lists), lists it, and toggling a checkbox calls PATCH', async () => {
+    const mockRecipes = [
+      {
+        id: 'r1',
+        name: 'Pancakes',
+        baseServings: 4,
+        dietaryTags: [],
+        ingredients: [
+          {
+            ingredientId: 'milk',
+            displayName: 'Whole Milk',
+            amount: 2,
+            unit: 'cup',
+            category: 'Volume',
+          },
+        ],
+      },
+    ];
+
+    const mockPreviewResponse = {
+      shoppingList: [
+        {
+          ingredientId: 'milk',
+          displayName: 'Whole Milk',
+          quantity: { amount: 473.176, unit: 'ml', category: 'Volume' },
+          sourceRecipeIds: ['r1'],
+        },
+      ],
+      scaledRecipes: [
+        {
+          sourceRecipeId: 'r1',
+          sourceRecipeName: 'Pancakes',
+          targetServings: 4,
+          scaleFactor: 1,
+          ingredients: [
+            {
+              ingredientId: 'milk',
+              displayName: 'Whole Milk',
+              quantity: { amount: 2, unit: 'cup', category: 'Volume' },
+            },
+          ],
+          dietaryTags: [],
+        },
+      ],
+    };
+
+    const savedList = {
+      id: 'list-1',
+      name: 'Weekly Groceries',
+      eventId: null,
+      items: [
+        {
+          id: 'item-1',
+          ingredientId: 'milk',
+          displayName: 'Whole Milk',
+          quantity: { amount: 473.176, unit: 'ml', category: 'Volume' },
+          sourceRecipeIds: ['r1'],
+          checked: false,
+        },
+      ],
+    };
+
+    let postListsCalled = false;
+    let patchCalled = false;
+    let listSaved = false;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const u = url.toString();
+      if (u.includes('/api/recipes')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => mockRecipes,
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-list') && options?.method === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => mockPreviewResponse,
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-lists') && options?.method === 'POST') {
+        postListsCalled = true;
+        listSaved = true;
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => savedList,
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-lists') && (!options?.method || options.method === 'GET')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => (listSaved ? [savedList] : []),
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-lists/list-1/items/item-1') && options?.method === 'PATCH') {
+        patchCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ id: 'item-1', checked: true }),
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-lists/list-1')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            ...savedList,
+            items: [{ ...savedList.items[0], checked: patchCalled }],
+          }),
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
+
+    expect(await screen.findByText('Pancakes')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/list name/i), {
+      target: { value: 'Weekly Groceries' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: /select recipe pancakes/i }));
+    fireEvent.click(screen.getByRole('button', { name: /build shopping list/i }));
+
+    const saveButton = await screen.findByRole('button', { name: /save shopping list/i });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(postListsCalled).toBe(true);
+    });
+
+    // Saving flips into view mode
+    expect(await screen.findByText('Viewing: Weekly Groceries')).toBeInTheDocument();
+    expect(await screen.findByText('Saved Shopping Lists (1)')).toBeInTheDocument();
+
+    const itemCheckbox = await screen.findByRole('checkbox', {
+      name: /mark whole milk as purchased/i,
+    });
+    fireEvent.click(itemCheckbox);
+
+    await waitFor(() => {
+      expect(patchCalled).toBe(true);
+    });
+  });
+
   it('does NOT trigger a duplicate fetch of GET /api/recipes when switching between views with cached data', async () => {
     let fetchCount = 0;
     const mockRecipes = [

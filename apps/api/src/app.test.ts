@@ -14,6 +14,8 @@ describe('CookOut AI API Endpoints', () => {
   beforeAll(async () => {
     // Ensure test database has schema applied
     try {
+      await prisma.$executeRawUnsafe('DELETE FROM ShoppingListItem');
+      await prisma.$executeRawUnsafe('DELETE FROM ShoppingList');
       await prisma.$executeRawUnsafe('DELETE FROM IngredientLine');
       await prisma.$executeRawUnsafe('DELETE FROM RecipeStep');
       await prisma.$executeRawUnsafe('DELETE FROM Recipe');
@@ -25,6 +27,8 @@ describe('CookOut AI API Endpoints', () => {
 
   beforeEach(async () => {
     // Clean database before each test
+    await prisma.shoppingListItem.deleteMany();
+    await prisma.shoppingList.deleteMany();
     await prisma.ingredientLine.deleteMany();
     await prisma.recipeStep.deleteMany();
     await prisma.recipe.deleteMany();
@@ -871,6 +875,218 @@ describe('CookOut AI API Endpoints', () => {
       const res = await request(app).delete('/api/events/non-existent-event-id');
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+  });
+
+  describe('ShoppingList CRUD', () => {
+    it('POST /api/shopping-lists creates a standalone persisted list (eventId null) with checked defaulting to false', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Pancakes',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 100, unit: 'g' }],
+        });
+
+      const res = await request(app)
+        .post('/api/shopping-lists')
+        .send({
+          name: 'Weekly Groceries',
+          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 8 }],
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('id');
+      expect(res.body.name).toBe('Weekly Groceries');
+      expect(res.body.eventId).toBeNull();
+      expect(res.body.items).toHaveLength(1);
+      expect(res.body.items[0]).toHaveProperty('id');
+      expect(res.body.items[0].checked).toBe(false);
+      expect(res.body.items[0].quantity.amount).toBe(200); // 100g * (8/4 scale)
+    });
+
+    it('POST /api/shopping-lists rejects an empty name', async () => {
+      const res = await request(app)
+        .post('/api/shopping-lists')
+        .send({ name: '', sourceItems: [] });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidShoppingListError');
+    });
+
+    it('POST /api/shopping-lists with a nonexistent recipeId returns 404', async () => {
+      const res = await request(app)
+        .post('/api/shopping-lists')
+        .send({ name: 'List', sourceItems: [{ recipeId: 'missing-id', targetServings: 2 }] });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+
+    it('GET /api/shopping-lists returns all lists with items included', async () => {
+      await request(app).post('/api/shopping-lists').send({ name: 'List A', sourceItems: [] });
+      await request(app).post('/api/shopping-lists').send({ name: 'List B', sourceItems: [] });
+
+      const res = await request(app).get('/api/shopping-lists');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(2);
+      expect(res.body[0]).toHaveProperty('items');
+    });
+
+    it('GET /api/shopping-lists/:id with a nonexistent id returns 404', async () => {
+      const res = await request(app).get('/api/shopping-lists/non-existent-list-id');
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+
+    it('DELETE /api/shopping-lists/:id removes the list; subsequent GET returns 404', async () => {
+      const createRes = await request(app)
+        .post('/api/shopping-lists')
+        .send({ name: 'To Delete', sourceItems: [] });
+
+      const deleteRes = await request(app).delete(`/api/shopping-lists/${createRes.body.id}`);
+      expect(deleteRes.status).toBe(204);
+
+      const getRes = await request(app).get(`/api/shopping-lists/${createRes.body.id}`);
+      expect(getRes.status).toBe(404);
+    });
+
+    it('PATCH /api/shopping-lists/:listId/items/:itemId toggles checked without resending the whole list', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Eggs',
+          baseServings: 2,
+          ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
+        });
+
+      const listRes = await request(app)
+        .post('/api/shopping-lists')
+        .send({
+          name: 'Breakfast List',
+          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 2 }],
+        });
+
+      const itemId = listRes.body.items[0].id;
+
+      const patchRes = await request(app)
+        .patch(`/api/shopping-lists/${listRes.body.id}/items/${itemId}`)
+        .send({ checked: true });
+
+      expect(patchRes.status).toBe(200);
+      expect(patchRes.body).toEqual({ id: itemId, checked: true });
+
+      const getRes = await request(app).get(`/api/shopping-lists/${listRes.body.id}`);
+      expect(getRes.body.items[0].checked).toBe(true);
+    });
+
+    it('PATCH /api/shopping-lists/:listId/items/:itemId returns 404 for a mismatched list/item pair', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Eggs',
+          baseServings: 2,
+          ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
+        });
+
+      const listA = await request(app)
+        .post('/api/shopping-lists')
+        .send({
+          name: 'List A',
+          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 2 }],
+        });
+      const listB = await request(app)
+        .post('/api/shopping-lists')
+        .send({ name: 'List B', sourceItems: [] });
+
+      const itemFromListA = listA.body.items[0].id;
+
+      const res = await request(app)
+        .patch(`/api/shopping-lists/${listB.body.id}/items/${itemFromListA}`)
+        .send({ checked: true });
+
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('Event-linked ShoppingList', () => {
+    const validGuestGroup = { totalGuests: 8, vegetarianCount: 0, veganCount: 0 };
+
+    it('PUT /api/events/:eventId/shopping-list creates a linked list on first call, and regenerating discards prior checked state', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Chili',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'beans', displayName: 'Beans', amount: 400, unit: 'g' }],
+        });
+
+      const eventRes = await request(app)
+        .post('/api/events')
+        .send({
+          name: 'Chili Night',
+          guestGroup: validGuestGroup,
+          recipeIds: [recipeRes.body.id],
+        });
+
+      const firstSave = await request(app).put(`/api/events/${eventRes.body.id}/shopping-list`);
+      expect(firstSave.status).toBe(200);
+      expect(firstSave.body.eventId).toBe(eventRes.body.id);
+      expect(firstSave.body.name).toBe('Chili Night'); // defaults to event name
+      expect(firstSave.body.items).toHaveLength(1);
+
+      // Standalone GET confirms it's a first-class, independently fetchable ShoppingList
+      const standaloneGet = await request(app).get(`/api/shopping-lists/${firstSave.body.id}`);
+      expect(standaloneGet.status).toBe(200);
+      expect(standaloneGet.body.eventId).toBe(eventRes.body.id);
+
+      // Check an item, then regenerate — checked state should reset
+      const itemId = firstSave.body.items[0].id;
+      await request(app)
+        .patch(`/api/shopping-lists/${firstSave.body.id}/items/${itemId}`)
+        .send({ checked: true });
+
+      const regenerated = await request(app).put(`/api/events/${eventRes.body.id}/shopping-list`);
+      expect(regenerated.status).toBe(200);
+      expect(regenerated.body.items[0].checked).toBe(false);
+      // The list itself was deleted and recreated, so it has a fresh id
+      expect(regenerated.body.id).not.toBe(firstSave.body.id);
+
+      // The event now reports the fresh shoppingListId
+      const eventGet = await request(app).get(`/api/events/${eventRes.body.id}`);
+      expect(eventGet.body.shoppingListId).toBe(regenerated.body.id);
+    });
+
+    it('PUT /api/events/:eventId/shopping-list accepts an explicit name override', async () => {
+      const eventRes = await request(app)
+        .post('/api/events')
+        .send({ name: 'Default Name Event', guestGroup: validGuestGroup, recipeIds: [] });
+
+      const res = await request(app)
+        .put(`/api/events/${eventRes.body.id}/shopping-list`)
+        .send({ name: 'Custom List Name' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('Custom List Name');
+    });
+
+    it('PUT /api/events/:eventId/shopping-list for a nonexistent event returns 404', async () => {
+      const res = await request(app).put('/api/events/non-existent-event-id/shopping-list');
+      expect(res.status).toBe(404);
+      expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+
+    it('DELETE /api/events/:id cascades its linked ShoppingList', async () => {
+      const eventRes = await request(app)
+        .post('/api/events')
+        .send({ name: 'Cascade Test', guestGroup: validGuestGroup, recipeIds: [] });
+
+      const listRes = await request(app).put(`/api/events/${eventRes.body.id}/shopping-list`);
+
+      await request(app).delete(`/api/events/${eventRes.body.id}`);
+
+      const getListRes = await request(app).get(`/api/shopping-lists/${listRes.body.id}`);
+      expect(getListRes.status).toBe(404);
     });
   });
 });

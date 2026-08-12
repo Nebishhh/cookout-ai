@@ -152,6 +152,31 @@ export interface EventDetailDto extends EventSummaryDto {
   droppedRecipeIds: string[];
 }
 
+export interface CreateShoppingListInput {
+  name: string;
+  sourceItems: ShoppingListRequestItem[];
+}
+
+export interface ShoppingListLineDto {
+  id: string;
+  ingredientId: string;
+  displayName: string;
+  quantity: {
+    amount: number;
+    unit: string;
+    category: string;
+  };
+  sourceRecipeIds: string[];
+  checked: boolean;
+}
+
+export interface ShoppingListDto {
+  id: string;
+  name: string;
+  eventId: string | null;
+  items: ShoppingListLineDto[];
+}
+
 export class ApiError extends Error {
   status: number;
   errorName?: string;
@@ -245,6 +270,27 @@ export const api = {
   deleteEvent: (id: string) =>
     request<void>(`/api/events/${id}`, {
       method: 'DELETE',
+    }),
+  saveEventShoppingList: (eventId: string, name?: string) =>
+    request<ShoppingListDto>(`/api/events/${eventId}/shopping-list`, {
+      method: 'PUT',
+      body: JSON.stringify(name ? { name } : {}),
+    }),
+  getShoppingLists: () => request<ShoppingListDto[]>('/api/shopping-lists'),
+  getShoppingListById: (id: string) => request<ShoppingListDto>(`/api/shopping-lists/${id}`),
+  createShoppingList: (data: CreateShoppingListInput) =>
+    request<ShoppingListDto>('/api/shopping-lists', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteShoppingList: (id: string) =>
+    request<void>(`/api/shopping-lists/${id}`, {
+      method: 'DELETE',
+    }),
+  toggleShoppingListItem: (listId: string, itemId: string, checked: boolean) =>
+    request<{ id: string; checked: boolean }>(`/api/shopping-lists/${listId}/items/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ checked }),
     }),
   importRecipeText: (text: string) =>
     request<ImportRecipeTextResponseDto>('/api/recipes/import-text', {

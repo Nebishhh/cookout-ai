@@ -12,6 +12,8 @@ import {
   type CreateEventInput,
   type EventSummaryDto,
   type EventDetailDto,
+  type CreateShoppingListInput,
+  type ShoppingListDto,
   type ImportRecipeTextResponseDto,
 } from './api';
 
@@ -352,6 +354,154 @@ export function useDeleteEvent() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
+    },
+  });
+}
+
+export const SHOPPING_LISTS_QUERY_KEY = ['shoppingLists'] as const;
+
+/**
+ * Query hook for fetching all saved shopping lists (GET /api/shopping-lists), items included —
+ * a plain DB read, unlike events this has no recompute cost, so it's safe to be non-lean.
+ */
+export function useShoppingLists() {
+  return useQuery<ShoppingListDto[]>({
+    queryKey: SHOPPING_LISTS_QUERY_KEY,
+    queryFn: () => api.getShoppingLists(),
+  });
+}
+
+/**
+ * Query hook for fetching a single saved shopping list (GET /api/shopping-lists/:id).
+ */
+export function useShoppingList(id: string | null) {
+  return useQuery<ShoppingListDto>({
+    queryKey: [...SHOPPING_LISTS_QUERY_KEY, id],
+    queryFn: () => api.getShoppingListById(id as string),
+    enabled: id != null,
+  });
+}
+
+/**
+ * Mutation hook for saving a new standalone shopping list (POST /api/shopping-lists).
+ * Non-optimistic — the response carries server-recomputed quantities the client can't
+ * cheaply predict, and this is a low-frequency "save" action.
+ */
+export function useCreateShoppingList() {
+  const queryClient = useQueryClient();
+
+  return useMutation<ShoppingListDto, Error, CreateShoppingListInput>({
+    mutationFn: (data: CreateShoppingListInput) => api.createShoppingList(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: SHOPPING_LISTS_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * Mutation hook for saving/regenerating an event's linked shopping list
+ * (PUT /api/events/:eventId/shopping-list). Non-optimistic, same rationale as
+ * useCreateShoppingList. Invalidates both the shopping-lists cache and the event's own
+ * detail cache, since the event's shoppingListId changes on every regenerate.
+ */
+export function useSaveEventShoppingList() {
+  const queryClient = useQueryClient();
+
+  return useMutation<ShoppingListDto, Error, { eventId: string; name?: string }>({
+    mutationFn: ({ eventId, name }) => api.saveEventShoppingList(eventId, name),
+    onSuccess: (_list, { eventId }) => {
+      queryClient.invalidateQueries({ queryKey: SHOPPING_LISTS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: [...EVENTS_QUERY_KEY, eventId] });
+    },
+  });
+}
+
+/**
+ * Mutation hook for deleting a saved shopping list (DELETE /api/shopping-lists/:id).
+ * Optimistically removes the entry from the list cache, rolling back on error — mirrors
+ * useDeleteRecipe/useDeleteEvent exactly.
+ */
+export function useDeleteShoppingList() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string, { previousList?: ShoppingListDto }>({
+    mutationFn: (id: string) => api.deleteShoppingList(id),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: SHOPPING_LISTS_QUERY_KEY });
+      const previousList = queryClient
+        .getQueryData<ShoppingListDto[]>(SHOPPING_LISTS_QUERY_KEY)
+        ?.find((list) => list.id === id);
+      queryClient.setQueryData<ShoppingListDto[]>(SHOPPING_LISTS_QUERY_KEY, (old = []) =>
+        old.filter((list) => list.id !== id)
+      );
+      return { previousList };
+    },
+    onError: (_err, _id, context) => {
+      const restored = context?.previousList;
+      if (!restored) return;
+      queryClient.setQueryData<ShoppingListDto[]>(SHOPPING_LISTS_QUERY_KEY, (old = []) =>
+        old.some((list) => list.id === restored.id) ? old : [...old, restored]
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: SHOPPING_LISTS_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * Mutation hook for toggling a single shopping list item's checked state
+ * (PATCH /api/shopping-lists/:listId/items/:itemId). Optimistic with a targeted single-item
+ * patch inside ['shoppingLists', listId] — not a whole-array snapshot/restore (the earlier
+ * recipe-CRUD optimistic-update bug fix established why that pattern causes cross-mutation
+ * clobbering). This is the one interaction here where instant feedback genuinely matters —
+ * checking items off while physically at the store.
+ */
+export function useToggleShoppingListItemChecked() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { id: string; checked: boolean },
+    Error,
+    { listId: string; itemId: string; checked: boolean },
+    { previousChecked?: boolean }
+  >({
+    mutationFn: ({ listId, itemId, checked }) =>
+      api.toggleShoppingListItem(listId, itemId, checked),
+    onMutate: async ({ listId, itemId, checked }) => {
+      const queryKey = [...SHOPPING_LISTS_QUERY_KEY, listId];
+      await queryClient.cancelQueries({ queryKey });
+      const previousList = queryClient.getQueryData<ShoppingListDto>(queryKey);
+      const previousChecked = previousList?.items.find((item) => item.id === itemId)?.checked;
+
+      queryClient.setQueryData<ShoppingListDto>(queryKey, (old) =>
+        old
+          ? {
+              ...old,
+              items: old.items.map((item) => (item.id === itemId ? { ...item, checked } : item)),
+            }
+          : old
+      );
+
+      return { previousChecked };
+    },
+    onError: (_err, { listId, itemId }, context) => {
+      if (context?.previousChecked === undefined) return;
+      const queryKey = [...SHOPPING_LISTS_QUERY_KEY, listId];
+      const restoredChecked = context.previousChecked;
+      queryClient.setQueryData<ShoppingListDto>(queryKey, (old) =>
+        old
+          ? {
+              ...old,
+              items: old.items.map((item) =>
+                item.id === itemId ? { ...item, checked: restoredChecked } : item
+              ),
+            }
+          : old
+      );
+    },
+    onSettled: (_data, _err, { listId }) => {
+      queryClient.invalidateQueries({ queryKey: [...SHOPPING_LISTS_QUERY_KEY, listId] });
     },
   });
 }

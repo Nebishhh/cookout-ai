@@ -8,6 +8,7 @@ import {
   GuestGroup,
   InvalidRecipeError,
   InvalidGuestGroupError,
+  InvalidShoppingListError,
   DomainError,
 } from '@cookout-ai/domain';
 import { prisma } from './prisma.js';
@@ -25,6 +26,11 @@ import {
   serializeEventPlan,
   type CreateEventInput,
 } from './eventMapper.js';
+import {
+  buildShoppingListLinesFromConsolidated,
+  toDomainShoppingList,
+  toShoppingListJSON,
+} from './shoppingListMapper.js';
 import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
 import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
@@ -653,11 +659,13 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
 app.get('/api/events', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const prismaEvents = await prisma.event.findMany({
+      include: { shoppingList: { select: { id: true } } },
       orderBy: { createdAt: 'desc' },
     });
 
-    const domainEvents = prismaEvents.map((e) => toDomainEvent(e));
-    res.json(domainEvents.map((e) => toEventSummaryJSON(e)));
+    res.json(
+      prismaEvents.map((e) => toEventSummaryJSON(toDomainEvent(e), e.shoppingList?.id ?? null))
+    );
   } catch (err) {
     next(err);
   }
@@ -667,7 +675,10 @@ app.get('/api/events', async (_req: Request, res: Response, next: NextFunction) 
 app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
-    const prismaEvent = await prisma.event.findUnique({ where: { id } });
+    const prismaEvent = await prisma.event.findUnique({
+      where: { id },
+      include: { shoppingList: { select: { id: true } } },
+    });
 
     if (!prismaEvent) {
       throw new NotFoundError(`Event with id "${id}" not found.`);
@@ -692,7 +703,7 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
 
     res.json({
-      ...toEventSummaryJSON(domainEvent),
+      ...toEventSummaryJSON(domainEvent, prismaEvent.shoppingList?.id ?? null),
       ...serializeEventPlan(eventPlan),
       droppedRecipeIds,
     });
@@ -722,6 +733,7 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
         veganCount: domainEvent.guestGroup.veganCount,
         recipeIdsJson: JSON.stringify(domainEvent.recipeIds),
       },
+      include: { shoppingList: { select: { id: true } } },
     });
 
     const reconstructedEvent = toDomainEvent(updatedPrismaEvent);
@@ -743,7 +755,7 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
 
     res.json({
-      ...toEventSummaryJSON(reconstructedEvent),
+      ...toEventSummaryJSON(reconstructedEvent, updatedPrismaEvent.shoppingList?.id ?? null),
       ...serializeEventPlan(eventPlan),
       droppedRecipeIds,
     });
@@ -769,6 +781,246 @@ app.delete('/api/events/:id', async (req: Request, res: Response, next: NextFunc
     next(err);
   }
 });
+
+/**
+ * Open Question / Scope Notes for persisted ShoppingLists:
+ * - Neither this route nor the event-linked one accepts client-supplied quantities — the
+ *   server always re-runs toDomainRecipe -> scaleRecipe -> consolidateShoppingList itself
+ *   before persisting, matching the domain layer's "re-enforce invariants regardless of
+ *   data source" philosophy.
+ * - Regenerating a list (POST here for standalone, PUT for event-linked) is a full
+ *   delete-and-recreate — no attempt is made to preserve prior checked state by matching
+ *   ingredients across regenerations (a deliberate, reviewed tradeoff, not an oversight).
+ */
+
+// POST /api/shopping-lists — standalone, persisted (eventId always null here)
+app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { name, sourceItems } = req.body || {};
+
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      throw new InvalidShoppingListError('Request body must include a non-empty name.');
+    }
+
+    if (!Array.isArray(sourceItems)) {
+      throw new InvalidRecipeError('sourceItems must be an array of recipe entries.');
+    }
+
+    const scaledRecipes = [];
+    for (const entry of sourceItems) {
+      if (!entry || typeof entry !== 'object' || !entry.recipeId) {
+        throw new InvalidRecipeError('Each shopping list entry must contain a recipeId.');
+      }
+
+      const recipeId = String(entry.recipeId);
+      const targetServings = entry.targetServings;
+
+      const prismaRecipe = await prisma.recipe.findUnique({
+        where: { id: recipeId },
+        include: { ingredients: true, steps: true },
+      });
+
+      if (!prismaRecipe) {
+        throw new NotFoundError(`Recipe not found: ${recipeId}`);
+      }
+
+      const domainRecipe = toDomainRecipe(prismaRecipe);
+      scaledRecipes.push(scaleRecipe(domainRecipe, targetServings));
+    }
+
+    const consolidatedList = consolidateShoppingList(scaledRecipes);
+    const domainLines = buildShoppingListLinesFromConsolidated(consolidatedList);
+
+    const createdPrismaList = await prisma.shoppingList.create({
+      data: {
+        id: crypto.randomUUID(),
+        name: name.trim(),
+        eventId: null,
+        items: {
+          create: domainLines.map((line, idx) => ({
+            ingredientId: line.ingredientId,
+            displayName: line.displayName,
+            amount: line.quantity.amount,
+            unit: line.quantity.unit,
+            sourceRecipeIdsJson: JSON.stringify(line.sourceRecipeIds),
+            checked: line.checked,
+            position: idx,
+          })),
+        },
+      },
+      include: { items: true },
+    });
+
+    const reconstructedList = toDomainShoppingList(createdPrismaList);
+    res.status(201).json(toShoppingListJSON(reconstructedList));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * PUT /api/events/:eventId/shopping-list — idempotent "save/regenerate this event's list".
+ * Recomputes the event's live plan (same as GET /api/events/:id), then replaces any existing
+ * linked ShoppingList wholesale inside a transaction. PUT (not POST) because repeat calls
+ * converge on the same result, matching the @unique constraint on ShoppingList.eventId — a
+ * POST implying "always create new" would violate it on a second call.
+ */
+app.put(
+  '/api/events/:eventId/shopping-list',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const eventId = (
+        Array.isArray(req.params.eventId) ? req.params.eventId[0] : req.params.eventId
+      ) as string;
+
+      const prismaEvent = await prisma.event.findUnique({ where: { id: eventId } });
+      if (!prismaEvent) {
+        throw new NotFoundError(`Event with id "${eventId}" not found.`);
+      }
+
+      const domainEvent = toDomainEvent(prismaEvent);
+
+      const recipes = [];
+      for (const recipeId of domainEvent.recipeIds) {
+        const prismaRecipe = await prisma.recipe.findUnique({
+          where: { id: recipeId },
+          include: { ingredients: true, steps: true },
+        });
+        if (prismaRecipe) {
+          recipes.push(toDomainRecipe(prismaRecipe));
+        }
+      }
+
+      const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
+      const domainLines = buildShoppingListLinesFromConsolidated(eventPlan.shoppingList);
+
+      const { name: overrideName } = req.body || {};
+      const listName =
+        typeof overrideName === 'string' && overrideName.trim().length > 0
+          ? overrideName.trim()
+          : domainEvent.name;
+
+      const newPrismaList = await prisma.$transaction(async (tx) => {
+        // Deleting the ShoppingList row cascades its ShoppingListItem rows automatically
+        // (onDelete: Cascade) — full delete-and-recreate discards prior checked state.
+        await tx.shoppingList.deleteMany({ where: { eventId } });
+
+        return tx.shoppingList.create({
+          data: {
+            id: crypto.randomUUID(),
+            name: listName,
+            eventId,
+            items: {
+              create: domainLines.map((line, idx) => ({
+                ingredientId: line.ingredientId,
+                displayName: line.displayName,
+                amount: line.quantity.amount,
+                unit: line.quantity.unit,
+                sourceRecipeIdsJson: JSON.stringify(line.sourceRecipeIds),
+                checked: line.checked,
+                position: idx,
+              })),
+            },
+          },
+          include: { items: true },
+        });
+      });
+
+      res.status(200).json(toShoppingListJSON(toDomainShoppingList(newPrismaList)));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/shopping-lists — plain DB read, safe to include items (no recompute cost)
+app.get('/api/shopping-lists', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const prismaLists = await prisma.shoppingList.findMany({
+      include: { items: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json(prismaLists.map((l) => toShoppingListJSON(toDomainShoppingList(l))));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/shopping-lists/:id
+app.get('/api/shopping-lists/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
+    const prismaList = await prisma.shoppingList.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+
+    if (!prismaList) {
+      throw new NotFoundError(`Shopping list with id "${id}" not found.`);
+    }
+
+    res.json(toShoppingListJSON(toDomainShoppingList(prismaList)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/shopping-lists/:id — cascades items, no effect on a linked Event
+app.delete('/api/shopping-lists/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
+
+    const existingList = await prisma.shoppingList.findUnique({ where: { id } });
+    if (!existingList) {
+      throw new NotFoundError(`Shopping list with id "${id}" not found.`);
+    }
+
+    await prisma.shoppingList.delete({ where: { id } });
+
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/shopping-lists/:listId/items/:itemId — cheap, targeted toggle (fires on every checkbox tap)
+app.patch(
+  '/api/shopping-lists/:listId/items/:itemId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const listId = (
+        Array.isArray(req.params.listId) ? req.params.listId[0] : req.params.listId
+      ) as string;
+      const itemId = (
+        Array.isArray(req.params.itemId) ? req.params.itemId[0] : req.params.itemId
+      ) as string;
+      const { checked } = req.body || {};
+
+      if (typeof checked !== 'boolean') {
+        throw new InvalidShoppingListError('Request body must include a boolean "checked" field.');
+      }
+
+      const existingItem = await prisma.shoppingListItem.findFirst({
+        where: { id: itemId, shoppingListId: listId },
+      });
+      if (!existingItem) {
+        throw new NotFoundError(
+          `Shopping list item with id "${itemId}" not found in list "${listId}".`
+        );
+      }
+
+      const updatedItem = await prisma.shoppingListItem.update({
+        where: { id: itemId },
+        data: { checked },
+      });
+
+      res.json({ id: updatedItem.id, checked: updatedItem.checked });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // Central error handling middleware
 app.use(errorHandler);

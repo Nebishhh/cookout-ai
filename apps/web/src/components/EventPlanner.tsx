@@ -12,6 +12,7 @@ import {
   Trash2,
   PlusCircle,
   Loader2,
+  Eye,
 } from 'lucide-react';
 import {
   useRecipes,
@@ -20,6 +21,7 @@ import {
   useCreateEvent,
   useUpdateEvent,
   useDeleteEvent,
+  useSaveEventShoppingList,
 } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
 import { Button } from './ui/button';
@@ -33,12 +35,14 @@ export interface EventPlannerProps {
   selectedEventId?: string | null;
   onSaved?: (id: string) => void;
   onCloseDetail?: () => void;
+  onViewShoppingList?: (id: string) => void;
 }
 
 export const EventPlanner: React.FC<EventPlannerProps> = ({
   selectedEventId = null,
   onSaved,
   onCloseDetail,
+  onViewShoppingList,
 }) => {
   const isViewMode = selectedEventId != null;
 
@@ -62,6 +66,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const createEventMutation = useCreateEvent();
   const updateEventMutation = useUpdateEvent();
   const deleteEventMutation = useDeleteEvent();
+  const saveShoppingListMutation = useSaveEventShoppingList();
 
   // Pre-fill the form from the saved event whenever the selected event changes / refetches.
   useEffect(() => {
@@ -155,6 +160,16 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
     if (onCloseDetail) onCloseDetail();
   };
 
+  const handleSaveShoppingList = () => {
+    if (!selectedEventId) return;
+    saveShoppingListMutation.mutate({ eventId: selectedEventId });
+  };
+
+  const handleViewShoppingList = () => {
+    const shoppingListId = eventQuery.data?.shoppingListId;
+    if (shoppingListId && onViewShoppingList) onViewShoppingList(shoppingListId);
+  };
+
   const displayError =
     (planEventMutation.isError && planEventMutation.error
       ? planEventMutation.error.message
@@ -167,6 +182,9 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       : null) ||
     (deleteEventMutation.isError && deleteEventMutation.error
       ? deleteEventMutation.error.message
+      : null) ||
+    (saveShoppingListMutation.isError && saveShoppingListMutation.error
+      ? saveShoppingListMutation.error.message
       : null) ||
     (eventQuery.isError && eventQuery.error ? eventQuery.error.message : null) ||
     (recipeIsError && recipeQueryError ? recipeQueryError.message : null);
@@ -402,6 +420,41 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                 >
                   <Trash2 className="h-4 w-4" />
                   <span>{deleteEventMutation.isPending ? 'Deleting...' : 'Delete Event'}</span>
+                </Button>
+              )}
+
+              {isViewMode && eventQuery.data?.shoppingListId && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleViewShoppingList}
+                  className="space-x-2 border-stone text-ink"
+                >
+                  <Eye className="h-4 w-4" />
+                  <span>View Shopping List</span>
+                </Button>
+              )}
+
+              {isViewMode && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleSaveShoppingList}
+                  disabled={saveShoppingListMutation.isPending}
+                  className="space-x-2 bg-olive text-white hover:bg-olive-hover disabled:opacity-50"
+                >
+                  {saveShoppingListMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ShoppingBag className="h-4 w-4" />
+                  )}
+                  <span>
+                    {saveShoppingListMutation.isPending
+                      ? 'Saving...'
+                      : eventQuery.data?.shoppingListId
+                        ? 'Regenerate Shopping List'
+                        : 'Save Shopping List'}
+                  </span>
                 </Button>
               )}
 

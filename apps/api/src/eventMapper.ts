@@ -121,6 +121,7 @@ export function serializeEventPlan(eventPlan: EventPlan) {
       displayName: item.displayName,
       quantity: item.quantity.toJSON(),
       sourceRecipeIds: item.sourceRecipeIds,
+      category: item.category,
     })),
   };
 }

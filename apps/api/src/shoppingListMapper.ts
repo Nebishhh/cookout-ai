@@ -87,6 +87,7 @@ export function toShoppingListJSON(domainList: ShoppingList) {
       quantity: line.quantity.toJSON(),
       sourceRecipeIds: line.sourceRecipeIds,
       checked: line.checked,
+      category: line.category,
     })),
   };
 }

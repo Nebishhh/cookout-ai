@@ -240,6 +240,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           displayName: 'Whole Milk',
           quantity: { amount: 473.176, unit: 'ml', category: 'Volume' },
           sourceRecipeIds: ['r1'],
+          category: 'Dairy',
         },
       ],
       scaledRecipes: [
@@ -377,6 +378,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           displayName: 'Whole Milk',
           quantity: { amount: 473.176, unit: 'ml', category: 'Volume' },
           sourceRecipeIds: ['r1'],
+          category: 'Dairy',
         },
       ],
       scaledRecipes: [
@@ -409,6 +411,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           quantity: { amount: 473.176, unit: 'ml', category: 'Volume' },
           sourceRecipeIds: ['r1'],
           checked: false,
+          category: 'Dairy',
         },
       ],
     };
@@ -831,6 +834,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
             displayName: 'Beef',
             quantity: { amount: 1.5, unit: 'kg', category: 'Mass' },
             sourceRecipeIds: ['r-meat'],
+            category: 'Meat',
           },
         ],
       };
@@ -1042,6 +1046,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
             displayName: 'Beef',
             quantity: { amount: 1.67, unit: 'kg', category: 'Mass' },
             sourceRecipeIds: ['r-meat'],
+            category: 'Meat',
           },
         ],
       };

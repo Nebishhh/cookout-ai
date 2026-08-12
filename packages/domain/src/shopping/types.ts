@@ -1,4 +1,5 @@
 import type { Quantity } from '../units/quantity.js';
+import type { GroceryCategory } from './groceryCategory.js';
 
 /**
  * Open Question / Scope Notes:
@@ -15,4 +16,5 @@ export interface ShoppingListItem {
   readonly displayName: string;
   readonly quantity: Quantity;
   readonly sourceRecipeIds: readonly string[];
+  readonly category: GroceryCategory;
 }

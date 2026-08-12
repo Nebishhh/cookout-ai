@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InvalidShoppingListError, Quantity, ShoppingListLine } from '../index.js';
+import { GroceryCategory, InvalidShoppingListError, Quantity, ShoppingListLine } from '../index.js';
 
 describe('ShoppingListLine Construction & Validation', () => {
   const validQuantity = () => new Quantity(200, 'g');
@@ -13,6 +13,7 @@ describe('ShoppingListLine Construction & Validation', () => {
     expect(line.quantity.amount).toBe(200);
     expect(line.sourceRecipeIds).toEqual(['r1']);
     expect(line.checked).toBe(false);
+    expect(line.category).toBe(GroceryCategory.Dairy);
   });
 
   it('accepts an explicit checked value', () => {

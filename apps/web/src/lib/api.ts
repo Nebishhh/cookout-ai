@@ -59,6 +59,7 @@ export interface ShoppingListItemDto {
     category: string;
   };
   sourceRecipeIds: string[];
+  category: string;
 }
 
 export interface ScaledRecipeDto {
@@ -168,6 +169,7 @@ export interface ShoppingListLineDto {
   };
   sourceRecipeIds: string[];
   checked: boolean;
+  category: string;
 }
 
 export interface ShoppingListDto {

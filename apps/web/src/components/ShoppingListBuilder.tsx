@@ -23,6 +23,7 @@ import {
   useToggleShoppingListItemChecked,
 } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
+import { groupByCategory } from '../lib/groceryCategories';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -258,46 +259,58 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
               ) : !shoppingListQuery.data || shoppingListQuery.data.items.length === 0 ? (
                 <div className="py-4 text-sm text-ink-muted">This list has no items yet.</div>
               ) : (
-                <div className="divide-y divide-stone/60">
-                  {shoppingListQuery.data.items.map((item) => {
-                    const checkboxId = `list-item-${item.id}`;
-                    return (
-                      <div key={item.id} className="flex items-center justify-between gap-3 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <Checkbox
-                            id={checkboxId}
-                            checked={item.checked}
-                            onChange={() => handleToggleItem(item.id, !item.checked)}
-                            aria-label={`Mark ${item.displayName} as ${item.checked ? 'not purchased' : 'purchased'}`}
-                          />
-                          <Label
-                            htmlFor={checkboxId}
-                            className={`cursor-pointer text-left font-normal normal-case tracking-normal text-base ${
-                              item.checked ? 'text-ink-muted line-through' : 'text-ink'
-                            }`}
-                          >
-                            {item.displayName}
-                          </Label>
-                        </div>
+                <div className="space-y-6">
+                  {groupByCategory(shoppingListQuery.data.items).map((group) => (
+                    <div key={group.category}>
+                      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                        {group.category}
+                      </h3>
+                      <div className="divide-y divide-stone/60">
+                        {group.items.map((item) => {
+                          const checkboxId = `list-item-${item.id}`;
+                          return (
+                            <div
+                              key={item.id}
+                              className="flex items-center justify-between gap-3 py-3.5"
+                            >
+                              <div className="flex items-center gap-3">
+                                <Checkbox
+                                  id={checkboxId}
+                                  checked={item.checked}
+                                  onChange={() => handleToggleItem(item.id, !item.checked)}
+                                  aria-label={`Mark ${item.displayName} as ${item.checked ? 'not purchased' : 'purchased'}`}
+                                />
+                                <Label
+                                  htmlFor={checkboxId}
+                                  className={`cursor-pointer text-left font-normal normal-case tracking-normal text-base ${
+                                    item.checked ? 'text-ink-muted line-through' : 'text-ink'
+                                  }`}
+                                >
+                                  {item.displayName}
+                                </Label>
+                              </div>
 
-                        <span
-                          className={`rounded-xl border px-4 py-2 font-mono text-sm font-semibold ${
-                            item.checked
-                              ? 'border-stone/60 bg-canvas text-ink-muted'
-                              : 'border-clay/30 bg-clay-light text-clay-hover'
-                          }`}
-                        >
-                          {formatQuantityAmount(
-                            item.quantity.amount,
-                            item.quantity.unit,
-                            item.quantity.category,
-                            'consolidated'
-                          )}{' '}
-                          {item.quantity.unit}
-                        </span>
+                              <span
+                                className={`rounded-xl border px-4 py-2 font-mono text-sm font-semibold ${
+                                  item.checked
+                                    ? 'border-stone/60 bg-canvas text-ink-muted'
+                                    : 'border-clay/30 bg-clay-light text-clay-hover'
+                                }`}
+                              >
+                                {formatQuantityAmount(
+                                  item.quantity.amount,
+                                  item.quantity.unit,
+                                  item.quantity.category,
+                                  'consolidated'
+                                )}{' '}
+                                {item.quantity.unit}
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
               )}
             </CardContent>
@@ -487,45 +500,56 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                 </CardHeader>
 
                 <CardContent className="pt-6">
-                  <div className="divide-y divide-stone/60">
-                    {shoppingListData.shoppingList.map((item, idx) => (
-                      <div
-                        key={idx}
-                        className="flex flex-col justify-between py-3.5 sm:flex-row sm:items-center"
-                      >
-                        <div>
-                          <span className="text-base font-semibold text-ink">
-                            {item.displayName}
-                          </span>
-                          <span className="ml-2 text-xs text-ink-muted">({item.ingredientId})</span>
-                          <div className="mt-1 flex flex-wrap gap-1.5">
-                            <span className="text-[11px] text-ink-muted">From recipes:</span>
-                            {item.sourceRecipeIds.map((rId) => {
-                              const matchedRecipe = shoppingListData.scaledRecipes.find(
-                                (sr) => sr.sourceRecipeId === rId
-                              );
-                              return (
-                                <span
-                                  key={rId}
-                                  className="rounded bg-canvas border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted"
-                                >
-                                  {matchedRecipe?.sourceRecipeName || rId}
+                  <div className="space-y-6">
+                    {groupByCategory(shoppingListData.shoppingList).map((group) => (
+                      <div key={group.category}>
+                        <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                          {group.category}
+                        </h3>
+                        <div className="divide-y divide-stone/60">
+                          {group.items.map((item, idx) => (
+                            <div
+                              key={idx}
+                              className="flex flex-col justify-between py-3.5 sm:flex-row sm:items-center"
+                            >
+                              <div>
+                                <span className="text-base font-semibold text-ink">
+                                  {item.displayName}
                                 </span>
-                              );
-                            })}
-                          </div>
-                        </div>
+                                <span className="ml-2 text-xs text-ink-muted">
+                                  ({item.ingredientId})
+                                </span>
+                                <div className="mt-1 flex flex-wrap gap-1.5">
+                                  <span className="text-[11px] text-ink-muted">From recipes:</span>
+                                  {item.sourceRecipeIds.map((rId) => {
+                                    const matchedRecipe = shoppingListData.scaledRecipes.find(
+                                      (sr) => sr.sourceRecipeId === rId
+                                    );
+                                    return (
+                                      <span
+                                        key={rId}
+                                        className="rounded bg-canvas border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted"
+                                      >
+                                        {matchedRecipe?.sourceRecipeName || rId}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              </div>
 
-                        <div className="mt-2 sm:mt-0">
-                          <span className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover">
-                            {formatQuantityAmount(
-                              item.quantity.amount,
-                              item.quantity.unit,
-                              item.quantity.category,
-                              'consolidated'
-                            )}{' '}
-                            {item.quantity.unit}
-                          </span>
+                              <div className="mt-2 sm:mt-0">
+                                <span className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover">
+                                  {formatQuantityAmount(
+                                    item.quantity.amount,
+                                    item.quantity.unit,
+                                    item.quantity.category,
+                                    'consolidated'
+                                  )}{' '}
+                                  {item.quantity.unit}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     ))}

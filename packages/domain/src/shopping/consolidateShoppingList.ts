@@ -2,6 +2,7 @@ import type { ScaledRecipe } from '../recipes/types.js';
 import { BASE_UNITS, UnitCategory } from '../units/units.js';
 import { Quantity } from '../units/quantity.js';
 import type { ShoppingListItem } from './types.js';
+import { categorizeIngredient } from './groceryCategory.js';
 
 interface RawItemEntry {
   displayName: string;
@@ -85,6 +86,7 @@ export function consolidateShoppingList(
           displayName: firstDisplayName,
           quantity: new Quantity(totalAmount, baseUnit),
           sourceRecipeIds: Object.freeze(sourceRecipeIds),
+          category: categorizeIngredient(ingredientId, firstDisplayName),
         })
       );
     } else if (category === UnitCategory.Count) {
@@ -118,6 +120,7 @@ export function consolidateShoppingList(
             displayName: subFirstDisplayName,
             quantity: new Quantity(totalAmount, unit),
             sourceRecipeIds: Object.freeze(subSourceRecipeIds),
+            category: categorizeIngredient(ingredientId, subFirstDisplayName),
           })
         );
       }

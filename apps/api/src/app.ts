@@ -531,6 +531,7 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
         displayName: item.displayName,
         quantity: item.quantity.toJSON(),
         sourceRecipeIds: item.sourceRecipeIds,
+        category: item.category,
       })),
       scaledRecipes: scaledRecipes.map((sr) => ({
         sourceRecipeId: sr.sourceRecipeId,

@@ -24,6 +24,7 @@ import {
   useSaveEventShoppingList,
 } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
+import { groupByCategory } from '../lib/groceryCategories';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -638,43 +639,56 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                   No ingredients required (all candidate recipes were excluded).
                 </div>
               ) : (
-                <div className="divide-y divide-stone/60">
-                  {resultData.shoppingList.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="flex flex-col justify-between py-3.5 sm:flex-row sm:items-center"
-                    >
-                      <div>
-                        <span className="text-base font-semibold text-ink">{item.displayName}</span>
-                        <span className="ml-2 text-xs text-ink-muted">({item.ingredientId})</span>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          <span className="text-[11px] text-ink-muted">From recipes:</span>
-                          {item.sourceRecipeIds.map((rId) => {
-                            const matchedRecipe = resultData.includedRecipes.find(
-                              (ir) => ir.recipeId === rId
-                            );
-                            return (
-                              <span
-                                key={rId}
-                                className="rounded bg-canvas border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted"
-                              >
-                                {matchedRecipe?.recipeName || rId}
+                <div className="space-y-6">
+                  {groupByCategory(resultData.shoppingList).map((group) => (
+                    <div key={group.category}>
+                      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                        {group.category}
+                      </h3>
+                      <div className="divide-y divide-stone/60">
+                        {group.items.map((item, idx) => (
+                          <div
+                            key={idx}
+                            className="flex flex-col justify-between py-3.5 sm:flex-row sm:items-center"
+                          >
+                            <div>
+                              <span className="text-base font-semibold text-ink">
+                                {item.displayName}
                               </span>
-                            );
-                          })}
-                        </div>
-                      </div>
+                              <span className="ml-2 text-xs text-ink-muted">
+                                ({item.ingredientId})
+                              </span>
+                              <div className="mt-1 flex flex-wrap gap-1.5">
+                                <span className="text-[11px] text-ink-muted">From recipes:</span>
+                                {item.sourceRecipeIds.map((rId) => {
+                                  const matchedRecipe = resultData.includedRecipes.find(
+                                    (ir) => ir.recipeId === rId
+                                  );
+                                  return (
+                                    <span
+                                      key={rId}
+                                      className="rounded bg-canvas border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted"
+                                    >
+                                      {matchedRecipe?.recipeName || rId}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
 
-                      <div className="mt-2 sm:mt-0">
-                        <span className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover">
-                          {formatQuantityAmount(
-                            item.quantity.amount,
-                            item.quantity.unit,
-                            item.quantity.category,
-                            'consolidated'
-                          )}{' '}
-                          {item.quantity.unit}
-                        </span>
+                            <div className="mt-2 sm:mt-0">
+                              <span className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover">
+                                {formatQuantityAmount(
+                                  item.quantity.amount,
+                                  item.quantity.unit,
+                                  item.quantity.category,
+                                  'consolidated'
+                                )}{' '}
+                                {item.quantity.unit}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ))}

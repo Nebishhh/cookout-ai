@@ -1,5 +1,6 @@
 import { InvalidShoppingListError } from '../errors.js';
 import { Quantity } from '../units/quantity.js';
+import { categorizeIngredient, type GroceryCategory } from './groceryCategory.js';
 
 /**
  * Open Question / Scope Notes:
@@ -9,6 +10,11 @@ import { Quantity } from '../units/quantity.js';
  *   recipe source (e.g. "paper towels").
  * - No unit/category migration story if a recipe's ingredient category changes after a
  *   ShoppingList was saved — the saved line keeps whatever Quantity it was created with.
+ * - `category` (grocery-aisle grouping, distinct from Quantity's Mass/Volume/Count category)
+ *   is derived from ingredientId/displayName in the constructor rather than a passed-in field
+ *   — it's a pure function of identity, so every line recomputes it the same way regardless of
+ *   when/how it was constructed (fresh from consolidation vs. rehydrated from Prisma), with no
+ *   extra constructor param and no persisted column to keep in sync.
  */
 export class ShoppingListLine {
   readonly id: string;
@@ -17,6 +23,7 @@ export class ShoppingListLine {
   readonly quantity: Quantity;
   readonly sourceRecipeIds: readonly string[];
   readonly checked: boolean;
+  readonly category: GroceryCategory;
 
   constructor(
     id: string,
@@ -70,6 +77,7 @@ export class ShoppingListLine {
     this.quantity = quantity;
     this.sourceRecipeIds = Object.freeze([...sourceRecipeIds]);
     this.checked = checked;
+    this.category = categorizeIngredient(ingredientId, displayName);
 
     Object.freeze(this);
   }

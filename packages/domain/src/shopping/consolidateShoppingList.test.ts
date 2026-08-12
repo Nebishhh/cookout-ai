@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   consolidateShoppingList,
+  GroceryCategory,
   IngredientLine,
   Quantity,
   Recipe,
@@ -35,6 +36,7 @@ describe('consolidateShoppingList()', () => {
     expect(list[0].quantity.unit).toBe('g');
     expect(list[0].quantity.category).toBe(UnitCategory.Mass);
     expect(list[0].sourceRecipeIds).toEqual(['r1', 'r2']);
+    expect(list[0].category).toBe(GroceryCategory.PantryStaples);
   });
 
   it('consolidates same-category ingredients with DIFFERENT units by converting to base unit and summing', () => {
@@ -211,5 +213,6 @@ describe('consolidateShoppingList()', () => {
     expect(oilItem?.quantity.unit).toBe('ml'); // Converted to volume base unit
     expect(oilItem?.quantity.amount).toBeCloseTo(29.5735, 3); // 2 tbsp = ~29.5735 ml
     expect(oilItem?.sourceRecipeIds).toEqual(['r1']);
+    expect(oilItem?.category).toBe(GroceryCategory.SpicesAndCondiments);
   });
 });

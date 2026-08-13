@@ -31,6 +31,11 @@ import {
   toDomainShoppingList,
   toShoppingListJSON,
 } from './shoppingListMapper.js';
+import {
+  getCategoryOverridesMap,
+  setCategoryOverride,
+  clearCategoryOverride,
+} from './categoryOverrides.js';
 import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
 import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
@@ -524,6 +529,7 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
 
     // Consolidate shopping list reusing consolidateShoppingList() from @cookout-ai/domain
     const consolidatedList = consolidateShoppingList(scaledRecipes);
+    const categoryOverrides = await getCategoryOverridesMap();
 
     res.status(200).json({
       shoppingList: consolidatedList.map((item) => ({
@@ -531,7 +537,7 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
         displayName: item.displayName,
         quantity: item.quantity.toJSON(),
         sourceRecipeIds: item.sourceRecipeIds,
-        category: item.category,
+        category: categoryOverrides.get(item.ingredientId) ?? item.category,
       })),
       scaledRecipes: scaledRecipes.map((sr) => ({
         sourceRecipeId: sr.sourceRecipeId,
@@ -601,7 +607,8 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
     const eventPlan = planEventShoppingList(recipes, guestGroup);
 
     // 5. Serialize EventPlan to JSON output
-    res.status(200).json(serializeEventPlan(eventPlan));
+    const categoryOverrides = await getCategoryOverridesMap();
+    res.status(200).json(serializeEventPlan(eventPlan, categoryOverrides));
   } catch (err) {
     next(err);
   }
@@ -645,10 +652,11 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
     }
 
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
+    const categoryOverrides = await getCategoryOverridesMap();
 
     res.status(201).json({
       ...toEventSummaryJSON(reconstructedEvent),
-      ...serializeEventPlan(eventPlan),
+      ...serializeEventPlan(eventPlan, categoryOverrides),
       droppedRecipeIds: [],
     });
   } catch (err) {
@@ -702,10 +710,11 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     }
 
     const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
+    const categoryOverrides = await getCategoryOverridesMap();
 
     res.json({
       ...toEventSummaryJSON(domainEvent, prismaEvent.shoppingList?.id ?? null),
-      ...serializeEventPlan(eventPlan),
+      ...serializeEventPlan(eventPlan, categoryOverrides),
       droppedRecipeIds,
     });
   } catch (err) {
@@ -754,10 +763,11 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     }
 
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
+    const categoryOverrides = await getCategoryOverridesMap();
 
     res.json({
       ...toEventSummaryJSON(reconstructedEvent, updatedPrismaEvent.shoppingList?.id ?? null),
-      ...serializeEventPlan(eventPlan),
+      ...serializeEventPlan(eventPlan, categoryOverrides),
       droppedRecipeIds,
     });
   } catch (err) {
@@ -853,7 +863,8 @@ app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFu
     });
 
     const reconstructedList = toDomainShoppingList(createdPrismaList);
-    res.status(201).json(toShoppingListJSON(reconstructedList));
+    const categoryOverrides = await getCategoryOverridesMap();
+    res.status(201).json(toShoppingListJSON(reconstructedList, categoryOverrides));
   } catch (err) {
     next(err);
   }
@@ -927,7 +938,10 @@ app.put(
         });
       });
 
-      res.status(200).json(toShoppingListJSON(toDomainShoppingList(newPrismaList)));
+      const categoryOverrides = await getCategoryOverridesMap();
+      res
+        .status(200)
+        .json(toShoppingListJSON(toDomainShoppingList(newPrismaList), categoryOverrides));
     } catch (err) {
       next(err);
     }
@@ -942,7 +956,10 @@ app.get('/api/shopping-lists', async (_req: Request, res: Response, next: NextFu
       orderBy: { createdAt: 'desc' },
     });
 
-    res.json(prismaLists.map((l) => toShoppingListJSON(toDomainShoppingList(l))));
+    const categoryOverrides = await getCategoryOverridesMap();
+    res.json(
+      prismaLists.map((l) => toShoppingListJSON(toDomainShoppingList(l), categoryOverrides))
+    );
   } catch (err) {
     next(err);
   }
@@ -961,7 +978,8 @@ app.get('/api/shopping-lists/:id', async (req: Request, res: Response, next: Nex
       throw new NotFoundError(`Shopping list with id "${id}" not found.`);
     }
 
-    res.json(toShoppingListJSON(toDomainShoppingList(prismaList)));
+    const categoryOverrides = await getCategoryOverridesMap();
+    res.json(toShoppingListJSON(toDomainShoppingList(prismaList), categoryOverrides));
   } catch (err) {
     next(err);
   }
@@ -1017,6 +1035,50 @@ app.patch(
       });
 
       res.json({ id: updatedItem.id, checked: updatedItem.checked });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /api/ingredient-categories/:ingredientId — set (or replace) a manual grocery-category
+ * correction for an ingredient, globally by ingredientId (see categoryOverrides.ts). Every
+ * route above that emits a shopping-list item's `category` re-reads the overrides table, so
+ * this retroactively corrects that ingredient everywhere it appears — past and future lists.
+ */
+app.put(
+  '/api/ingredient-categories/:ingredientId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const ingredientId = (
+        Array.isArray(req.params.ingredientId)
+          ? req.params.ingredientId[0]
+          : req.params.ingredientId
+      ) as string;
+      const { category } = req.body || {};
+
+      const saved = await setCategoryOverride(ingredientId, category);
+      res.status(200).json(saved);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// DELETE /api/ingredient-categories/:ingredientId — revert to the keyword heuristic. Idempotent.
+app.delete(
+  '/api/ingredient-categories/:ingredientId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const ingredientId = (
+        Array.isArray(req.params.ingredientId)
+          ? req.params.ingredientId[0]
+          : req.params.ingredientId
+      ) as string;
+
+      await clearCategoryOverride(ingredientId);
+      res.status(204).send();
     } catch (err) {
       next(err);
     }

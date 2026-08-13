@@ -294,6 +294,14 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ checked }),
     }),
+  setIngredientCategory: (ingredientId: string, category: string) =>
+    request<{ ingredientId: string; category: string }>(
+      `/api/ingredient-categories/${encodeURIComponent(ingredientId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ category }),
+      }
+    ),
   importRecipeText: (text: string) =>
     request<ImportRecipeTextResponseDto>('/api/recipes/import-text', {
       method: 'POST',

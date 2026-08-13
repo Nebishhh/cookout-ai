@@ -91,3 +91,13 @@ model ShoppingListItem {
   checked             Boolean      @default(false)
   position            Int
 }
+
+// A user-triggered correction to categorizeIngredient()'s keyword-heuristic result, keyed
+// globally by ingredientId (not scoped to one recipe or list) — category is already treated
+// as a pure function of ingredient identity everywhere else, so a correction here is applied
+// wherever that ingredientId appears, not persisted onto individual ShoppingListItem rows.
+model IngredientCategoryOverride {
+  ingredientId String   @id
+  category     String
+  updatedAt    DateTime @updatedAt
+}

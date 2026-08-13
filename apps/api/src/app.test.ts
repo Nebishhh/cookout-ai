@@ -20,6 +20,7 @@ describe('CookOut AI API Endpoints', () => {
       await prisma.$executeRawUnsafe('DELETE FROM RecipeStep');
       await prisma.$executeRawUnsafe('DELETE FROM Recipe');
       await prisma.$executeRawUnsafe('DELETE FROM Event');
+      await prisma.$executeRawUnsafe('DELETE FROM IngredientCategoryOverride');
     } catch {
       // Table creation handled by initial migration/db push
     }
@@ -33,6 +34,7 @@ describe('CookOut AI API Endpoints', () => {
     await prisma.recipeStep.deleteMany();
     await prisma.recipe.deleteMany();
     await prisma.event.deleteMany();
+    await prisma.ingredientCategoryOverride.deleteMany();
   });
 
   describe('GET /api/health', () => {
@@ -1006,6 +1008,74 @@ describe('CookOut AI API Endpoints', () => {
         .send({ checked: true });
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('Ingredient Category Overrides', () => {
+    it('PUT /api/ingredient-categories/:ingredientId rejects an unknown category', async () => {
+      const res = await request(app)
+        .put('/api/ingredient-categories/flour')
+        .send({ category: 'Not A Real Category' });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidShoppingListError');
+    });
+
+    it('a saved override corrects category everywhere: preview, saved list, and event plan', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Bread',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
+        });
+      const recipeId = recipeRes.body.id;
+
+      // Default heuristic: "flour" falls under Pantry Staples.
+      const beforePreview = await request(app)
+        .post('/api/shopping-list')
+        .send([{ recipeId, targetServings: 4 }]);
+      expect(beforePreview.body.shoppingList[0].category).toBe('Pantry Staples');
+
+      const putRes = await request(app)
+        .put('/api/ingredient-categories/flour')
+        .send({ category: 'Bakery' });
+      expect(putRes.status).toBe(200);
+      expect(putRes.body).toEqual({ ingredientId: 'flour', category: 'Bakery' });
+
+      // Ephemeral shopping-list preview picks up the override.
+      const afterPreview = await request(app)
+        .post('/api/shopping-list')
+        .send([{ recipeId, targetServings: 4 }]);
+      expect(afterPreview.body.shoppingList[0].category).toBe('Bakery');
+
+      // Ephemeral event-plan preview picks up the override too.
+      const eventPlanRes = await request(app)
+        .post('/api/events/plan')
+        .send({
+          recipeIds: [recipeId],
+          guestGroup: { totalGuests: 4, vegetarianCount: 0, veganCount: 0 },
+        });
+      expect(eventPlanRes.body.shoppingList[0].category).toBe('Bakery');
+
+      // A shopping list saved AFTER the override reflects it immediately.
+      const listRes = await request(app)
+        .post('/api/shopping-lists')
+        .send({ name: 'Bread List', sourceItems: [{ recipeId, targetServings: 4 }] });
+      expect(listRes.body.items[0].category).toBe('Bakery');
+
+      // Clearing the override reverts every read path to the heuristic, including that
+      // already-saved list — category is always resolved fresh, never persisted onto the row.
+      const deleteRes = await request(app).delete('/api/ingredient-categories/flour');
+      expect(deleteRes.status).toBe(204);
+
+      const listAfterClear = await request(app).get(`/api/shopping-lists/${listRes.body.id}`);
+      expect(listAfterClear.body.items[0].category).toBe('Pantry Staples');
+    });
+
+    it('DELETE /api/ingredient-categories/:ingredientId is idempotent for an ingredient with no override', async () => {
+      const res = await request(app).delete('/api/ingredient-categories/never-overridden');
+      expect(res.status).toBe(204);
     });
   });
 

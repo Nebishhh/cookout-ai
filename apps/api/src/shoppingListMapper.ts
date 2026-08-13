@@ -3,11 +3,13 @@ import {
   ShoppingList,
   ShoppingListLine,
   type ShoppingListItem as DomainShoppingListItem,
+  type GroceryCategory,
 } from '@cookout-ai/domain';
 import type {
   ShoppingList as PrismaShoppingList,
   ShoppingListItem as PrismaShoppingListItem,
 } from '@prisma/client';
+import { resolveCategory } from './categoryOverrides.js';
 
 export type PrismaShoppingListWithItems = PrismaShoppingList & {
   items: PrismaShoppingListItem[];
@@ -74,8 +76,13 @@ export function toDomainShoppingList(prismaList: PrismaShoppingListWithItems): S
 
 /**
  * Formats a domain ShoppingList object for JSON API responses.
+ * `categoryOverrides` (ingredientId -> manually-corrected GroceryCategory) is applied on top
+ * of each line's heuristic-derived category — see categoryOverrides.ts.
  */
-export function toShoppingListJSON(domainList: ShoppingList) {
+export function toShoppingListJSON(
+  domainList: ShoppingList,
+  categoryOverrides: ReadonlyMap<string, GroceryCategory> = new Map()
+) {
   return {
     id: domainList.id,
     name: domainList.name,
@@ -87,7 +94,7 @@ export function toShoppingListJSON(domainList: ShoppingList) {
       quantity: line.quantity.toJSON(),
       sourceRecipeIds: line.sourceRecipeIds,
       checked: line.checked,
-      category: line.category,
+      category: resolveCategory(line.ingredientId, line.category, categoryOverrides),
     })),
   };
 }

@@ -1,6 +1,7 @@
 import { Event, GuestGroup, InvalidEventError, InvalidGuestGroupError } from '@cookout-ai/domain';
-import type { EventPlan } from '@cookout-ai/domain';
+import type { EventPlan, GroceryCategory } from '@cookout-ai/domain';
 import type { Event as PrismaEvent } from '@prisma/client';
+import { resolveCategory } from './categoryOverrides.js';
 
 export interface CreateGuestGroupInput {
   totalGuests: number;
@@ -92,8 +93,13 @@ export function toEventSummaryJSON(domainEvent: Event, shoppingListId: string | 
  * Formats a computed EventPlan (from planEventShoppingList) for JSON API responses.
  * Shared by the ephemeral preview route (POST /api/events/plan) and every persisted
  * Event route that recomputes the plan live on read.
+ * `categoryOverrides` (ingredientId -> manually-corrected GroceryCategory) is applied on top
+ * of each shopping-list item's heuristic-derived category — see categoryOverrides.ts.
  */
-export function serializeEventPlan(eventPlan: EventPlan) {
+export function serializeEventPlan(
+  eventPlan: EventPlan,
+  categoryOverrides: ReadonlyMap<string, GroceryCategory> = new Map()
+) {
   return {
     guestGroup: {
       totalGuests: eventPlan.guestGroup.totalGuests,
@@ -121,7 +127,7 @@ export function serializeEventPlan(eventPlan: EventPlan) {
       displayName: item.displayName,
       quantity: item.quantity.toJSON(),
       sourceRecipeIds: item.sourceRecipeIds,
-      category: item.category,
+      category: resolveCategory(item.ingredientId, item.category, categoryOverrides),
     })),
   };
 }

@@ -507,6 +507,29 @@ export function useToggleShoppingListItemChecked() {
 }
 
 /**
+ * Mutation hook for correcting an ingredient's grocery category
+ * (PUT /api/ingredient-categories/:ingredientId). Global by ingredientId — corrects every
+ * saved shopping list and event-embedded plan containing that ingredient, not just the one
+ * row being edited, so it's non-optimistic (its effect isn't confined to one cache entry) and
+ * invalidates both ['shoppingLists'] and ['events'] on success.
+ */
+export function useSetIngredientCategory() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { ingredientId: string; category: string },
+    Error,
+    { ingredientId: string; category: string }
+  >({
+    mutationFn: ({ ingredientId, category }) => api.setIngredientCategory(ingredientId, category),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: SHOPPING_LISTS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
+    },
+  });
+}
+
+/**
  * Mutation hook for parsing raw recipe text into structured draft data using AI (POST /api/recipes/import-text).
  * Implemented as an on-demand mutation with no cache invalidation or automatic persistence.
  */

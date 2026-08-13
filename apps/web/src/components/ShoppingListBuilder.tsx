@@ -158,12 +158,28 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
     toggleItemMutation.mutate({ listId: selectedShoppingListId, itemId, checked });
   };
 
+  // In view mode, useSetIngredientCategory/useClearIngredientCategory already invalidate
+  // ['shoppingLists'], which refetches this saved list automatically. Build-mode's preview
+  // is a mutation result (buildShoppingListMutation.data), not a cached query, so nothing
+  // refetches it on its own — re-running the build with the same payload is what makes the
+  // override visible in the still-open preview.
   const handleRecategorize = (ingredientId: string, category: string) => {
-    setCategoryMutation.mutate({ ingredientId, category });
+    setCategoryMutation.mutate(
+      { ingredientId, category },
+      {
+        onSuccess: () => {
+          if (!isViewMode) buildShoppingListMutation.mutate(buildPayload());
+        },
+      }
+    );
   };
 
   const handleResetCategory = (ingredientId: string) => {
-    clearCategoryMutation.mutate(ingredientId);
+    clearCategoryMutation.mutate(ingredientId, {
+      onSuccess: () => {
+        if (!isViewMode) buildShoppingListMutation.mutate(buildPayload());
+      },
+    });
   };
 
   const toggleRecipeExpanded = (recipeId: string) => {
@@ -578,6 +594,34 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                                       </span>
                                     );
                                   })}
+                                </div>
+                                <div className="mt-1.5 flex items-center gap-1">
+                                  <Select
+                                    value={item.category}
+                                    onChange={(e) =>
+                                      handleRecategorize(item.ingredientId, e.target.value)
+                                    }
+                                    aria-label={`Grocery category for ${item.displayName}`}
+                                    className="h-6 w-auto rounded-md border-stone/60 bg-canvas px-1.5 py-0 text-[11px] text-ink-muted"
+                                  >
+                                    {GROCERY_CATEGORY_ORDER.map((category) => (
+                                      <option key={category} value={category}>
+                                        {category}
+                                      </option>
+                                    ))}
+                                  </Select>
+                                  {item.categoryIsOverridden && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleResetCategory(item.ingredientId)}
+                                      disabled={clearCategoryMutation.isPending}
+                                      title="Reset to default category"
+                                      aria-label={`Reset ${item.displayName} to its default category`}
+                                      className="flex h-6 w-6 items-center justify-center rounded-md text-ink-muted hover:bg-canvas hover:text-clay-hover disabled:opacity-50"
+                                    >
+                                      <RotateCcw className="h-3 w-3" />
+                                    </button>
+                                  )}
                                 </div>
                               </div>
 

@@ -15,6 +15,7 @@ import {
   GripVertical,
   Clock,
   Thermometer,
+  StickyNote,
   Info,
   Upload,
   Image as ImageIcon,
@@ -72,6 +73,7 @@ interface EditableStep {
   durationUnit?: string;
   temperatureAmount?: number;
   temperatureUnit?: string;
+  notes?: string;
 }
 
 let stepIdCounter = 0;
@@ -90,6 +92,7 @@ function toEditableStep(step: RecipeStepDto): EditableStep {
     durationUnit: step.duration?.unit,
     temperatureAmount: step.temperature?.amount,
     temperatureUnit: step.temperature?.unit,
+    notes: step.notes ?? undefined,
   };
 }
 
@@ -307,10 +310,11 @@ interface RecipeStepRowProps {
  * is pointer-driven and not independently keyboard-accessible, so the buttons remain the
  * accessible reorder path, not just a fallback.
  *
- * Duration/temperature inputs are collapsed behind a "+ Timing" toggle by default — most
- * steps don't state either, and showing four extra always-visible inputs per row would
- * clutter the common case. The toggle starts open when the step already carries a value
- * (e.g. from AI import) so nothing is hidden that the user or the model already populated.
+ * Duration/temperature inputs and the notes input are each collapsed behind their own
+ * "+ Timing" / "+ Note" toggle by default — most steps don't state any of them, and showing
+ * always-visible inputs per row would clutter the common case. Each toggle starts open when
+ * the step already carries a value (e.g. from AI import) so nothing is hidden that the user
+ * or the model already populated.
  */
 const RecipeStepRow: React.FC<RecipeStepRowProps> = ({
   step,
@@ -325,6 +329,7 @@ const RecipeStepRow: React.FC<RecipeStepRowProps> = ({
   const [showTiming, setShowTiming] = useState(
     step.durationAmount !== undefined || step.temperatureAmount !== undefined
   );
+  const [showNotes, setShowNotes] = useState(step.notes !== undefined);
 
   return (
     <Reorder.Item
@@ -420,6 +425,30 @@ const RecipeStepRow: React.FC<RecipeStepRowProps> = ({
           >
             <Clock className="h-3 w-3" />
             <span>Add timing</span>
+          </button>
+        )}
+        {showNotes ? (
+          <div className="flex items-center gap-1.5">
+            <StickyNote className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />
+            <input
+              type="text"
+              value={step.notes ?? ''}
+              onChange={(e) =>
+                onChange('notes', e.target.value === '' ? undefined : e.target.value)
+              }
+              placeholder="e.g. Don't overmix the batter"
+              aria-label={`Notes for step ${index + 1}`}
+              className="w-full rounded-md border border-stone bg-canvas px-2 py-1 text-xs text-ink placeholder:text-ink-subtle focus:border-clay focus:outline-none focus:ring-1 focus:ring-clay"
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowNotes(true)}
+            className="flex items-center gap-1 text-[11px] text-ink-subtle hover:text-clay-hover"
+          >
+            <StickyNote className="h-3 w-3" />
+            <span>Add note</span>
           </button>
         )}
       </div>
@@ -770,6 +799,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
           ...(step.temperatureAmount !== undefined && step.temperatureUnit !== undefined
             ? { temperatureAmount: step.temperatureAmount, temperatureUnit: step.temperatureUnit }
             : {}),
+          ...(step.notes && step.notes.trim() ? { notes: step.notes.trim() } : {}),
         })),
     };
 

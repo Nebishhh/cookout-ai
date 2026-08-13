@@ -32,6 +32,7 @@ export interface CreateStepInput {
   durationUnit?: string;
   temperatureAmount?: number;
   temperatureUnit?: string;
+  notes?: string;
 }
 
 export interface CreateRecipeInput {
@@ -49,10 +50,11 @@ export interface CreateRecipeInput {
  * "steps" directly.
  *
  * Each entry is normally `{ instruction, duration?: {amount, unit}, temperature?: {amount,
- * unit} }` (see GEMINI_SYSTEM_PROMPT in geminiClient.ts) — duration/temperature are extracted
- * only when explicitly stated in the source text. A bare string entry is also accepted (no
- * duration/temperature) as a defensive fallback: geminiClient.ts's structured-output config
- * makes schema compliance reliable, not guaranteed, for a live (non-fixture) response.
+ * unit}, notes?: string }` (see GEMINI_SYSTEM_PROMPT in geminiClient.ts) — duration/temperature/
+ * notes are extracted only when explicitly stated in the source text. A bare string entry is
+ * also accepted (no duration/temperature/notes) as a defensive fallback: geminiClient.ts's
+ * structured-output config makes schema compliance reliable, not guaranteed, for a live
+ * (non-fixture) response.
  */
 export function stepsFromInstructions(instructions: unknown): CreateStepInput[] {
   if (!Array.isArray(instructions)) {
@@ -75,6 +77,7 @@ export function stepsFromInstructions(instructions: unknown): CreateStepInput[] 
       instruction?: unknown;
       duration?: { amount?: unknown; unit?: unknown };
       temperature?: { amount?: unknown; unit?: unknown };
+      notes?: unknown;
     };
 
     if (typeof candidate.instruction !== 'string') {
@@ -101,10 +104,39 @@ export function stepsFromInstructions(instructions: unknown): CreateStepInput[] 
       step.temperatureUnit = candidate.temperature.unit;
     }
 
+    if (typeof candidate.notes === 'string') {
+      step.notes = candidate.notes;
+    }
+
     steps.push(step);
   }
 
   return steps;
+}
+
+/**
+ * Minimal structural check on a Gemini candidate that's already been confirmed not to be the
+ * {error, message} "NoRecipeFound" shape: does it have enough of a recipe shape to be worth
+ * attempting domain validation on, vs. being fundamentally unusable (e.g. ingredient/instruction
+ * text crammed into "name" with no "ingredients" array at all — see issue #1)?
+ *
+ * Deliberately narrow: only checks "name" is a non-empty string and "ingredients" is a non-empty
+ * array. Does NOT check baseServings, ingredient item shape, or instructions — those are
+ * legitimate domain-validation failures (422 on a candidate whose overall shape is fine but a
+ * specific value is wrong), not extraction failures, and must keep reaching
+ * validateAndCreateDomainRecipe unchanged.
+ */
+export function hasMinimalRecipeShape(candidate: unknown): boolean {
+  if (!candidate || typeof candidate !== 'object') {
+    return false;
+  }
+  const c = candidate as Record<string, unknown>;
+  return (
+    typeof c.name === 'string' &&
+    c.name.trim() !== '' &&
+    Array.isArray(c.ingredients) &&
+    c.ingredients.length > 0
+  );
 }
 
 /**
@@ -157,7 +189,7 @@ export function validateAndCreateDomainRecipe(
           step.temperatureAmount !== undefined && step.temperatureUnit !== undefined
             ? new StepTemperature(step.temperatureAmount, step.temperatureUnit)
             : undefined;
-        return new RecipeStep(step.instruction, duration, temperature);
+        return new RecipeStep(step.instruction, duration, temperature, step.notes);
       })
     : [];
 
@@ -198,7 +230,7 @@ export function toDomainRecipe(prismaRecipe: PrismaRecipeWithRelations): Recipe 
       step.temperatureAmount !== null && step.temperatureUnit !== null
         ? new StepTemperature(step.temperatureAmount, step.temperatureUnit)
         : undefined;
-    return new RecipeStep(step.instruction, duration, temperature);
+    return new RecipeStep(step.instruction, duration, temperature, step.notes ?? undefined);
   });
 
   return new Recipe(
@@ -233,6 +265,7 @@ export function toRecipeJSON(domainRecipe: Recipe) {
       temperature: step.temperature
         ? { amount: step.temperature.amount, unit: step.temperature.unit }
         : null,
+      notes: step.notes,
     })),
   };
 }

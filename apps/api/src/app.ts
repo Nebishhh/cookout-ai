@@ -46,6 +46,7 @@ import {
 } from './pantryStore.js';
 import { encodeRecipeCursor, decodeRecipeCursor } from './recipePagination.js';
 import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
+import { extractRecipeCandidate } from './aiRecipeExtraction.js';
 import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
 import { handleImportImage } from './importImage.js';
@@ -98,9 +99,11 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
       });
     }
 
-    let rawAiResponse: string;
+    let extraction;
     try {
-      rawAiResponse = await parseRecipeTextWithGemini(text);
+      extraction = await extractRecipeCandidate((reinforceShape) =>
+        parseRecipeTextWithGemini(text, reinforceShape)
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
       return res.status(502).json({
@@ -109,39 +112,36 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
       });
     }
 
-    let parsedCandidate: unknown;
-    try {
-      const sanitizedResponse = rawAiResponse
-        .replace(/^```json\s*/i, '')
-        .replace(/^```\s*/i, '')
-        .replace(/\s*```$/i, '')
-        .trim();
-      parsedCandidate = JSON.parse(sanitizedResponse);
-    } catch {
+    if (extraction.status === 'invalid-json') {
       return res.status(502).json({
         error: 'BadGateway',
         message: 'Upstream AI service returned invalid JSON response.',
       });
     }
 
-    if (
-      parsedCandidate &&
-      typeof parsedCandidate === 'object' &&
-      'error' in parsedCandidate &&
-      (parsedCandidate as { error: string }).error === 'NoRecipeFound'
-    ) {
+    if (extraction.status === 'no-recipe-found') {
       return res.status(502).json({
         error: 'ExtractionError',
         message:
-          (parsedCandidate as { message?: string }).message ||
+          extraction.message ||
           'The provided text does not contain explicit recipe ingredients or quantities.',
+      });
+    }
+
+    if (extraction.status === 'malformed-shape') {
+      return res.status(502).json({
+        error: 'ExtractionError',
+        message:
+          'The AI extraction produced an incomplete recipe draft (missing a name or ingredient list), even after retrying. Try rephrasing the text or entering the recipe manually.',
       });
     }
 
     // Validate draft structure against domain rules (without persisting)
     let domainRecipe;
     try {
-      const candidate = parsedCandidate as CreateRecipeInput & { instructions?: unknown };
+      const candidate = extraction.candidate as unknown as CreateRecipeInput & {
+        instructions?: unknown;
+      };
       domainRecipe = validateAndCreateDomainRecipe({
         ...candidate,
         steps: stepsFromInstructions(candidate.instructions),
@@ -173,6 +173,7 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
         temperature: step.temperature
           ? { amount: step.temperature.amount, unit: step.temperature.unit }
           : null,
+        notes: step.notes,
       })),
     });
   } catch (err) {
@@ -254,10 +255,12 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
       }
     }
 
-    // Step 3: Call parseRecipeTextWithGeminiTimeout (30s timeout)
-    let rawAiResponse: string;
+    // Step 3: Call parseRecipeTextWithGeminiTimeout (30s timeout), with a bounded shape-guard retry
+    let extraction;
     try {
-      rawAiResponse = await parseRecipeTextWithGeminiTimeout(extractedText);
+      extraction = await extractRecipeCandidate((reinforceShape) =>
+        parseRecipeTextWithGeminiTimeout(extractedText, undefined, reinforceShape)
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
       return res.status(502).json({
@@ -266,40 +269,37 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
       });
     }
 
-    // Step 4: Parse candidate JSON
-    let parsedCandidate: unknown;
-    try {
-      const sanitizedResponse = rawAiResponse
-        .replace(/^```json\s*/i, '')
-        .replace(/^```\s*/i, '')
-        .replace(/\s*```$/i, '')
-        .trim();
-      parsedCandidate = JSON.parse(sanitizedResponse);
-    } catch {
+    // Step 4: Map extraction outcome to a response
+    if (extraction.status === 'invalid-json') {
       return res.status(502).json({
         error: 'BadGateway',
         message: 'Upstream AI service returned invalid JSON response.',
       });
     }
 
-    if (
-      parsedCandidate &&
-      typeof parsedCandidate === 'object' &&
-      'error' in parsedCandidate &&
-      (parsedCandidate as { error: string }).error === 'NoRecipeFound'
-    ) {
+    if (extraction.status === 'no-recipe-found') {
       return res.status(502).json({
         error: 'ExtractionError',
         message:
-          (parsedCandidate as { message?: string }).message ||
+          extraction.message ||
           'The provided text does not contain explicit recipe ingredients or quantities.',
+      });
+    }
+
+    if (extraction.status === 'malformed-shape') {
+      return res.status(502).json({
+        error: 'ExtractionError',
+        message:
+          'The AI extraction produced an incomplete recipe draft (missing a name or ingredient list), even after retrying. Try rephrasing the text or entering the recipe manually.',
       });
     }
 
     // Step 5: Validate draft against domain rules
     let domainRecipe;
     try {
-      const candidate = parsedCandidate as CreateRecipeInput & { instructions?: unknown };
+      const candidate = extraction.candidate as unknown as CreateRecipeInput & {
+        instructions?: unknown;
+      };
       domainRecipe = validateAndCreateDomainRecipe({
         ...candidate,
         steps: stepsFromInstructions(candidate.instructions),
@@ -331,6 +331,7 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
         temperature: step.temperature
           ? { amount: step.temperature.amount, unit: step.temperature.unit }
           : null,
+        notes: step.notes,
       })),
     });
   } catch (err) {
@@ -370,6 +371,7 @@ app.post('/api/recipes', async (req: Request, res: Response, next: NextFunction)
             durationUnit: step.duration?.unit ?? null,
             temperatureAmount: step.temperature?.amount ?? null,
             temperatureUnit: step.temperature?.unit ?? null,
+            notes: step.notes,
           })),
         },
       },
@@ -543,6 +545,7 @@ app.put('/api/recipes/:id', async (req: Request, res: Response, next: NextFuncti
               durationUnit: step.duration?.unit ?? null,
               temperatureAmount: step.temperature?.amount ?? null,
               temperatureUnit: step.temperature?.unit ?? null,
+              notes: step.notes,
             })),
           },
         },
@@ -634,6 +637,7 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
         quantity: item.quantity.toJSON(),
         sourceRecipeIds: item.sourceRecipeIds,
         category: categoryOverrides.get(item.ingredientId) ?? item.category,
+        categoryIsOverridden: categoryOverrides.has(item.ingredientId),
       })),
       scaledRecipes: scaledRecipes.map((sr) => ({
         sourceRecipeId: sr.sourceRecipeId,

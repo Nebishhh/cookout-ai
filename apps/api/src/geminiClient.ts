@@ -11,7 +11,7 @@ CRITICAL INSTRUCTIONS:
    ["g", "kg", "oz", "lb", "ml", "l", "tsp", "tbsp", "cup", "fl oz", "count", "clove", "egg", "onion"]
    If an ingredient has no unit (e.g., "2 apples"), use "count".
 4. Standardize dietaryTags if explicitly stated or clearly inferrable: ["Vegetarian", "Vegan"]. If omnivore / contains meat / unknown, return an empty array [].
-5. Extract cooking steps as "instructions": an ordered array of objects, one per instruction, in the order they should be performed. Each object has an "instruction" string, plus OPTIONAL "duration" and "temperature" objects — include duration/temperature ONLY when explicitly stated in the source text for that step (e.g. "bake for 25 minutes at 350°F"); OMIT them entirely otherwise. Never guess or infer a typical duration/temperature that isn't stated. If the input has no instructions (e.g. an ingredients-only recipe card), return an empty array [].
+5. Extract cooking steps as "instructions": an ordered array of objects, one per instruction, in the order they should be performed. Each object has an "instruction" string, plus OPTIONAL "duration", "temperature", and "notes" fields — include duration/temperature ONLY when explicitly stated in the source text for that step (e.g. "bake for 25 minutes at 350°F"); include "notes" ONLY when the source text has a distinct aside/tip/warning attached to that step (e.g. "Tip: don't overmix the batter" or "Careful, the handle will be hot"), as a plain string separate from the instruction itself. OMIT any of these fields entirely otherwise. Never guess or infer a typical duration/temperature/notes that isn't stated. If the input has no instructions (e.g. an ingredients-only recipe card), return an empty array [].
 
 OUTPUT JSON SCHEMA:
 {
@@ -37,24 +37,37 @@ OUTPUT JSON SCHEMA:
     {
       "instruction": "Bake until cooked through.",
       "duration": { "amount": 25, "unit": "minutes" },
-      "temperature": { "amount": 400, "unit": "F" }
+      "temperature": { "amount": 400, "unit": "F" },
+      "notes": "Tent with foil if browning too quickly."
     }
   ]
 }`;
 
 /**
  * OpenAPI-subset schema (per @google/genai's GenerateContentConfig.responseSchema) enforced on
- * live generateContent() calls — the root cause of instructions occasionally going missing on
- * a live (non-fixture) response was that JSON-shape compliance was asked for in prompt text
- * only, never guaranteed by the SDK. All fields are optional here (no `required`) rather than
- * split into two schemas for the success/error shapes, since the model returns one JSON object
- * that's either the error shape or the success shape as a subset of this one schema.
+ * live generateContent() calls — the root cause of instructions occasionally going missing (and,
+ * more severely, of ingredients sometimes going missing entirely — see issue #1) on a live
+ * (non-fixture) response was that the root object had no `required` fields at all, so a response
+ * like `{name: "everything crammed into one string"}` was schema-valid. Split into two shapes
+ * combined via `anyOf` instead of one flat optional-everywhere object: RECIPE_ERROR_SHAPE for the
+ * intentional {error, message} "not a recipe" response, RECIPE_SUCCESS_SHAPE for an actual recipe
+ * draft, each with its own `required`. `ingredients` also gets `minItems: '1'` so an empty array
+ * doesn't pass either. This narrows the failure window but doesn't close it — the app-layer
+ * shape guard + bounded retry in aiRecipeExtraction.ts is the real backstop, since structured
+ * output enforcement makes shape compliance more reliable, not guaranteed, for a live response.
  */
-const RECIPE_RESPONSE_SCHEMA: Schema = {
+const RECIPE_ERROR_SHAPE: Schema = {
   type: Type.OBJECT,
   properties: {
     error: { type: Type.STRING },
     message: { type: Type.STRING },
+  },
+  required: ['error', 'message'],
+};
+
+const RECIPE_SUCCESS_SHAPE: Schema = {
+  type: Type.OBJECT,
+  properties: {
     name: { type: Type.STRING },
     baseServings: { type: Type.INTEGER },
     dietaryTags: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -70,6 +83,7 @@ const RECIPE_RESPONSE_SCHEMA: Schema = {
         },
         required: ['ingredientId', 'displayName', 'amount', 'unit'],
       },
+      minItems: '1',
     },
     instructions: {
       type: Type.ARRAY,
@@ -93,12 +107,25 @@ const RECIPE_RESPONSE_SCHEMA: Schema = {
             },
             required: ['amount', 'unit'],
           },
+          notes: { type: Type.STRING },
         },
         required: ['instruction'],
       },
     },
   },
+  required: ['name', 'baseServings', 'ingredients', 'instructions'],
 };
+
+const RECIPE_RESPONSE_SCHEMA: Schema = {
+  anyOf: [RECIPE_ERROR_SHAPE, RECIPE_SUCCESS_SHAPE],
+};
+
+/**
+ * Appended as an extra content block on a retry (reinforceShape=true), after a first attempt's
+ * response passed JSON.parse but failed hasMinimalRecipeShape() — i.e. the model produced valid
+ * JSON that wasn't usable (see issue #1: everything crammed into "name", no "ingredients" array).
+ */
+const SHAPE_REINFORCEMENT_PROMPT = `SHAPE CORRECTION REQUIRED: Your previous response was syntactically valid JSON but did not match the required recipe shape — most likely because ingredient or instruction details were crammed into a single field (such as "name") instead of the separate "ingredients"/"instructions" arrays. Re-extract the SAME input and return a complete JSON object with "name" (a short title string only — do not include ingredient or instruction text in it), "baseServings" (a number), a non-empty "ingredients" array of {ingredientId, displayName, amount, unit} objects (one entry per distinct ingredient), and an "instructions" array (each entry an object with an "instruction" string; use an empty array [] only if the input truly has no steps). If, and only if, the input genuinely is not a recipe at all, return {"error": "NoRecipeFound", "message": "..."} instead.`;
 
 function checkProductionGuard() {
   if (process.env.USE_GEMINI_FIXTURES === 'true' && process.env.NODE_ENV === 'production') {
@@ -108,7 +135,10 @@ function checkProductionGuard() {
   }
 }
 
-export async function parseRecipeTextWithGemini(text: string): Promise<string> {
+export async function parseRecipeTextWithGemini(
+  text: string,
+  reinforceShape = false
+): Promise<string> {
   checkProductionGuard();
 
   if (process.env.USE_GEMINI_FIXTURES === 'true') {
@@ -137,7 +167,11 @@ export async function parseRecipeTextWithGemini(text: string): Promise<string> {
 
   const response = await ai.models.generateContent({
     model: modelName,
-    contents: [{ text: GEMINI_SYSTEM_PROMPT }, { text: `RAW USER RECIPE TEXT TO PARSE:\n${text}` }],
+    contents: [
+      { text: GEMINI_SYSTEM_PROMPT },
+      { text: `RAW USER RECIPE TEXT TO PARSE:\n${text}` },
+      ...(reinforceShape ? [{ text: SHAPE_REINFORCEMENT_PROMPT }] : []),
+    ],
     config: {
       responseMimeType: 'application/json',
       responseSchema: RECIPE_RESPONSE_SCHEMA,
@@ -158,7 +192,8 @@ export async function parseRecipeTextWithGemini(text: string): Promise<string> {
  */
 export async function parseRecipeTextWithGeminiTimeout(
   text: string,
-  timeoutMs = 30000
+  timeoutMs = 30000,
+  reinforceShape = false
 ): Promise<string> {
   let timer: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -168,7 +203,10 @@ export async function parseRecipeTextWithGeminiTimeout(
   });
 
   try {
-    const result = await Promise.race([parseRecipeTextWithGemini(text), timeoutPromise]);
+    const result = await Promise.race([
+      parseRecipeTextWithGemini(text, reinforceShape),
+      timeoutPromise,
+    ]);
     return result;
   } finally {
     if (timer) clearTimeout(timer);
@@ -180,7 +218,8 @@ export async function parseRecipeTextWithGeminiTimeout(
  */
 export async function parseRecipeImageWithGemini(
   imageBuffer: Buffer,
-  mimeType: string
+  mimeType: string,
+  reinforceShape = false
 ): Promise<string> {
   checkProductionGuard();
 
@@ -222,6 +261,7 @@ export async function parseRecipeImageWithGemini(
         },
       },
       { text: 'IMAGE OF RECIPE CARD / COOKBOOK PAGE / HANDWRITTEN RECIPE TO PARSE' },
+      ...(reinforceShape ? [{ text: SHAPE_REINFORCEMENT_PROMPT }] : []),
     ],
     config: {
       responseMimeType: 'application/json',
@@ -243,7 +283,8 @@ export async function parseRecipeImageWithGemini(
 export async function parseRecipeImageWithGeminiTimeout(
   imageBuffer: Buffer,
   mimeType: string,
-  timeoutMs = 30000
+  timeoutMs = 30000,
+  reinforceShape = false
 ): Promise<string> {
   let timer: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -254,7 +295,7 @@ export async function parseRecipeImageWithGeminiTimeout(
 
   try {
     const result = await Promise.race([
-      parseRecipeImageWithGemini(imageBuffer, mimeType),
+      parseRecipeImageWithGemini(imageBuffer, mimeType, reinforceShape),
       timeoutPromise,
     ]);
     return result;

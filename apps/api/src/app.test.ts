@@ -98,19 +98,19 @@ describe('CookOut AI API Endpoints', () => {
       const createRes = await request(app).post('/api/recipes').send(withStepsRecipe);
       expect(createRes.status).toBe(201);
       expect(createRes.body.steps).toEqual([
-        { instruction: 'Mix dry ingredients.', duration: null, temperature: null },
-        { instruction: 'Add wet ingredients.', duration: null, temperature: null },
+        { instruction: 'Mix dry ingredients.', duration: null, temperature: null, notes: null },
+        { instruction: 'Add wet ingredients.', duration: null, temperature: null, notes: null },
       ]);
 
       const getRes = await request(app).get(`/api/recipes/${createRes.body.id}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body.steps).toEqual([
-        { instruction: 'Mix dry ingredients.', duration: null, temperature: null },
-        { instruction: 'Add wet ingredients.', duration: null, temperature: null },
+        { instruction: 'Mix dry ingredients.', duration: null, temperature: null, notes: null },
+        { instruction: 'Add wet ingredients.', duration: null, temperature: null, notes: null },
       ]);
     });
 
-    it('round-trips per-step duration/temperature through create, read, and update', async () => {
+    it('round-trips per-step duration/temperature/notes through create, read, and update', async () => {
       const createRes = await request(app)
         .post('/api/recipes')
         .send({
@@ -131,6 +131,7 @@ describe('CookOut AI API Endpoints', () => {
               durationUnit: 'minutes',
               temperatureAmount: 400,
               temperatureUnit: 'F',
+              notes: 'Tent with foil if browning too quickly.',
             },
             { instruction: 'Let rest before serving.' },
           ],
@@ -142,13 +143,20 @@ describe('CookOut AI API Endpoints', () => {
           instruction: 'Preheat the oven.',
           duration: null,
           temperature: { amount: 400, unit: 'F' },
+          notes: null,
         },
         {
           instruction: 'Bake until cooked through.',
           duration: { amount: 25, unit: 'minutes' },
           temperature: { amount: 400, unit: 'F' },
+          notes: 'Tent with foil if browning too quickly.',
         },
-        { instruction: 'Let rest before serving.', duration: null, temperature: null },
+        {
+          instruction: 'Let rest before serving.',
+          duration: null,
+          temperature: null,
+          notes: null,
+        },
       ]);
 
       const getRes = await request(app).get(`/api/recipes/${createRes.body.id}`);
@@ -163,7 +171,12 @@ describe('CookOut AI API Endpoints', () => {
             { ingredientId: 'chicken', displayName: 'Chicken', amount: 500, unit: 'g' },
           ],
           steps: [
-            { instruction: 'Chill in the fridge.', durationAmount: 2, durationUnit: 'hours' },
+            {
+              instruction: 'Chill in the fridge.',
+              durationAmount: 2,
+              durationUnit: 'hours',
+              notes: '  Cover loosely.  ',
+            },
           ],
         });
 
@@ -173,6 +186,7 @@ describe('CookOut AI API Endpoints', () => {
           instruction: 'Chill in the fridge.',
           duration: { amount: 2, unit: 'hours' },
           temperature: null,
+          notes: 'Cover loosely.',
         },
       ]);
     });
@@ -526,12 +540,12 @@ describe('CookOut AI API Endpoints', () => {
       const putRes = await request(app).put(`/api/recipes/${recipeId}`).send(updatedPayload);
       expect(putRes.status).toBe(200);
       expect(putRes.body.steps).toEqual([
-        { instruction: 'New step one.', duration: null, temperature: null },
+        { instruction: 'New step one.', duration: null, temperature: null, notes: null },
       ]);
 
       const getRes = await request(app).get(`/api/recipes/${recipeId}`);
       expect(getRes.body.steps).toEqual([
-        { instruction: 'New step one.', duration: null, temperature: null },
+        { instruction: 'New step one.', duration: null, temperature: null, notes: null },
       ]);
     });
 
@@ -1217,6 +1231,7 @@ describe('CookOut AI API Endpoints', () => {
         .post('/api/shopping-list')
         .send([{ recipeId, targetServings: 4 }]);
       expect(beforePreview.body.shoppingList[0].category).toBe('Pantry Staples');
+      expect(beforePreview.body.shoppingList[0].categoryIsOverridden).toBe(false);
 
       const putRes = await request(app)
         .put('/api/ingredient-categories/flour')
@@ -1224,11 +1239,14 @@ describe('CookOut AI API Endpoints', () => {
       expect(putRes.status).toBe(200);
       expect(putRes.body).toEqual({ ingredientId: 'flour', category: 'Bakery' });
 
-      // Ephemeral shopping-list preview picks up the override.
+      // Ephemeral shopping-list preview picks up the override, and flags it as overridden
+      // too — previews have no persisted row to attach a correction to, but they can still
+      // tell the client an override is active so an edit UI can offer a reset control.
       const afterPreview = await request(app)
         .post('/api/shopping-list')
         .send([{ recipeId, targetServings: 4 }]);
       expect(afterPreview.body.shoppingList[0].category).toBe('Bakery');
+      expect(afterPreview.body.shoppingList[0].categoryIsOverridden).toBe(true);
 
       // Ephemeral event-plan preview picks up the override too.
       const eventPlanRes = await request(app)
@@ -1238,6 +1256,7 @@ describe('CookOut AI API Endpoints', () => {
           guestGroup: { totalGuests: 4, vegetarianCount: 0, veganCount: 0 },
         });
       expect(eventPlanRes.body.shoppingList[0].category).toBe('Bakery');
+      expect(eventPlanRes.body.shoppingList[0].categoryIsOverridden).toBe(true);
 
       // A shopping list saved AFTER the override reflects it immediately, and is flagged
       // as overridden so the client knows to offer a "reset to default" control.

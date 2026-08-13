@@ -10,8 +10,8 @@ import type { DietaryTag } from './types.js';
  * - Cross-recipe ingredient consolidation (matching "flour" across two different recipes) is explicitly out of scope.
  * - Dietary tag ENFORCEMENT (e.g. filtering recipes for vegetarian guests) is not implemented here;
  *   tags are stored and carried through scaling without modification or action.
- * - Recipe steps carry optional duration/temperature (StepDuration/StepTemperature) but still
- *   no free-text notes field.
+ * - Recipe steps carry optional duration/temperature (StepDuration/StepTemperature) and an
+ *   optional free-text notes field.
  */
 export class Recipe {
   readonly id: string;

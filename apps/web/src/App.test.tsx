@@ -227,6 +227,46 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     });
   });
 
+  it('adds a per-step note via the "Add note" toggle and includes it, trimmed, in the submit payload', async () => {
+    let capturedBody: unknown = null;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (url.toString().endsWith('/api/recipes') && options?.method === 'POST') {
+        capturedBody = JSON.parse(options.body as string);
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ id: 'new-r4', ...(capturedBody as object), dietaryTags: [] }),
+        } as Response;
+      }
+      return recipesGetResponse(url.toString(), []);
+    });
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText(/recipe name/i), { target: { value: 'Baked Chicken' } });
+    fireEvent.change(screen.getByLabelText(/id \(e.g. flour\)/i), { target: { value: 'chicken' } });
+    fireEvent.change(screen.getByLabelText(/display name/i), { target: { value: 'Chicken' } });
+    fireEvent.change(screen.getByLabelText('Step 1'), { target: { value: 'Bake until done.' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /add note/i }));
+    fireEvent.change(screen.getByLabelText('Notes for step 1'), {
+      target: { value: '  Tent with foil if browning too quickly.  ' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /create recipe/i }));
+
+    await waitFor(() => {
+      expect((capturedBody as { steps: unknown }).steps).toEqual([
+        {
+          instruction: 'Bake until done.',
+          notes: 'Tent with foil if browning too quickly.',
+        },
+      ]);
+    });
+  });
+
   it('displays 400 error response message from API when creation fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
       if (url.toString().endsWith('/api/recipes') && options?.method === 'POST') {
@@ -337,6 +377,114 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     expect(await screen.findByText('Consolidated Shopping List')).toBeInTheDocument();
     expect(screen.getByText('473.18 ml')).toBeInTheDocument();
     expect(screen.getByText('Per-Recipe Scaled Breakdown')).toBeInTheDocument();
+  });
+
+  it('recategorizing an item in the build-mode shopping-list preview PUTs the override and re-builds the preview', async () => {
+    const mockRecipes = [
+      {
+        id: 'r1',
+        name: 'Pancakes',
+        baseServings: 4,
+        dietaryTags: [],
+        ingredients: [
+          {
+            ingredientId: 'milk',
+            displayName: 'Whole Milk',
+            amount: 2,
+            unit: 'cup',
+            category: 'Volume',
+          },
+        ],
+      },
+    ];
+
+    const buildResponse = (category: string, categoryIsOverridden: boolean) => ({
+      shoppingList: [
+        {
+          ingredientId: 'milk',
+          displayName: 'Whole Milk',
+          quantity: { amount: 473.176, unit: 'ml', category: 'Volume' },
+          sourceRecipeIds: ['r1'],
+          category,
+          categoryIsOverridden,
+        },
+      ],
+      scaledRecipes: [
+        {
+          sourceRecipeId: 'r1',
+          sourceRecipeName: 'Pancakes',
+          targetServings: 4,
+          scaleFactor: 1,
+          ingredients: [
+            {
+              ingredientId: 'milk',
+              displayName: 'Whole Milk',
+              quantity: { amount: 2, unit: 'cup', category: 'Volume' },
+            },
+          ],
+          dietaryTags: [],
+        },
+      ],
+    });
+
+    let buildCallCount = 0;
+    let putBody: unknown = null;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (url.toString().includes('/api/recipes')) {
+        return recipesGetResponse(url.toString(), mockRecipes);
+      }
+      if (url.toString().endsWith('/api/shopping-list') && options?.method === 'POST') {
+        buildCallCount += 1;
+        const response =
+          buildCallCount === 1
+            ? buildResponse('Dairy', false)
+            : buildResponse('Pantry Staples', true);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => response,
+        } as Response;
+      }
+      if (url.toString().endsWith('/api/ingredient-categories/milk') && options?.method === 'PUT') {
+        putBody = JSON.parse(options.body as string);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ ingredientId: 'milk', category: 'Pantry Staples' }),
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
+    expect(await screen.findByText('Pancakes')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /select recipe pancakes/i }));
+    fireEvent.click(screen.getByRole('button', { name: /build shopping list/i }));
+
+    expect(await screen.findByText('Consolidated Shopping List')).toBeInTheDocument();
+    const categorySelect = screen.getByLabelText('Grocery category for Whole Milk');
+    expect(categorySelect).toHaveValue('Dairy');
+
+    fireEvent.change(categorySelect, { target: { value: 'Pantry Staples' } });
+
+    await waitFor(() => {
+      expect(putBody).toEqual({ category: 'Pantry Staples' });
+    });
+
+    // The preview re-built itself with the same recipe/servings selection after the
+    // override succeeded, so the reset control (only shown once categoryIsOverridden) appears.
+    await waitFor(() => {
+      expect(buildCallCount).toBe(2);
+    });
+    expect(
+      await screen.findByLabelText('Reset Whole Milk to its default category')
+    ).toBeInTheDocument();
   });
 
   it('displays 404/400 error message from POST /api/shopping-list when request fails', async () => {
@@ -1022,6 +1170,107 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       // Verify Consolidated Event Shopping List section
       expect(screen.getByText('Consolidated Event Shopping List')).toBeInTheDocument();
       expect(screen.getByText('1.5 kg')).toBeInTheDocument();
+    });
+
+    it('recategorizing an item in the event-plan preview PUTs the override and re-plans with the same inputs', async () => {
+      const mockRecipes = [
+        {
+          id: 'r-meat',
+          name: 'Beef Roast',
+          baseServings: 6,
+          dietaryTags: [],
+          ingredients: [
+            { ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg', category: 'Mass' },
+          ],
+        },
+      ];
+
+      const planResponse = (category: string, categoryIsOverridden: boolean) => ({
+        guestGroup: { totalGuests: 10, vegetarianCount: 0, veganCount: 0, omnivoreCount: 10 },
+        includedRecipes: [
+          {
+            recipeId: 'r-meat',
+            recipeName: 'Beef Roast',
+            eligibleServings: 10,
+            scaledIngredients: [
+              {
+                ingredientId: 'beef',
+                displayName: 'Beef',
+                quantity: { amount: 1.67, unit: 'kg', category: 'Mass' },
+              },
+            ],
+          },
+        ],
+        excludedRecipes: [],
+        shoppingList: [
+          {
+            ingredientId: 'beef',
+            displayName: 'Beef',
+            quantity: { amount: 1.67, unit: 'kg', category: 'Mass' },
+            sourceRecipeIds: ['r-meat'],
+            category,
+            categoryIsOverridden,
+          },
+        ],
+      });
+
+      let planCallCount = 0;
+      let putBody: unknown = null;
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes')) {
+          return recipesGetResponse(url.toString(), mockRecipes);
+        }
+        if (url.toString().endsWith('/api/events/plan') && options?.method === 'POST') {
+          planCallCount += 1;
+          const response =
+            planCallCount === 1 ? planResponse('Meat', false) : planResponse('Frozen', true);
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => response,
+          } as Response;
+        }
+        if (
+          url.toString().endsWith('/api/ingredient-categories/beef') &&
+          options?.method === 'PUT'
+        ) {
+          putBody = JSON.parse(options.body as string);
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ ingredientId: 'beef', category: 'Frozen' }),
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App />);
+
+      fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+      expect(await screen.findByText('Beef Roast')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe beef roast/i }));
+      fireEvent.click(screen.getByRole('button', { name: /plan event shopping list/i }));
+
+      expect(await screen.findByText('Consolidated Event Shopping List')).toBeInTheDocument();
+      const categorySelect = screen.getByLabelText('Grocery category for Beef');
+      expect(categorySelect).toHaveValue('Meat');
+
+      fireEvent.change(categorySelect, { target: { value: 'Frozen' } });
+
+      await waitFor(() => {
+        expect(putBody).toEqual({ category: 'Frozen' });
+      });
+
+      await waitFor(() => {
+        expect(planCallCount).toBe(2);
+      });
+      expect(
+        await screen.findByLabelText('Reset Beef to its default category')
+      ).toBeInTheDocument();
     });
 
     it('displays 400 error message (invalid guest group) from POST /api/events/plan', async () => {

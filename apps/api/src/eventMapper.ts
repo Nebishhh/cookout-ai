@@ -139,6 +139,7 @@ export function serializeEventPlan(
       quantity: item.quantity.toJSON(),
       sourceRecipeIds: item.sourceRecipeIds,
       category: resolveCategory(item.ingredientId, item.category, categoryOverrides),
+      categoryIsOverridden: categoryOverrides.has(item.ingredientId),
     })),
   };
 }

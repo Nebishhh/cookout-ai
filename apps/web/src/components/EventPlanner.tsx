@@ -13,6 +13,7 @@ import {
   PlusCircle,
   Loader2,
   Eye,
+  RotateCcw,
 } from 'lucide-react';
 import {
   useRecipes,
@@ -22,13 +23,16 @@ import {
   useUpdateEvent,
   useDeleteEvent,
   useSaveEventShoppingList,
+  useSetIngredientCategory,
+  useClearIngredientCategory,
 } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
-import { groupByCategory } from '../lib/groceryCategories';
+import { groupByCategory, GROCERY_CATEGORY_ORDER } from '../lib/groceryCategories';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Checkbox } from './ui/checkbox';
+import { Select } from './ui/select';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
 
@@ -68,6 +72,8 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const updateEventMutation = useUpdateEvent();
   const deleteEventMutation = useDeleteEvent();
   const saveShoppingListMutation = useSaveEventShoppingList();
+  const setCategoryMutation = useSetIngredientCategory();
+  const clearCategoryMutation = useClearIngredientCategory();
 
   // Pre-fill the form from the saved event whenever the selected event changes / refetches.
   useEffect(() => {
@@ -169,6 +175,37 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const handleViewShoppingList = () => {
     const shoppingListId = eventQuery.data?.shoppingListId;
     if (shoppingListId && onViewShoppingList) onViewShoppingList(shoppingListId);
+  };
+
+  // In view mode, useSetIngredientCategory/useClearIngredientCategory already invalidate
+  // ['events'], which refetches useEvent(selectedEventId) automatically. Preview mode's
+  // result is a mutation result (planEventMutation.data), not a cached query, so nothing
+  // refetches it on its own — re-running the plan with the same inputs is what makes the
+  // override visible in the still-open preview.
+  const handleRecategorize = (ingredientId: string, category: string) => {
+    setCategoryMutation.mutate(
+      { ingredientId, category },
+      {
+        onSuccess: () => {
+          if (!isViewMode) {
+            planEventMutation.mutate({
+              recipeIds: selectedRecipeIds,
+              guestGroup: guestGroupPayload,
+            });
+          }
+        },
+      }
+    );
+  };
+
+  const handleResetCategory = (ingredientId: string) => {
+    clearCategoryMutation.mutate(ingredientId, {
+      onSuccess: () => {
+        if (!isViewMode) {
+          planEventMutation.mutate({ recipeIds: selectedRecipeIds, guestGroup: guestGroupPayload });
+        }
+      },
+    });
   };
 
   const displayError =
@@ -673,6 +710,34 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                                     </span>
                                   );
                                 })}
+                              </div>
+                              <div className="mt-1.5 flex items-center gap-1">
+                                <Select
+                                  value={item.category}
+                                  onChange={(e) =>
+                                    handleRecategorize(item.ingredientId, e.target.value)
+                                  }
+                                  aria-label={`Grocery category for ${item.displayName}`}
+                                  className="h-6 w-auto rounded-md border-stone/60 bg-canvas px-1.5 py-0 text-[11px] text-ink-muted"
+                                >
+                                  {GROCERY_CATEGORY_ORDER.map((category) => (
+                                    <option key={category} value={category}>
+                                      {category}
+                                    </option>
+                                  ))}
+                                </Select>
+                                {item.categoryIsOverridden && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleResetCategory(item.ingredientId)}
+                                    disabled={clearCategoryMutation.isPending}
+                                    title="Reset to default category"
+                                    aria-label={`Reset ${item.displayName} to its default category`}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-ink-muted hover:bg-canvas hover:text-clay-hover disabled:opacity-50"
+                                  >
+                                    <RotateCcw className="h-3 w-3" />
+                                  </button>
+                                )}
                               </div>
                             </div>
 

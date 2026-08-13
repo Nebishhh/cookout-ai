@@ -59,17 +59,19 @@ describe('POST /api/recipes/import-text', () => {
         { ingredientId: 'egg', displayName: 'Egg', amount: 4, unit: 'egg' },
       ],
       instructions: [
-        { instruction: 'Boil the spaghetti.', duration: null, temperature: null },
+        { instruction: 'Boil the spaghetti.', duration: null, temperature: null, notes: null },
         {
           instruction: 'Toss with egg and cheese off the heat.',
           duration: { amount: 2, unit: 'minutes' },
           temperature: null,
+          notes: null,
         },
       ],
     });
 
     expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledWith(
-      'Spaghetti Carbonara recipe text...'
+      'Spaghetti Carbonara recipe text...',
+      false
     );
     expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledTimes(1);
   });
@@ -91,7 +93,40 @@ describe('POST /api/recipes/import-text', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.instructions).toEqual([
-      { instruction: 'Toast the bread.', duration: null, temperature: null },
+      { instruction: 'Toast the bread.', duration: null, temperature: null, notes: null },
+    ]);
+  });
+
+  it('extracts an optional per-step notes string when present in the Gemini draft', async () => {
+    const validRecipeJSON = JSON.stringify({
+      name: 'Baked Chicken',
+      baseServings: 4,
+      dietaryTags: [],
+      ingredients: [{ ingredientId: 'chicken', displayName: 'Chicken', amount: 500, unit: 'g' }],
+      instructions: [
+        {
+          instruction: 'Bake until cooked through.',
+          notes: 'Tent with foil if browning too quickly.',
+        },
+        { instruction: 'Let rest before serving.' },
+      ],
+    });
+
+    vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(validRecipeJSON);
+
+    const response = await request(app)
+      .post('/api/recipes/import-text')
+      .send({ text: 'Baked Chicken recipe text...' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.instructions).toEqual([
+      {
+        instruction: 'Bake until cooked through.',
+        duration: null,
+        temperature: null,
+        notes: 'Tent with foil if browning too quickly.',
+      },
+      { instruction: 'Let rest before serving.', duration: null, temperature: null, notes: null },
     ]);
   });
 
@@ -133,6 +168,84 @@ describe('POST /api/recipes/import-text', () => {
     expect(response.status).toBe(502);
     expect(response.body.error).toBe('BadGateway');
     expect(response.body.message).toContain('invalid JSON');
+    // Invalid JSON is a different, pre-existing failure mode — not retried.
+    expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry when Gemini returns the NoRecipeFound shape', async () => {
+    vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(
+      JSON.stringify({
+        error: 'NoRecipeFound',
+        message: 'The provided image or text does not contain explicit recipe ingredients.',
+      })
+    );
+
+    const response = await request(app)
+      .post('/api/recipes/import-text')
+      .send({ text: 'This is just a grocery store review, not a recipe.' });
+
+    expect(response.status).toBe(502);
+    expect(response.body.error).toBe('ExtractionError');
+    // NoRecipeFound is already a correct, intentional response — retrying would waste a call.
+    expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once and returns 200 when the first response has a malformed shape but the retry is valid (issue #1)', async () => {
+    const malformedShapeJSON = JSON.stringify({
+      name: 'Grandma Pancakes skin-free baseServings 4 dietaryTags Vegetarian ingredients: flour 2 cup, egg 2 egg, milk 300 ml.',
+    });
+    const validRecipeJSON = JSON.stringify({
+      name: 'Grandma Pancakes',
+      baseServings: 4,
+      dietaryTags: ['Vegetarian'],
+      ingredients: [
+        { ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' },
+        { ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' },
+        { ingredientId: 'milk', displayName: 'Milk', amount: 300, unit: 'ml' },
+      ],
+      instructions: [],
+    });
+
+    vi.mocked(geminiClientModule.parseRecipeTextWithGemini)
+      .mockResolvedValueOnce(malformedShapeJSON)
+      .mockResolvedValueOnce(validRecipeJSON);
+
+    const response = await request(app)
+      .post('/api/recipes/import-text')
+      .send({ text: 'Grandma Pancakes recipe text...' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.name).toBe('Grandma Pancakes');
+    expect(response.body.ingredients).toHaveLength(3);
+
+    expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledTimes(2);
+    expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenNthCalledWith(
+      1,
+      'Grandma Pancakes recipe text...',
+      false
+    );
+    expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenNthCalledWith(
+      2,
+      'Grandma Pancakes recipe text...',
+      true
+    );
+  });
+
+  it('returns 502 ExtractionError when Gemini returns a malformed shape on both attempts (issue #1)', async () => {
+    const malformedShapeJSON = JSON.stringify({
+      name: 'Everything crammed into one string: 2 cups flour, 1 egg, bake 350F 20min',
+    });
+
+    vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(malformedShapeJSON);
+
+    const response = await request(app)
+      .post('/api/recipes/import-text')
+      .send({ text: 'Some recipe text that keeps confusing the model' });
+
+    expect(response.status).toBe(502);
+    expect(response.body.error).toBe('ExtractionError');
+    expect(response.body.message).toMatch(/incomplete recipe draft|retrying/i);
+    expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledTimes(2);
   });
 
   it('returns 502 when Gemini API network call fails', async () => {
@@ -166,6 +279,9 @@ describe('POST /api/recipes/import-text', () => {
     expect(response.status).toBe(422);
     expect(response.body.error).toBe('InvalidUnitError');
     expect(response.body.message).toContain('pinch');
+    // A well-shaped candidate with a bad value is a domain error, not an extraction failure —
+    // hasMinimalRecipeShape() passes on the first attempt, so no retry happens.
+    expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledTimes(1);
   });
 
   it('returns 422 when Gemini returns invalid baseServings (e.g. 0)', async () => {
@@ -185,6 +301,7 @@ describe('POST /api/recipes/import-text', () => {
     expect(response.status).toBe(422);
     expect(response.body.error).toBe('InvalidRecipeError');
     expect(response.body.message).toMatch(/servings/i);
+    expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledTimes(1);
   });
 
   it('CRITICAL: verifies NOTHING is persisted to the database before or after a successful import call', async () => {

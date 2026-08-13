@@ -7,6 +7,7 @@ describe('RecipeStep Construction & Validation', () => {
     expect(step.instruction).toBe('Preheat the oven to 375°F.');
     expect(step.duration).toBeNull();
     expect(step.temperature).toBeNull();
+    expect(step.notes).toBeNull();
   });
 
   it('rejects empty or whitespace-only instruction', () => {
@@ -54,6 +55,27 @@ describe('RecipeStep Construction & Validation', () => {
     expect(() => new RecipeStep('Bake.', undefined, { amount: 350, unit: 'F' })).toThrow(
       InvalidRecipeError
     );
+  });
+
+  it('accepts optional notes', () => {
+    const step = new RecipeStep('Whisk vigorously.', undefined, undefined, "Don't overmix.");
+    expect(step.notes).toBe("Don't overmix.");
+  });
+
+  it('defaults notes to null when omitted', () => {
+    expect(new RecipeStep('Whisk.').notes).toBeNull();
+  });
+
+  it('trims notes and stores null for a whitespace-only value', () => {
+    expect(new RecipeStep('Whisk.', undefined, undefined, '  Work quickly.  ').notes).toBe(
+      'Work quickly.'
+    );
+    expect(new RecipeStep('Whisk.', undefined, undefined, '   ').notes).toBeNull();
+  });
+
+  it('rejects a non-string notes value', () => {
+    // @ts-expect-error testing invalid input type
+    expect(() => new RecipeStep('Whisk.', undefined, undefined, 42)).toThrow(InvalidRecipeError);
   });
 });
 

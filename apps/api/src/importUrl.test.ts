@@ -444,9 +444,9 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         ],
       });
 
-      vi.mocked(geminiModule.parseRecipeTextWithGeminiTimeout).mockResolvedValue(
-        mockInvalidUnitJson
-      );
+      const geminiSpy = vi
+        .mocked(geminiModule.parseRecipeTextWithGeminiTimeout)
+        .mockResolvedValue(mockInvalidUnitJson);
 
       const res = await request(app)
         .post('/api/recipes/import-url')
@@ -455,6 +455,162 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       expect(res.status).toBe(422);
       expect(res.body.error).toBe('InvalidUnitError');
       expect(res.body.message).toContain('Invalid or unsupported unit: "pinch"');
+      // A well-shaped candidate with a bad value is a domain error, not an extraction failure —
+      // no retry happens.
+      expect(geminiSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 502 BadGateway when Gemini returns malformed/non-JSON text (not retried)', async () => {
+      vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
+        { address: '93.184.216.34', family: 4 },
+      ] as unknown as dns.LookupAddress);
+
+      const validHtml =
+        '<html><head><script type="application/ld+json">{"@type":"Recipe","name":"Soup","recipeIngredient":["1 cup broth"]}</script></head></html>';
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        body: null,
+        text: async () => validHtml,
+      } as Response);
+
+      const geminiSpy = vi
+        .mocked(geminiModule.parseRecipeTextWithGeminiTimeout)
+        .mockResolvedValue('Sorry, I cannot parse this.');
+
+      const res = await request(app)
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/broth-soup' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe('BadGateway');
+      expect(res.body.message).toContain('invalid JSON');
+      expect(geminiSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retry when Gemini returns the NoRecipeFound shape', async () => {
+      vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
+        { address: '93.184.216.34', family: 4 },
+      ] as unknown as dns.LookupAddress);
+
+      const validHtml = '<html><body><p>Just a blog post about kitchen gadgets.</p></body></html>';
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        body: null,
+        text: async () => validHtml,
+      } as Response);
+
+      const geminiSpy = vi.mocked(geminiModule.parseRecipeTextWithGeminiTimeout).mockResolvedValue(
+        JSON.stringify({
+          error: 'NoRecipeFound',
+          message: 'The provided text does not contain explicit recipe ingredients.',
+        })
+      );
+
+      const res = await request(app)
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/not-a-recipe' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe('ExtractionError');
+      expect(geminiSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries once and returns 200 when the first response has a malformed shape but the retry is valid (issue #1)', async () => {
+      vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
+        { address: '93.184.216.34', family: 4 },
+      ] as unknown as dns.LookupAddress);
+
+      const validHtml = `
+        <html>
+          <head>
+            <script type="application/ld+json">
+              {
+                "@type": "Recipe",
+                "name": "Guacamole Dip",
+                "recipeYield": "4 servings",
+                "recipeIngredient": ["3 avocados", "1 lime", "1 tsp salt"]
+              }
+            </script>
+          </head>
+        </html>
+      `;
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
+        body: null,
+        text: async () => validHtml,
+      } as Response);
+
+      const malformedShapeJSON = JSON.stringify({
+        name: 'Guacamole Dip: avocado 3 count, lime 1 count, salt 1 tsp',
+      });
+      const validRecipeJSON = JSON.stringify({
+        name: 'Guacamole Dip',
+        baseServings: 4,
+        dietaryTags: ['Vegan'],
+        ingredients: [
+          { ingredientId: 'avocado', displayName: 'Avocados', amount: 3, unit: 'count' },
+          { ingredientId: 'lime', displayName: 'Lime', amount: 1, unit: 'count' },
+          { ingredientId: 'salt', displayName: 'Salt', amount: 1, unit: 'tsp' },
+        ],
+        instructions: [],
+      });
+
+      const geminiSpy = vi
+        .mocked(geminiModule.parseRecipeTextWithGeminiTimeout)
+        .mockResolvedValueOnce(malformedShapeJSON)
+        .mockResolvedValueOnce(validRecipeJSON);
+
+      const res = await request(app)
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/guacamole' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('Guacamole Dip');
+      expect(res.body.ingredients).toHaveLength(3);
+
+      expect(geminiSpy).toHaveBeenCalledTimes(2);
+      expect(geminiSpy).toHaveBeenNthCalledWith(2, expect.any(String), undefined, true);
+    });
+
+    it('returns 502 ExtractionError when Gemini returns a malformed shape on both attempts (issue #1)', async () => {
+      vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
+        { address: '93.184.216.34', family: 4 },
+      ] as unknown as dns.LookupAddress);
+
+      const validHtml =
+        '<html><head><script type="application/ld+json">{"@type":"Recipe","name":"Soup","recipeIngredient":["1 cup broth"]}</script></head></html>';
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        body: null,
+        text: async () => validHtml,
+      } as Response);
+
+      const malformedShapeJSON = JSON.stringify({ name: 'Everything crammed here, 1 cup broth' });
+
+      const geminiSpy = vi
+        .mocked(geminiModule.parseRecipeTextWithGeminiTimeout)
+        .mockResolvedValue(malformedShapeJSON);
+
+      const res = await request(app)
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/broth-soup-again' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe('ExtractionError');
+      expect(res.body.message).toMatch(/incomplete recipe draft|retrying/i);
+      expect(geminiSpy).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -16,6 +16,7 @@ import {
   Loader2,
   Clock,
   Thermometer,
+  StickyNote,
 } from 'lucide-react';
 import type { RecipeDto } from '../lib/api';
 import {
@@ -553,6 +554,12 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
                                           )}
                                         </span>
                                       )}
+                                    </span>
+                                  )}
+                                  {step.notes && (
+                                    <span className="mt-0.5 flex items-start gap-1 text-[11px] italic text-ink-subtle">
+                                      <StickyNote className="mt-0.5 h-2.5 w-2.5 shrink-0" />
+                                      {step.notes}
                                     </span>
                                   )}
                                 </span>

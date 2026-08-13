@@ -206,9 +206,9 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
   });
 
   it('11. returns 502 ExtractionError when Gemini response returns malformed non-JSON text', async () => {
-    vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockResolvedValue(
-      'Sorry, I could not parse this photo into JSON format.'
-    );
+    const geminiSpy = vi
+      .spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout')
+      .mockResolvedValue('Sorry, I could not parse this photo into JSON format.');
 
     const res = await request(app)
       .post('/api/recipes/import-image')
@@ -219,10 +219,12 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       error: 'ExtractionError',
       message: 'Gemini returned malformed or non-JSON response text.',
     });
+    // Invalid JSON is a different, pre-existing failure mode — not retried.
+    expect(geminiSpy).toHaveBeenCalledTimes(1);
   });
 
   it('12. returns 502 ExtractionError when Gemini returns NoRecipeFound error response (non-recipe / blurry image)', async () => {
-    vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockResolvedValue(
+    const geminiSpy = vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockResolvedValue(
       JSON.stringify({
         error: 'NoRecipeFound',
         message: 'The provided image does not contain explicit recipe ingredients or quantities.',
@@ -238,10 +240,12 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       error: 'ExtractionError',
       message: 'The provided image does not contain explicit recipe ingredients or quantities.',
     });
+    // NoRecipeFound is already a correct, intentional response — retrying would waste a call.
+    expect(geminiSpy).toHaveBeenCalledTimes(1);
   });
 
   it('13. returns 422 with domain error when Gemini returns invalid unit (e.g. "pinch")', async () => {
-    vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockResolvedValue(
+    const geminiSpy = vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockResolvedValue(
       JSON.stringify({
         name: 'Salted Butter',
         baseServings: 2,
@@ -257,10 +261,13 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
     expect(res.status).toBe(422);
     expect(res.body.error).toBe('InvalidUnitError');
     expect(res.body.message).toMatch(/invalid or unsupported unit: "pinch"/i);
+    // A well-shaped candidate with a bad value is a domain error, not an extraction failure —
+    // no retry happens.
+    expect(geminiSpy).toHaveBeenCalledTimes(1);
   });
 
   it('14. returns 422 with domain error when Gemini returns invalid baseServings (e.g. 0)', async () => {
-    vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockResolvedValue(
+    const geminiSpy = vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockResolvedValue(
       JSON.stringify({
         name: 'Invalid Servings Pie',
         baseServings: 0,
@@ -276,6 +283,58 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
     expect(res.status).toBe(422);
     expect(res.body.error).toBe('InvalidRecipeError');
     expect(res.body.message).toMatch(/positive integer/i);
+    expect(geminiSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('16. retries once and returns 200 when the first response has a malformed shape but the retry is valid (issue #1)', async () => {
+    const malformedShapeJSON = JSON.stringify({
+      name: "Grandma's Blueberry Muffins: flour 2 cup, blueberries 1 cup, egg 2 egg",
+    });
+
+    const geminiSpy = vi
+      .spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout')
+      .mockResolvedValueOnce(malformedShapeJSON)
+      .mockResolvedValueOnce(MOCK_VALID_GEMINI_RECIPE_JSON);
+
+    const res = await request(app)
+      .post('/api/recipes/import-image')
+      .attach('file', VALID_JPEG_BUFFER, {
+        filename: 'recipe_card.jpg',
+        contentType: 'image/jpeg',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe("Grandma's Blueberry Muffins");
+    expect(res.body.ingredients).toHaveLength(3);
+
+    expect(geminiSpy).toHaveBeenCalledTimes(2);
+    expect(geminiSpy).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Buffer),
+      'image/jpeg',
+      undefined,
+      false
+    );
+    expect(geminiSpy).toHaveBeenNthCalledWith(2, expect.any(Buffer), 'image/jpeg', undefined, true);
+  });
+
+  it('17. returns 502 ExtractionError when Gemini returns a malformed shape on both attempts (issue #1)', async () => {
+    const malformedShapeJSON = JSON.stringify({
+      name: 'Everything crammed into one string: 2 cups flour, 1 egg',
+    });
+
+    const geminiSpy = vi
+      .spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout')
+      .mockResolvedValue(malformedShapeJSON);
+
+    const res = await request(app)
+      .post('/api/recipes/import-image')
+      .attach('file', VALID_PNG_BUFFER, { filename: 'blurry_card.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe('ExtractionError');
+    expect(res.body.message).toMatch(/incomplete recipe draft|retrying/i);
+    expect(geminiSpy).toHaveBeenCalledTimes(2);
   });
 
   it('15. CRITICAL: verifies NOTHING is persisted to the database before or after a successful import-image call', async () => {

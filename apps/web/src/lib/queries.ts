@@ -75,6 +75,7 @@ function enrichStepsForOptimisticCache(steps: RecipeStepInput[]): RecipeDto['ste
       step.temperatureAmount !== undefined && step.temperatureUnit !== undefined
         ? { amount: step.temperatureAmount, unit: step.temperatureUnit }
         : null,
+    notes: step.notes ?? null,
   }));
 }
 

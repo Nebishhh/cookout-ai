@@ -7,6 +7,7 @@ import {
   stepsFromInstructions,
   type CreateRecipeInput,
 } from './recipeMapper.js';
+import { extractRecipeCandidate } from './aiRecipeExtraction.js';
 
 export interface ImportRecipeImageResponseDto {
   name: string;
@@ -22,6 +23,7 @@ export interface ImportRecipeImageResponseDto {
     instruction: string;
     duration: { amount: number; unit: string } | null;
     temperature: { amount: number; unit: string } | null;
+    notes: string | null;
   }>;
 }
 
@@ -29,19 +31,11 @@ export async function handleImportImage(req: Request, res: Response): Promise<vo
   try {
     const { buffer, mimeType } = await parseAndValidateImageStream(req);
 
-    const rawGeminiResponse = await parseRecipeImageWithGeminiTimeout(buffer, mimeType);
+    const extraction = await extractRecipeCandidate((reinforceShape) =>
+      parseRecipeImageWithGeminiTimeout(buffer, mimeType, undefined, reinforceShape)
+    );
 
-    // Clean up potential markdown formatting code blocks if present
-    const cleanedText = rawGeminiResponse
-      .replace(/^```json\s*/i, '')
-      .replace(/^```\s*/, '')
-      .replace(/\s*```$/, '')
-      .trim();
-
-    let parsedJson: Record<string, unknown>;
-    try {
-      parsedJson = JSON.parse(cleanedText);
-    } catch {
+    if (extraction.status === 'invalid-json') {
       res.status(502).json({
         error: 'ExtractionError',
         message: 'Gemini returned malformed or non-JSON response text.',
@@ -49,13 +43,21 @@ export async function handleImportImage(req: Request, res: Response): Promise<vo
       return;
     }
 
-    if (parsedJson.error === 'NoRecipeFound') {
+    if (extraction.status === 'no-recipe-found') {
       res.status(502).json({
         error: 'ExtractionError',
         message:
-          typeof parsedJson.message === 'string'
-            ? parsedJson.message
-            : 'The provided image does not contain explicit recipe ingredients or quantities.',
+          extraction.message ||
+          'The provided image does not contain explicit recipe ingredients or quantities.',
+      });
+      return;
+    }
+
+    if (extraction.status === 'malformed-shape') {
+      res.status(502).json({
+        error: 'ExtractionError',
+        message:
+          'The AI extraction produced an incomplete recipe draft (missing a name or ingredient list), even after retrying. Try a clearer photo or entering the recipe manually.',
       });
       return;
     }
@@ -63,7 +65,9 @@ export async function handleImportImage(req: Request, res: Response): Promise<vo
     // Domain validation via domain layer factory (zero persistence)
     let validDomainRecipe;
     try {
-      const candidate = parsedJson as unknown as CreateRecipeInput & { instructions?: unknown };
+      const candidate = extraction.candidate as unknown as CreateRecipeInput & {
+        instructions?: unknown;
+      };
       validDomainRecipe = validateAndCreateDomainRecipe({
         ...candidate,
         steps: stepsFromInstructions(candidate.instructions),
@@ -98,6 +102,7 @@ export async function handleImportImage(req: Request, res: Response): Promise<vo
         temperature: step.temperature
           ? { amount: step.temperature.amount, unit: step.temperature.unit }
           : null,
+        notes: step.notes,
       })),
     };
 

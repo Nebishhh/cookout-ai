@@ -25,6 +25,7 @@ export interface RecipeStepInput {
   durationUnit?: string;
   temperatureAmount?: number;
   temperatureUnit?: string;
+  notes?: string;
 }
 
 /** Read shape — duration/temperature nest as `{amount, unit} | null`, one null check for "not stated". */
@@ -32,6 +33,7 @@ export interface RecipeStepDto {
   instruction: string;
   duration: { amount: number; unit: string } | null;
   temperature: { amount: number; unit: string } | null;
+  notes: string | null;
 }
 
 export interface CreateRecipeInput {
@@ -84,6 +86,7 @@ export interface ShoppingListItemDto {
   };
   sourceRecipeIds: string[];
   category: string;
+  categoryIsOverridden: boolean;
 }
 
 export interface ScaledRecipeDto {

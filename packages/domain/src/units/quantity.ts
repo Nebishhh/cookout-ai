@@ -98,6 +98,27 @@ export class Quantity {
     return new Quantity(convertedAmount, targetUnit);
   }
 
+  /**
+   * Subtracts `other` from this Quantity, converting `other` into this Quantity's unit first
+   * (reusing convertTo()'s category/Count guards — throws UnitMismatchError on incompatible
+   * units, same as convertTo()).
+   *
+   * Clamps at zero rather than throwing InvalidQuantityError for a would-be-negative result:
+   * "fully covered, nothing left to buy" is valid data, matching the "zero is valid, not an
+   * error" precedent already established elsewhere in this domain (an empty ShoppingList is
+   * valid, a recipe with zero eligible guests is valid). Whether a zeroed-out item should then
+   * be omitted from a shopping list entirely is a decision for the caller (e.g. pantry-stock
+   * subtraction), not this general-purpose arithmetic primitive.
+   *
+   * @param other The Quantity to subtract.
+   * @returns A new Quantity in this Quantity's unit.
+   * @throws UnitMismatchError if `other` is in an incompatible unit/category (same rules as convertTo()).
+   */
+  subtract(other: Quantity): Quantity {
+    const converted = other.convertTo(this.unit);
+    return new Quantity(Math.max(0, this.amount - converted.amount), this.unit);
+  }
+
   equals(other: unknown): boolean {
     if (!(other instanceof Quantity)) {
       return false;

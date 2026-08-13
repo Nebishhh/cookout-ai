@@ -18,8 +18,20 @@ export interface IngredientInput {
   unit: string;
 }
 
+/** Write shape (POST/PUT /api/recipes) — flat optional fields, matching Prisma's flat columns. */
 export interface RecipeStepInput {
   instruction: string;
+  durationAmount?: number;
+  durationUnit?: string;
+  temperatureAmount?: number;
+  temperatureUnit?: string;
+}
+
+/** Read shape — duration/temperature nest as `{amount, unit} | null`, one null check for "not stated". */
+export interface RecipeStepDto {
+  instruction: string;
+  duration: { amount: number; unit: string } | null;
+  temperature: { amount: number; unit: string } | null;
 }
 
 export interface CreateRecipeInput {
@@ -42,7 +54,19 @@ export interface RecipeDto {
     unit: string;
     category: string;
   }>;
-  steps: RecipeStepInput[];
+  steps: RecipeStepDto[];
+}
+
+export interface RecipesPageParams {
+  limit: number;
+  cursor?: string | null;
+  search?: string;
+  tags?: string[];
+}
+
+export interface RecipesPageDto {
+  items: RecipeDto[];
+  nextCursor: string | null;
 }
 
 export interface ShoppingListRequestItem {
@@ -180,6 +204,22 @@ export interface ShoppingListDto {
   items: ShoppingListLineDto[];
 }
 
+export interface PantryItemDto {
+  ingredientId: string;
+  displayName: string;
+  quantity: {
+    amount: number;
+    unit: string;
+    category: string;
+  };
+}
+
+export interface SetPantryItemInput {
+  displayName: string;
+  amount: number;
+  unit: string;
+}
+
 export class ApiError extends Error {
   status: number;
   errorName?: string;
@@ -228,11 +268,19 @@ export interface ImportRecipeTextResponseDto {
     amount: number;
     unit: string;
   }>;
-  instructions: string[];
+  instructions: RecipeStepDto[];
 }
 
 export const api = {
   getRecipes: () => request<RecipeDto[]>('/api/recipes'),
+  getRecipesPage: ({ limit, cursor, search, tags }: RecipesPageParams) => {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (cursor) params.set('cursor', cursor);
+    if (search && search.trim()) params.set('search', search.trim());
+    if (tags && tags.length > 0) params.set('tags', tags.join(','));
+    return request<RecipesPageDto>(`/api/recipes?${params.toString()}`);
+  },
   getRecipeById: (id: string) => request<RecipeDto>(`/api/recipes/${id}`),
   createRecipe: (data: CreateRecipeInput) =>
     request<RecipeDto>('/api/recipes', {
@@ -305,6 +353,16 @@ export const api = {
     ),
   clearIngredientCategory: (ingredientId: string) =>
     request<void>(`/api/ingredient-categories/${encodeURIComponent(ingredientId)}`, {
+      method: 'DELETE',
+    }),
+  getPantryItems: () => request<PantryItemDto[]>('/api/pantry'),
+  setPantryItem: (ingredientId: string, data: SetPantryItemInput) =>
+    request<PantryItemDto>(`/api/pantry/${encodeURIComponent(ingredientId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  clearPantryItem: (ingredientId: string) =>
+    request<void>(`/api/pantry/${encodeURIComponent(ingredientId)}`, {
       method: 'DELETE',
     }),
   importRecipeText: (text: string) =>

@@ -4,6 +4,7 @@ import {
   DOMAIN_PACKAGE_NAME,
   scaleRecipe,
   consolidateShoppingList,
+  subtractPantryStock,
   planEventShoppingList,
   GuestGroup,
   InvalidRecipeError,
@@ -12,6 +13,7 @@ import {
   DomainError,
 } from '@cookout-ai/domain';
 import { prisma } from './prisma.js';
+import type { Prisma } from '@prisma/client';
 import {
   validateAndCreateDomainRecipe,
   toDomainRecipe,
@@ -36,6 +38,13 @@ import {
   setCategoryOverride,
   clearCategoryOverride,
 } from './categoryOverrides.js';
+import {
+  getPantryStockMap,
+  listPantryItems,
+  setPantryItem,
+  clearPantryItem,
+} from './pantryStore.js';
+import { encodeRecipeCursor, decodeRecipeCursor } from './recipePagination.js';
 import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
 import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
@@ -158,7 +167,13 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
         amount: ing.quantity.amount,
         unit: ing.quantity.unit,
       })),
-      instructions: domainRecipe.steps.map((step) => step.instruction),
+      instructions: domainRecipe.steps.map((step) => ({
+        instruction: step.instruction,
+        duration: step.duration ? { amount: step.duration.amount, unit: step.duration.unit } : null,
+        temperature: step.temperature
+          ? { amount: step.temperature.amount, unit: step.temperature.unit }
+          : null,
+      })),
     });
   } catch (err) {
     next(err);
@@ -310,7 +325,13 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
         amount: ing.quantity.amount,
         unit: ing.quantity.unit,
       })),
-      instructions: domainRecipe.steps.map((step) => step.instruction),
+      instructions: domainRecipe.steps.map((step) => ({
+        instruction: step.instruction,
+        duration: step.duration ? { amount: step.duration.amount, unit: step.duration.unit } : null,
+        temperature: step.temperature
+          ? { amount: step.temperature.amount, unit: step.temperature.unit }
+          : null,
+      })),
     });
   } catch (err) {
     next(err);
@@ -345,6 +366,10 @@ app.post('/api/recipes', async (req: Request, res: Response, next: NextFunction)
           create: domainRecipe.steps.map((step, idx) => ({
             instruction: step.instruction,
             position: idx,
+            durationAmount: step.duration?.amount ?? null,
+            durationUnit: step.duration?.unit ?? null,
+            temperatureAmount: step.temperature?.amount ?? null,
+            temperatureUnit: step.temperature?.unit ?? null,
           })),
         },
       },
@@ -362,21 +387,86 @@ app.post('/api/recipes', async (req: Request, res: Response, next: NextFunction)
   }
 });
 
-// GET /api/recipes
-app.get('/api/recipes', async (_req: Request, res: Response, next: NextFunction) => {
+/**
+ * GET /api/recipes — dual-shape by design: the paginated shape only activates when `limit`
+ * is present in the query string, so the no-params call stays byte-for-byte identical to
+ * today's unbounded bare-array response. ShoppingListBuilder/EventPlanner's useRecipes() call
+ * this with no params and need the *full* catalog as a selector — only RecipeList opts into
+ * pagination (see useRecipesPage() in apps/web/src/lib/queries.ts).
+ */
+app.get('/api/recipes', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const { limit: limitRaw, cursor: cursorRaw, search, tags: tagsRaw } = req.query;
+
+    if (typeof limitRaw !== 'string') {
+      const prismaRecipes = await prisma.recipe.findMany({
+        include: {
+          ingredients: true,
+          steps: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+
+      const domainRecipes = prismaRecipes.map((r) => toDomainRecipe(r));
+      res.json(domainRecipes.map((r) => toRecipeJSON(r)));
+      return;
+    }
+
+    const limit = Number(limitRaw);
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new InvalidRecipeError(`Invalid limit: "${limitRaw}". Must be a positive integer.`);
+    }
+
+    const andClauses: Prisma.RecipeWhereInput[] = [];
+
+    if (typeof search === 'string' && search.trim().length > 0) {
+      andClauses.push({ name: { contains: search.trim() } });
+    }
+
+    if (typeof tagsRaw === 'string' && tagsRaw.trim().length > 0) {
+      for (const tag of tagsRaw
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)) {
+        // dietaryTagsJson is a JSON-encoded string column (see prisma/schema.prisma's tradeoff
+        // note on Recipe.dietaryTagsJson), so a per-tag substring check stands in for a real
+        // array-contains query — safe here since dietary tags are a small controlled enum.
+        andClauses.push({ dietaryTagsJson: { contains: `"${tag}"` } });
+      }
+    }
+
+    if (typeof cursorRaw === 'string' && cursorRaw.trim().length > 0) {
+      const cursor = decodeRecipeCursor(cursorRaw);
+      andClauses.push({
+        OR: [
+          { createdAt: { lt: cursor.createdAt } },
+          { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+        ],
+      });
+    }
+
     const prismaRecipes = await prisma.recipe.findMany({
+      where: andClauses.length > 0 ? { AND: andClauses } : undefined,
       include: {
         ingredients: true,
         steps: true,
       },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit,
     });
 
     const domainRecipes = prismaRecipes.map((r) => toDomainRecipe(r));
-    res.json(domainRecipes.map((r) => toRecipeJSON(r)));
+    const items = domainRecipes.map((r) => toRecipeJSON(r));
+
+    const lastRow = prismaRecipes[prismaRecipes.length - 1];
+    const nextCursor =
+      prismaRecipes.length === limit && lastRow
+        ? encodeRecipeCursor({ createdAt: lastRow.createdAt, id: lastRow.id })
+        : null;
+
+    res.json({ items, nextCursor });
   } catch (err) {
     next(err);
   }
@@ -449,6 +539,10 @@ app.put('/api/recipes/:id', async (req: Request, res: Response, next: NextFuncti
             create: domainRecipe.steps.map((step, idx) => ({
               instruction: step.instruction,
               position: idx,
+              durationAmount: step.duration?.amount ?? null,
+              durationUnit: step.duration?.unit ?? null,
+              temperatureAmount: step.temperature?.amount ?? null,
+              temperatureUnit: step.temperature?.unit ?? null,
             })),
           },
         },
@@ -529,10 +623,12 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
 
     // Consolidate shopping list reusing consolidateShoppingList() from @cookout-ai/domain
     const consolidatedList = consolidateShoppingList(scaledRecipes);
+    const pantryStock = await getPantryStockMap();
+    const afterPantry = subtractPantryStock(consolidatedList, pantryStock);
     const categoryOverrides = await getCategoryOverridesMap();
 
     res.status(200).json({
-      shoppingList: consolidatedList.map((item) => ({
+      shoppingList: afterPantry.map((item) => ({
         ingredientId: item.ingredientId,
         displayName: item.displayName,
         quantity: item.quantity.toJSON(),
@@ -608,7 +704,8 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
 
     // 5. Serialize EventPlan to JSON output
     const categoryOverrides = await getCategoryOverridesMap();
-    res.status(200).json(serializeEventPlan(eventPlan, categoryOverrides));
+    const pantryStock = await getPantryStockMap();
+    res.status(200).json(serializeEventPlan(eventPlan, categoryOverrides, pantryStock));
   } catch (err) {
     next(err);
   }
@@ -653,10 +750,11 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
 
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
     const categoryOverrides = await getCategoryOverridesMap();
+    const pantryStock = await getPantryStockMap();
 
     res.status(201).json({
       ...toEventSummaryJSON(reconstructedEvent),
-      ...serializeEventPlan(eventPlan, categoryOverrides),
+      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock),
       droppedRecipeIds: [],
     });
   } catch (err) {
@@ -711,10 +809,11 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
 
     const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
     const categoryOverrides = await getCategoryOverridesMap();
+    const pantryStock = await getPantryStockMap();
 
     res.json({
       ...toEventSummaryJSON(domainEvent, prismaEvent.shoppingList?.id ?? null),
-      ...serializeEventPlan(eventPlan, categoryOverrides),
+      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock),
       droppedRecipeIds,
     });
   } catch (err) {
@@ -764,10 +863,11 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
 
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
     const categoryOverrides = await getCategoryOverridesMap();
+    const pantryStock = await getPantryStockMap();
 
     res.json({
       ...toEventSummaryJSON(reconstructedEvent, updatedPrismaEvent.shoppingList?.id ?? null),
-      ...serializeEventPlan(eventPlan, categoryOverrides),
+      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock),
       droppedRecipeIds,
     });
   } catch (err) {
@@ -840,7 +940,9 @@ app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFu
     }
 
     const consolidatedList = consolidateShoppingList(scaledRecipes);
-    const domainLines = buildShoppingListLinesFromConsolidated(consolidatedList);
+    const pantryStock = await getPantryStockMap();
+    const afterPantry = subtractPantryStock(consolidatedList, pantryStock);
+    const domainLines = buildShoppingListLinesFromConsolidated(afterPantry);
 
     const createdPrismaList = await prisma.shoppingList.create({
       data: {
@@ -904,7 +1006,9 @@ app.put(
       }
 
       const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
-      const domainLines = buildShoppingListLinesFromConsolidated(eventPlan.shoppingList);
+      const pantryStock = await getPantryStockMap();
+      const afterPantry = subtractPantryStock(eventPlan.shoppingList, pantryStock);
+      const domainLines = buildShoppingListLinesFromConsolidated(afterPantry);
 
       const { name: overrideName } = req.body || {};
       const listName =
@@ -1084,6 +1188,61 @@ app.delete(
     }
   }
 );
+
+/**
+ * Pantry endpoints — a global, standing on-hand quantity per ingredient (see pantryStore.ts).
+ * Read by every shopping-list-producing route via getPantryStockMap() + subtractPantryStock();
+ * these three routes are the only place pantry state itself is written.
+ */
+
+// GET /api/pantry — list all pantry items, for the pantry-management UI.
+app.get('/api/pantry', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const items = await listPantryItems();
+    res.json(
+      items.map((item) => ({
+        ingredientId: item.ingredientId,
+        displayName: item.displayName,
+        quantity: item.quantity.toJSON(),
+      }))
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/pantry/:ingredientId — set (or replace) on-hand stock for an ingredient.
+app.put('/api/pantry/:ingredientId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ingredientId = (
+      Array.isArray(req.params.ingredientId) ? req.params.ingredientId[0] : req.params.ingredientId
+    ) as string;
+    const { displayName, amount, unit } = req.body || {};
+
+    const saved = await setPantryItem(ingredientId, displayName, amount, unit);
+    res.status(200).json({
+      ingredientId: saved.ingredientId,
+      displayName: saved.displayName,
+      quantity: saved.quantity.toJSON(),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/pantry/:ingredientId — remove on-hand stock (the ingredient is fully needed again). Idempotent.
+app.delete('/api/pantry/:ingredientId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ingredientId = (
+      Array.isArray(req.params.ingredientId) ? req.params.ingredientId[0] : req.params.ingredientId
+    ) as string;
+
+    await clearPantryItem(ingredientId);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Central error handling middleware
 app.use(errorHandler);

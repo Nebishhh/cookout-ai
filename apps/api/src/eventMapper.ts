@@ -1,5 +1,11 @@
-import { Event, GuestGroup, InvalidEventError, InvalidGuestGroupError } from '@cookout-ai/domain';
-import type { EventPlan, GroceryCategory } from '@cookout-ai/domain';
+import {
+  Event,
+  GuestGroup,
+  InvalidEventError,
+  InvalidGuestGroupError,
+  subtractPantryStock,
+} from '@cookout-ai/domain';
+import type { EventPlan, GroceryCategory, Quantity } from '@cookout-ai/domain';
 import type { Event as PrismaEvent } from '@prisma/client';
 import { resolveCategory } from './categoryOverrides.js';
 
@@ -95,11 +101,16 @@ export function toEventSummaryJSON(domainEvent: Event, shoppingListId: string | 
  * Event route that recomputes the plan live on read.
  * `categoryOverrides` (ingredientId -> manually-corrected GroceryCategory) is applied on top
  * of each shopping-list item's heuristic-derived category — see categoryOverrides.ts.
+ * `pantryStock` (ingredientId -> on-hand Quantity) reduces/omits shopping-list items the same
+ * way it does for every other shopping-list-producing route — see pantryStore.ts.
  */
 export function serializeEventPlan(
   eventPlan: EventPlan,
-  categoryOverrides: ReadonlyMap<string, GroceryCategory> = new Map()
+  categoryOverrides: ReadonlyMap<string, GroceryCategory> = new Map(),
+  pantryStock: ReadonlyMap<string, Quantity> = new Map()
 ) {
+  const shoppingList = subtractPantryStock(eventPlan.shoppingList, pantryStock);
+
   return {
     guestGroup: {
       totalGuests: eventPlan.guestGroup.totalGuests,
@@ -122,7 +133,7 @@ export function serializeEventPlan(
       recipeName: item.recipe.name,
       reason: item.reason,
     })),
-    shoppingList: eventPlan.shoppingList.map((item) => ({
+    shoppingList: shoppingList.map((item) => ({
       ingredientId: item.ingredientId,
       displayName: item.displayName,
       quantity: item.quantity.toJSON(),

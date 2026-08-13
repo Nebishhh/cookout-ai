@@ -9,6 +9,7 @@ import { ShoppingListBuilder } from './components/ShoppingListBuilder';
 import { EventPlanner } from './components/EventPlanner';
 import { EventList } from './components/EventList';
 import { SavedShoppingLists } from './components/SavedShoppingLists';
+import { PantryPanel } from './components/PantryPanel';
 
 /**
  * Open Questions / Scope Notes:
@@ -117,6 +118,7 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
               </div>
             ) : currentTab === 'shopping-list' ? (
               <div className="space-y-10">
+                <PantryPanel />
                 <SavedShoppingLists
                   selectedId={selectedShoppingListId}
                   onSelect={setSelectedShoppingListId}

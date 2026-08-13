@@ -1,3 +1,9 @@
+export interface RecipeStepFixture {
+  instruction: string;
+  duration?: { amount: number; unit: 'minutes' | 'hours' };
+  temperature?: { amount: number; unit: 'F' | 'C' };
+}
+
 export interface RecipeDraftFixture {
   name: string;
   baseServings: number;
@@ -8,7 +14,7 @@ export interface RecipeDraftFixture {
     amount: number;
     unit: string;
   }>;
-  instructions: string[];
+  instructions: RecipeStepFixture[];
 }
 
 export const TEXT_IMPORT_FIXTURE: RecipeDraftFixture = {
@@ -19,7 +25,13 @@ export const TEXT_IMPORT_FIXTURE: RecipeDraftFixture = {
     { ingredientId: 'oats', displayName: 'Rolled Oats', amount: 2, unit: 'cup' },
     { ingredientId: 'honey', displayName: 'Honey', amount: 2, unit: 'tbsp' },
   ],
-  instructions: ['Combine oats and honey in a bowl.', 'Let sit for 5 minutes before serving.'],
+  instructions: [
+    { instruction: 'Combine oats and honey in a bowl.' },
+    {
+      instruction: 'Let sit for 5 minutes before serving.',
+      duration: { amount: 5, unit: 'minutes' },
+    },
+  ],
 };
 
 export const URL_IMPORT_FIXTURE: RecipeDraftFixture = {
@@ -31,9 +43,15 @@ export const URL_IMPORT_FIXTURE: RecipeDraftFixture = {
     { ingredientId: 'blueberries', displayName: 'Fresh Blueberries', amount: 1, unit: 'cup' },
   ],
   instructions: [
-    'Preheat the oven to 375°F and line a muffin tin.',
-    'Fold blueberries into the batter and divide among cups.',
-    'Bake for 20 minutes until golden.',
+    {
+      instruction: 'Preheat the oven to 375°F and line a muffin tin.',
+      temperature: { amount: 375, unit: 'F' },
+    },
+    { instruction: 'Fold blueberries into the batter and divide among cups.' },
+    {
+      instruction: 'Bake for 20 minutes until golden.',
+      duration: { amount: 20, unit: 'minutes' },
+    },
   ],
 };
 
@@ -46,8 +64,12 @@ export const IMAGE_IMPORT_FIXTURE: RecipeDraftFixture = {
     { ingredientId: 'cinnamon', displayName: 'Ground Cinnamon', amount: 1, unit: 'tsp' },
   ],
   instructions: [
-    'Peel and slice the apples, then toss with cinnamon.',
-    'Fill the pie crust and bake at 375°F for 45 minutes.',
+    { instruction: 'Peel and slice the apples, then toss with cinnamon.' },
+    {
+      instruction: 'Fill the pie crust and bake at 375°F for 45 minutes.',
+      duration: { amount: 45, unit: 'minutes' },
+      temperature: { amount: 375, unit: 'F' },
+    },
   ],
 };
 
@@ -60,7 +82,7 @@ export const CAMERA_IMPORT_FIXTURE: RecipeDraftFixture = {
     { ingredientId: 'spinach', displayName: 'Baby Spinach', amount: 200, unit: 'g' },
   ],
   instructions: [
-    'Sear the steak to desired doneness and let it rest.',
-    'Slice and serve over spinach.',
+    { instruction: 'Sear the steak to desired doneness and let it rest.' },
+    { instruction: 'Slice and serve over spinach.' },
   ],
 };

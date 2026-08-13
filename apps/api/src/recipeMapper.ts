@@ -5,6 +5,8 @@ import {
   Quantity,
   Recipe,
   RecipeStep,
+  StepDuration,
+  StepTemperature,
 } from '@cookout-ai/domain';
 import type {
   Recipe as PrismaRecipe,
@@ -26,6 +28,10 @@ export interface CreateIngredientInput {
 
 export interface CreateStepInput {
   instruction: string;
+  durationAmount?: number;
+  durationUnit?: string;
+  temperatureAmount?: number;
+  temperatureUnit?: string;
 }
 
 export interface CreateRecipeInput {
@@ -37,19 +43,68 @@ export interface CreateRecipeInput {
 }
 
 /**
- * Maps the AI-facing "instructions" field (an ordered array of plain strings, matching
- * both the Gemini extraction schema and the frontend's ImportRecipeTextResponseDto) onto
- * the "steps" shape validateAndCreateDomainRecipe expects (matching the real recipe-create
- * payload shape used by POST /api/recipes). Only the AI-import boundary needs this
- * translation — a real create/update request already sends "steps" directly.
+ * Maps the AI-facing "instructions" field onto the "steps" shape validateAndCreateDomainRecipe
+ * expects (matching the real recipe-create payload shape used by POST /api/recipes). Only the
+ * AI-import boundary needs this translation — a real create/update request already sends
+ * "steps" directly.
+ *
+ * Each entry is normally `{ instruction, duration?: {amount, unit}, temperature?: {amount,
+ * unit} }` (see GEMINI_SYSTEM_PROMPT in geminiClient.ts) — duration/temperature are extracted
+ * only when explicitly stated in the source text. A bare string entry is also accepted (no
+ * duration/temperature) as a defensive fallback: geminiClient.ts's structured-output config
+ * makes schema compliance reliable, not guaranteed, for a live (non-fixture) response.
  */
 export function stepsFromInstructions(instructions: unknown): CreateStepInput[] {
   if (!Array.isArray(instructions)) {
     return [];
   }
-  return instructions
-    .filter((instruction): instruction is string => typeof instruction === 'string')
-    .map((instruction) => ({ instruction }));
+
+  const steps: CreateStepInput[] = [];
+
+  for (const entry of instructions) {
+    if (typeof entry === 'string') {
+      steps.push({ instruction: entry });
+      continue;
+    }
+
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const candidate = entry as {
+      instruction?: unknown;
+      duration?: { amount?: unknown; unit?: unknown };
+      temperature?: { amount?: unknown; unit?: unknown };
+    };
+
+    if (typeof candidate.instruction !== 'string') {
+      continue;
+    }
+
+    const step: CreateStepInput = { instruction: candidate.instruction };
+
+    if (
+      candidate.duration &&
+      typeof candidate.duration.amount === 'number' &&
+      typeof candidate.duration.unit === 'string'
+    ) {
+      step.durationAmount = candidate.duration.amount;
+      step.durationUnit = candidate.duration.unit;
+    }
+
+    if (
+      candidate.temperature &&
+      typeof candidate.temperature.amount === 'number' &&
+      typeof candidate.temperature.unit === 'string'
+    ) {
+      step.temperatureAmount = candidate.temperature.amount;
+      step.temperatureUnit = candidate.temperature.unit;
+    }
+
+    steps.push(step);
+  }
+
+  return steps;
 }
 
 /**
@@ -94,7 +149,15 @@ export function validateAndCreateDomainRecipe(
         if (!step || typeof step !== 'object') {
           throw new InvalidRecipeError('Invalid step entry.');
         }
-        return new RecipeStep(step.instruction);
+        const duration =
+          step.durationAmount !== undefined && step.durationUnit !== undefined
+            ? new StepDuration(step.durationAmount, step.durationUnit)
+            : undefined;
+        const temperature =
+          step.temperatureAmount !== undefined && step.temperatureUnit !== undefined
+            ? new StepTemperature(step.temperatureAmount, step.temperatureUnit)
+            : undefined;
+        return new RecipeStep(step.instruction, duration, temperature);
       })
     : [];
 
@@ -126,7 +189,17 @@ export function toDomainRecipe(prismaRecipe: PrismaRecipeWithRelations): Recipe 
   });
 
   const sortedSteps = [...prismaRecipe.steps].sort((a, b) => a.position - b.position);
-  const domainSteps = sortedSteps.map((step) => new RecipeStep(step.instruction));
+  const domainSteps = sortedSteps.map((step) => {
+    const duration =
+      step.durationAmount !== null && step.durationUnit !== null
+        ? new StepDuration(step.durationAmount, step.durationUnit)
+        : undefined;
+    const temperature =
+      step.temperatureAmount !== null && step.temperatureUnit !== null
+        ? new StepTemperature(step.temperatureAmount, step.temperatureUnit)
+        : undefined;
+    return new RecipeStep(step.instruction, duration, temperature);
+  });
 
   return new Recipe(
     prismaRecipe.id,
@@ -156,6 +229,10 @@ export function toRecipeJSON(domainRecipe: Recipe) {
     })),
     steps: domainRecipe.steps.map((step) => ({
       instruction: step.instruction,
+      duration: step.duration ? { amount: step.duration.amount, unit: step.duration.unit } : null,
+      temperature: step.temperature
+        ? { amount: step.temperature.amount, unit: step.temperature.unit }
+        : null,
     })),
   };
 }

@@ -202,6 +202,52 @@ describe('Quantity Value Object', () => {
     });
   });
 
+  describe('Subtraction (subtract)', () => {
+    it('subtracts same-unit quantities', () => {
+      const needed = new Quantity(500, 'g');
+      const onHand = new Quantity(200, 'g');
+      const result = needed.subtract(onHand);
+      expect(result.amount).toBe(300);
+      expect(result.unit).toBe('g');
+    });
+
+    it('converts the subtrahend into the minuend unit before subtracting (cross-unit, same category)', () => {
+      const needed = new Quantity(2, 'l');
+      const onHand = new Quantity(500, 'ml');
+      const result = needed.subtract(onHand);
+      expect(result.amount).toBe(1.5);
+      expect(result.unit).toBe('l');
+    });
+
+    it('subtracts exact-matching Count units', () => {
+      const needed = new Quantity(5, 'egg');
+      const onHand = new Quantity(3, 'egg');
+      const result = needed.subtract(onHand);
+      expect(result.amount).toBe(2);
+      expect(result.unit).toBe('egg');
+    });
+
+    it('clamps at zero rather than throwing when the subtrahend exceeds the minuend', () => {
+      const needed = new Quantity(200, 'g');
+      const onHand = new Quantity(500, 'g');
+      const result = needed.subtract(onHand);
+      expect(result.amount).toBe(0);
+      expect(result.unit).toBe('g');
+    });
+
+    it('throws UnitMismatchError for cross-category subtraction (Mass - Volume)', () => {
+      const needed = new Quantity(500, 'g');
+      const onHand = new Quantity(1, 'cup');
+      expect(() => needed.subtract(onHand)).toThrow(UnitMismatchError);
+    });
+
+    it('throws UnitMismatchError when either side is Count with a differing unit', () => {
+      const needed = new Quantity(5, 'egg');
+      const onHand = new Quantity(2, 'count');
+      expect(() => needed.subtract(onHand)).toThrow(UnitMismatchError);
+    });
+  });
+
   describe('Equality', () => {
     it('returns true when amount and unit match exactly', () => {
       const q1 = new Quantity(250, 'ml');

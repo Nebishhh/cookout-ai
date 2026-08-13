@@ -21,6 +21,7 @@ describe('CookOut AI API Endpoints', () => {
       await prisma.$executeRawUnsafe('DELETE FROM Recipe');
       await prisma.$executeRawUnsafe('DELETE FROM Event');
       await prisma.$executeRawUnsafe('DELETE FROM IngredientCategoryOverride');
+      await prisma.$executeRawUnsafe('DELETE FROM PantryItem');
     } catch {
       // Table creation handled by initial migration/db push
     }
@@ -35,6 +36,7 @@ describe('CookOut AI API Endpoints', () => {
     await prisma.recipe.deleteMany();
     await prisma.event.deleteMany();
     await prisma.ingredientCategoryOverride.deleteMany();
+    await prisma.pantryItem.deleteMany();
   });
 
   describe('GET /api/health', () => {
@@ -96,16 +98,97 @@ describe('CookOut AI API Endpoints', () => {
       const createRes = await request(app).post('/api/recipes').send(withStepsRecipe);
       expect(createRes.status).toBe(201);
       expect(createRes.body.steps).toEqual([
-        { instruction: 'Mix dry ingredients.' },
-        { instruction: 'Add wet ingredients.' },
+        { instruction: 'Mix dry ingredients.', duration: null, temperature: null },
+        { instruction: 'Add wet ingredients.', duration: null, temperature: null },
       ]);
 
       const getRes = await request(app).get(`/api/recipes/${createRes.body.id}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body.steps).toEqual([
-        { instruction: 'Mix dry ingredients.' },
-        { instruction: 'Add wet ingredients.' },
+        { instruction: 'Mix dry ingredients.', duration: null, temperature: null },
+        { instruction: 'Add wet ingredients.', duration: null, temperature: null },
       ]);
+    });
+
+    it('round-trips per-step duration/temperature through create, read, and update', async () => {
+      const createRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Baked Chicken',
+          baseServings: 4,
+          ingredients: [
+            { ingredientId: 'chicken', displayName: 'Chicken', amount: 500, unit: 'g' },
+          ],
+          steps: [
+            {
+              instruction: 'Preheat the oven.',
+              temperatureAmount: 400,
+              temperatureUnit: 'F',
+            },
+            {
+              instruction: 'Bake until cooked through.',
+              durationAmount: 25,
+              durationUnit: 'minutes',
+              temperatureAmount: 400,
+              temperatureUnit: 'F',
+            },
+            { instruction: 'Let rest before serving.' },
+          ],
+        });
+
+      expect(createRes.status).toBe(201);
+      expect(createRes.body.steps).toEqual([
+        {
+          instruction: 'Preheat the oven.',
+          duration: null,
+          temperature: { amount: 400, unit: 'F' },
+        },
+        {
+          instruction: 'Bake until cooked through.',
+          duration: { amount: 25, unit: 'minutes' },
+          temperature: { amount: 400, unit: 'F' },
+        },
+        { instruction: 'Let rest before serving.', duration: null, temperature: null },
+      ]);
+
+      const getRes = await request(app).get(`/api/recipes/${createRes.body.id}`);
+      expect(getRes.body.steps).toEqual(createRes.body.steps);
+
+      const putRes = await request(app)
+        .put(`/api/recipes/${createRes.body.id}`)
+        .send({
+          name: 'Baked Chicken',
+          baseServings: 4,
+          ingredients: [
+            { ingredientId: 'chicken', displayName: 'Chicken', amount: 500, unit: 'g' },
+          ],
+          steps: [
+            { instruction: 'Chill in the fridge.', durationAmount: 2, durationUnit: 'hours' },
+          ],
+        });
+
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.steps).toEqual([
+        {
+          instruction: 'Chill in the fridge.',
+          duration: { amount: 2, unit: 'hours' },
+          temperature: null,
+        },
+      ]);
+    });
+
+    it('rejects an invalid step duration unit (422-equivalent 400 domain error)', async () => {
+      const res = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Bad Step',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' }],
+          steps: [{ instruction: 'Rest.', durationAmount: 10, durationUnit: 'seconds' }],
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
     });
 
     it('rejects POST /api/recipes with invalid data (400) and persists nothing to database', async () => {
@@ -182,6 +265,100 @@ describe('CookOut AI API Endpoints', () => {
       const getRes = await request(app).get(`/api/recipes/${id}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body.dietaryTags).toEqual(['Vegetarian', 'Vegan']);
+    });
+  });
+
+  describe('GET /api/recipes pagination', () => {
+    async function createRecipe(name: string, dietaryTags: string[] = []) {
+      const res = await request(app)
+        .post('/api/recipes')
+        .send({
+          name,
+          baseServings: 2,
+          dietaryTags,
+          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' }],
+        });
+      return res.body.id as string;
+    }
+
+    it('GET /api/recipes with no query params stays a bare, unbounded array (unchanged for ShoppingListBuilder/EventPlanner)', async () => {
+      await createRecipe('Pancakes');
+      await createRecipe('Waffles');
+
+      const res = await request(app).get('/api/recipes');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(2);
+    });
+
+    it('GET /api/recipes?limit=N returns an {items, nextCursor} envelope', async () => {
+      await createRecipe('Pancakes');
+      await createRecipe('Waffles');
+
+      const res = await request(app).get('/api/recipes?limit=10');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('items');
+      expect(res.body).toHaveProperty('nextCursor', null);
+      expect(res.body.items).toHaveLength(2);
+    });
+
+    it('cursor advances across pages with no duplicates or gaps', async () => {
+      // createdAt has second-level-or-coarser resolution risk of ties in a fast test run —
+      // the id tie-breaker is what this test is really proving out.
+      await createRecipe('Recipe A');
+      await createRecipe('Recipe B');
+      await createRecipe('Recipe C');
+
+      const page1 = await request(app).get('/api/recipes?limit=2');
+      expect(page1.body.items).toHaveLength(2);
+      expect(page1.body.nextCursor).not.toBeNull();
+
+      const page2 = await request(app).get(
+        `/api/recipes?limit=2&cursor=${encodeURIComponent(page1.body.nextCursor)}`
+      );
+      expect(page2.body.items).toHaveLength(1);
+      expect(page2.body.nextCursor).toBeNull();
+
+      const page1Ids = page1.body.items.map((r: { id: string }) => r.id);
+      const page2Ids = page2.body.items.map((r: { id: string }) => r.id);
+      expect(new Set([...page1Ids, ...page2Ids]).size).toBe(3);
+    });
+
+    it('search filters by name across the whole catalog', async () => {
+      await createRecipe('Chocolate Cake');
+      await createRecipe('Vanilla Cake');
+      await createRecipe('Beef Stew');
+
+      const res = await request(app).get('/api/recipes?limit=10&search=cake');
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(2);
+      expect(res.body.items.map((r: { name: string }) => r.name).sort()).toEqual([
+        'Chocolate Cake',
+        'Vanilla Cake',
+      ]);
+    });
+
+    it('tags filters by dietary tag', async () => {
+      await createRecipe('Vegan Bowl', ['Vegan']);
+      await createRecipe('Veggie Stir Fry', ['Vegetarian']);
+      await createRecipe('Beef Stew', []);
+
+      const res = await request(app).get('/api/recipes?limit=10&tags=Vegan');
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(1);
+      expect(res.body.items[0].name).toBe('Vegan Bowl');
+    });
+
+    it('rejects an invalid limit', async () => {
+      const res = await request(app).get('/api/recipes?limit=not-a-number');
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
+    });
+
+    it('rejects a malformed cursor', async () => {
+      const res = await request(app).get('/api/recipes?limit=10&cursor=not-valid-base64json');
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
     });
   });
 
@@ -348,10 +525,14 @@ describe('CookOut AI API Endpoints', () => {
       };
       const putRes = await request(app).put(`/api/recipes/${recipeId}`).send(updatedPayload);
       expect(putRes.status).toBe(200);
-      expect(putRes.body.steps).toEqual([{ instruction: 'New step one.' }]);
+      expect(putRes.body.steps).toEqual([
+        { instruction: 'New step one.', duration: null, temperature: null },
+      ]);
 
       const getRes = await request(app).get(`/api/recipes/${recipeId}`);
-      expect(getRes.body.steps).toEqual([{ instruction: 'New step one.' }]);
+      expect(getRes.body.steps).toEqual([
+        { instruction: 'New step one.', duration: null, temperature: null },
+      ]);
     });
 
     it('PUT /api/recipes/:id with invalid data (baseServings: 0) returns 400 AND the original recipe is unchanged', async () => {
@@ -1079,6 +1260,133 @@ describe('CookOut AI API Endpoints', () => {
     it('DELETE /api/ingredient-categories/:ingredientId is idempotent for an ingredient with no override', async () => {
       const res = await request(app).delete('/api/ingredient-categories/never-overridden');
       expect(res.status).toBe(204);
+    });
+  });
+
+  describe('Pantry Inventory Subtraction', () => {
+    it('PUT /api/pantry/:ingredientId sets on-hand stock; GET /api/pantry lists it', async () => {
+      const putRes = await request(app)
+        .put('/api/pantry/flour')
+        .send({ displayName: 'Flour', amount: 200, unit: 'g' });
+
+      expect(putRes.status).toBe(200);
+      expect(putRes.body).toEqual({
+        ingredientId: 'flour',
+        displayName: 'Flour',
+        quantity: { amount: 200, unit: 'g', category: 'Mass' },
+      });
+
+      const listRes = await request(app).get('/api/pantry');
+      expect(listRes.status).toBe(200);
+      expect(listRes.body).toHaveLength(1);
+      expect(listRes.body[0].ingredientId).toBe('flour');
+    });
+
+    it('PUT /api/pantry/:ingredientId rejects an invalid unit', async () => {
+      const res = await request(app)
+        .put('/api/pantry/flour')
+        .send({ displayName: 'Flour', amount: 200, unit: 'not-a-unit' });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidUnitError');
+    });
+
+    it('DELETE /api/pantry/:ingredientId is idempotent for an ingredient with no stock', async () => {
+      const res = await request(app).delete('/api/pantry/never-stocked');
+      expect(res.status).toBe(204);
+    });
+
+    it('reduces a shopping-list preview item partially covered by pantry stock', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Bread',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
+        });
+
+      await request(app)
+        .put('/api/pantry/flour')
+        .send({ displayName: 'Flour', amount: 200, unit: 'g' });
+
+      const previewRes = await request(app)
+        .post('/api/shopping-list')
+        .send([{ recipeId: recipeRes.body.id, targetServings: 4 }]);
+
+      expect(previewRes.body.shoppingList).toHaveLength(1);
+      expect(previewRes.body.shoppingList[0].quantity.amount).toBe(300);
+    });
+
+    it('omits an item entirely from a saved shopping list when pantry stock fully covers it', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Bread',
+          baseServings: 4,
+          ingredients: [
+            { ingredientId: 'flour', displayName: 'Flour', amount: 200, unit: 'g' },
+            { ingredientId: 'salt', displayName: 'Salt', amount: 5, unit: 'g' },
+          ],
+        });
+
+      await request(app)
+        .put('/api/pantry/flour')
+        .send({ displayName: 'Flour', amount: 500, unit: 'g' });
+
+      const listRes = await request(app)
+        .post('/api/shopping-lists')
+        .send({
+          name: 'Bread List',
+          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 4 }],
+        });
+
+      expect(listRes.status).toBe(201);
+      expect(listRes.body.items).toHaveLength(1);
+      expect(listRes.body.items[0].ingredientId).toBe('salt');
+    });
+
+    it("reduces an event plan's embedded shopping list too (POST /api/events/plan)", async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Bread',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
+        });
+
+      await request(app)
+        .put('/api/pantry/flour')
+        .send({ displayName: 'Flour', amount: 500, unit: 'g' });
+
+      const planRes = await request(app)
+        .post('/api/events/plan')
+        .send({
+          recipeIds: [recipeRes.body.id],
+          guestGroup: { totalGuests: 4, vegetarianCount: 0, veganCount: 0 },
+        });
+
+      expect(planRes.body.shoppingList).toHaveLength(0);
+    });
+
+    it('leaves an item untouched when pantry stock is recorded in an incompatible unit/category', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Bread',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'butter', displayName: 'Butter', amount: 200, unit: 'g' }],
+        });
+
+      await request(app)
+        .put('/api/pantry/butter')
+        .send({ displayName: 'Butter', amount: 1, unit: 'cup' });
+
+      const previewRes = await request(app)
+        .post('/api/shopping-list')
+        .send([{ recipeId: recipeRes.body.id, targetServings: 4 }]);
+
+      expect(previewRes.body.shoppingList).toHaveLength(1);
+      expect(previewRes.body.shoppingList[0].quantity.amount).toBe(200);
     });
   });
 

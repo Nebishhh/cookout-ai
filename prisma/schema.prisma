@@ -42,12 +42,20 @@ model IngredientLine {
   position     Int
 }
 
+// durationAmount/durationUnit and temperatureAmount/temperatureUnit are nullable pairs —
+// flat scalar columns mirroring how IngredientLine splits Quantity into amount/unit, not a
+// JSON blob. NULL means "not stated for this step," not "zero" — StepDuration/StepTemperature
+// are only reconstructed when both halves of a pair are present (see recipeMapper.ts).
 model RecipeStep {
-  id          String @id @default(uuid())
-  recipeId    String
-  recipe      Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  instruction String
-  position    Int
+  id                String   @id @default(uuid())
+  recipeId          String
+  recipe            Recipe   @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  instruction       String
+  position          Int
+  durationAmount    Float?
+  durationUnit      String?
+  temperatureAmount Float?
+  temperatureUnit   String?
 }
 
 // Tradeoff Note: recipeIds is a JSON-encoded string column (recipeIdsJson), mirroring
@@ -99,5 +107,18 @@ model ShoppingListItem {
 model IngredientCategoryOverride {
   ingredientId String   @id
   category     String
+  updatedAt    DateTime @updatedAt
+}
+
+// A global, standing on-hand quantity per ingredient — one fact per ingredientId, same shape
+// as IngredientCategoryOverride above, resolved server-side and subtracted from every
+// generated shopping list (preview, save, and event-linked regenerate) rather than scoped to
+// one build. Flat amount/unit columns, matching ShoppingListItem's precedent, not a Quantity
+// JSON blob.
+model PantryItem {
+  ingredientId String   @id
+  displayName  String
+  amount       Float
+  unit         String
   updatedAt    DateTime @updatedAt
 }

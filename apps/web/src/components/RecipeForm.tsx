@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, Reorder, useDragControls } from 'framer-motion';
 import {
   Plus,
   Trash2,
@@ -12,12 +12,15 @@ import {
   ChevronUp,
   ArrowUp,
   ArrowDown,
+  GripVertical,
+  Clock,
+  Thermometer,
   Info,
   Upload,
   Image as ImageIcon,
   Camera,
 } from 'lucide-react';
-import type { IngredientInput, RecipeStepInput, RecipeDto } from '../lib/api';
+import type { IngredientInput, RecipeStepDto, RecipeDto } from '../lib/api';
 import {
   useCreateRecipe,
   useUpdateRecipe,
@@ -55,8 +58,43 @@ function toIngredientInputs(ingredients: ImportableIngredient[]): IngredientInpu
   }));
 }
 
-function toStepInputs(steps: RecipeStepInput[]): RecipeStepInput[] {
-  return steps.map((step) => ({ instruction: step.instruction }));
+/**
+ * Client-only step shape carrying a stable `id` for React keys and framer-motion's
+ * Reorder.Item identity, plus duration/temperature flattened to optional fields for simpler
+ * form binding (matching how IngredientInput already flattens Quantity into amount/unit at
+ * this boundary). Never sent to the server as-is — the submit payload picks the wire fields
+ * back off, omitting duration/temperature entirely when unset.
+ */
+interface EditableStep {
+  id: string;
+  instruction: string;
+  durationAmount?: number;
+  durationUnit?: string;
+  temperatureAmount?: number;
+  temperatureUnit?: string;
+}
+
+let stepIdCounter = 0;
+/** Doesn't rely on crypto.randomUUID(), which throws outside secure contexts (e.g. plain-HTTP LAN dev) — mirrors createOptimisticId() in lib/queries.ts. */
+function createStepId(): string {
+  stepIdCounter += 1;
+  return `step-${Date.now()}-${stepIdCounter}`;
+}
+
+/** Flattens a read-shape RecipeStepDto (nested duration/temperature) into an EditableStep. */
+function toEditableStep(step: RecipeStepDto): EditableStep {
+  return {
+    id: createStepId(),
+    instruction: step.instruction,
+    durationAmount: step.duration?.amount,
+    durationUnit: step.duration?.unit,
+    temperatureAmount: step.temperature?.amount,
+    temperatureUnit: step.temperature?.unit,
+  };
+}
+
+function toStepInputs(steps: RecipeStepDto[]): EditableStep[] {
+  return steps.map(toEditableStep);
 }
 
 interface ImportDraft {
@@ -64,7 +102,7 @@ interface ImportDraft {
   baseServings: number;
   dietaryTags?: string[];
   ingredients: ImportableIngredient[];
-  instructions?: string[];
+  instructions?: RecipeStepDto[];
 }
 
 /**
@@ -78,7 +116,7 @@ function applyImportDraft(draft: ImportDraft) {
     baseServings: draft.baseServings,
     dietaryTags: draft.dietaryTags ?? [],
     ingredients: toIngredientInputs(draft.ingredients),
-    steps: (draft.instructions ?? []).map((instruction) => ({ instruction })),
+    steps: (draft.instructions ?? []).map(toEditableStep),
   };
 }
 
@@ -251,6 +289,180 @@ const ImageCaptureField: React.FC<ImageCaptureFieldProps> = ({
   );
 };
 
+interface RecipeStepRowProps {
+  step: EditableStep;
+  index: number;
+  totalSteps: number;
+  onChange: (field: keyof Omit<EditableStep, 'id'>, value: string | number | undefined) => void;
+  onRemove: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}
+
+/**
+ * One step row, rendered as a framer-motion Reorder.Item. Extracted to its own component
+ * because the drag-handle pattern (dragListener={false} + a handle-only dragControls.start())
+ * needs useDragControls(), and hooks can't be called inside the parent's .map() callback.
+ * The up/down buttons stay wired to the same handleMoveStep the parent already has — Reorder
+ * is pointer-driven and not independently keyboard-accessible, so the buttons remain the
+ * accessible reorder path, not just a fallback.
+ *
+ * Duration/temperature inputs are collapsed behind a "+ Timing" toggle by default — most
+ * steps don't state either, and showing four extra always-visible inputs per row would
+ * clutter the common case. The toggle starts open when the step already carries a value
+ * (e.g. from AI import) so nothing is hidden that the user or the model already populated.
+ */
+const RecipeStepRow: React.FC<RecipeStepRowProps> = ({
+  step,
+  index,
+  totalSteps,
+  onChange,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+}) => {
+  const dragControls = useDragControls();
+  const [showTiming, setShowTiming] = useState(
+    step.durationAmount !== undefined || step.temperatureAmount !== undefined
+  );
+
+  return (
+    <Reorder.Item
+      as="div"
+      value={step}
+      dragListener={false}
+      dragControls={dragControls}
+      className="flex items-start gap-2 rounded-xl border border-stone bg-paper p-3"
+    >
+      <button
+        type="button"
+        onPointerDown={(e) => dragControls.start(e)}
+        aria-label={`Drag to reorder step ${index + 1}`}
+        className="mt-2 shrink-0 cursor-grab touch-none text-ink-subtle hover:text-clay-hover active:cursor-grabbing"
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
+      <span className="mt-2 shrink-0 text-xs font-semibold text-ink-muted">{index + 1}.</span>
+      <div className="flex-1 space-y-2">
+        <textarea
+          aria-label={`Step ${index + 1}`}
+          placeholder={`Step ${index + 1} instructions...`}
+          rows={2}
+          value={step.instruction}
+          onChange={(e) => onChange('instruction', e.target.value)}
+          className="w-full rounded-lg border border-stone bg-canvas p-2 text-xs text-ink placeholder:text-ink-subtle focus:border-clay focus:outline-none focus:ring-1 focus:ring-clay"
+        />
+        {showTiming ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1">
+              <Clock className="h-3.5 w-3.5 text-ink-subtle" />
+              <input
+                type="number"
+                min={0}
+                value={step.durationAmount ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  onChange('durationAmount', raw === '' ? undefined : Number(raw));
+                  // The unit select shows a fallback default ('minutes') even before the user
+                  // touches it — write that default into state the moment an amount is set,
+                  // otherwise submitting drops the amount silently (durationUnit stays
+                  // undefined, failing the "both halves present" check on submit).
+                  if (raw !== '' && step.durationUnit === undefined) {
+                    onChange('durationUnit', 'minutes');
+                  }
+                }}
+                placeholder="—"
+                aria-label={`Duration amount for step ${index + 1}`}
+                className="w-14 rounded-md border border-stone bg-canvas px-1.5 py-1 text-xs text-ink"
+              />
+              <Select
+                value={step.durationUnit ?? 'minutes'}
+                onChange={(e) => onChange('durationUnit', e.target.value)}
+                aria-label={`Duration unit for step ${index + 1}`}
+                className="h-7 w-auto rounded-md border-stone bg-canvas px-1.5 py-0 text-xs text-ink"
+              >
+                <option value="minutes">min</option>
+                <option value="hours">hr</option>
+              </Select>
+            </div>
+            <div className="flex items-center gap-1">
+              <Thermometer className="h-3.5 w-3.5 text-ink-subtle" />
+              <input
+                type="number"
+                value={step.temperatureAmount ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  onChange('temperatureAmount', raw === '' ? undefined : Number(raw));
+                  if (raw !== '' && step.temperatureUnit === undefined) {
+                    onChange('temperatureUnit', 'F');
+                  }
+                }}
+                placeholder="—"
+                aria-label={`Temperature amount for step ${index + 1}`}
+                className="w-14 rounded-md border border-stone bg-canvas px-1.5 py-1 text-xs text-ink"
+              />
+              <Select
+                value={step.temperatureUnit ?? 'F'}
+                onChange={(e) => onChange('temperatureUnit', e.target.value)}
+                aria-label={`Temperature unit for step ${index + 1}`}
+                className="h-7 w-auto rounded-md border-stone bg-canvas px-1.5 py-0 text-xs text-ink"
+              >
+                <option value="F">°F</option>
+                <option value="C">°C</option>
+              </Select>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowTiming(true)}
+            className="flex items-center gap-1 text-[11px] text-ink-subtle hover:text-clay-hover"
+          >
+            <Clock className="h-3 w-3" />
+            <span>Add timing</span>
+          </button>
+        )}
+      </div>
+      <div className="flex flex-col gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onMoveUp}
+          disabled={index === 0}
+          aria-label={`Move step ${index + 1} up`}
+          className="h-7 w-7 p-0 text-ink-subtle hover:text-clay-hover disabled:opacity-30"
+        >
+          <ArrowUp className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onMoveDown}
+          disabled={index === totalSteps - 1}
+          aria-label={`Move step ${index + 1} down`}
+          className="h-7 w-7 p-0 text-ink-subtle hover:text-clay-hover disabled:opacity-30"
+        >
+          <ArrowDown className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+      {totalSteps > 1 && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onRemove}
+          aria-label={`Remove step ${index + 1}`}
+          className="h-9 w-9 p-0 text-ink-subtle hover:text-clay-hover"
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      )}
+    </Reorder.Item>
+  );
+};
+
 export interface RecipeFormProps {
   recipe?: RecipeDto | null;
   onSuccess?: () => void;
@@ -268,10 +480,10 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       ? toIngredientInputs(recipe.ingredients)
       : [{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]
   );
-  const [steps, setSteps] = useState<RecipeStepInput[]>(
+  const [steps, setSteps] = useState<EditableStep[]>(
     recipe && recipe.steps && recipe.steps.length > 0
       ? toStepInputs(recipe.steps)
-      : [{ instruction: '' }]
+      : [{ id: createStepId(), instruction: '' }]
   );
 
   const [importText, setImportText] = useState('');
@@ -308,14 +520,16 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       setDietaryTags(recipe.dietaryTags || []);
       setIngredients(toIngredientInputs(recipe.ingredients));
       setSteps(
-        recipe.steps && recipe.steps.length > 0 ? toStepInputs(recipe.steps) : [{ instruction: '' }]
+        recipe.steps && recipe.steps.length > 0
+          ? toStepInputs(recipe.steps)
+          : [{ id: createStepId(), instruction: '' }]
       );
     } else {
       setName('');
       setBaseServings(4);
       setDietaryTags([]);
       setIngredients([{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]);
-      setSteps([{ instruction: '' }]);
+      setSteps([{ id: createStepId(), instruction: '' }]);
     }
     setValidationError(null);
     setSuccessMessage(null);
@@ -356,17 +570,19 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
   };
 
   const handleAddStep = () => {
-    setSteps((prev) => [...prev, { instruction: '' }]);
+    setSteps((prev) => [...prev, { id: createStepId(), instruction: '' }]);
   };
 
   const handleRemoveStep = (index: number) => {
     setSteps((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleStepChange = (index: number, value: string) => {
-    setSteps((prev) =>
-      prev.map((step, i) => (i === index ? { ...step, instruction: value } : step))
-    );
+  const handleStepChange = (
+    index: number,
+    field: keyof Omit<EditableStep, 'id'>,
+    value: string | number | undefined
+  ) => {
+    setSteps((prev) => prev.map((step, i) => (i === index ? { ...step, [field]: value } : step)));
   };
 
   const handleMoveStep = (index: number, direction: 'up' | 'down') => {
@@ -431,7 +647,9 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         setBaseServings(applied.baseServings);
         setDietaryTags(applied.dietaryTags);
         setIngredients(applied.ingredients);
-        setSteps(applied.steps.length > 0 ? applied.steps : [{ instruction: '' }]);
+        setSteps(
+          applied.steps.length > 0 ? applied.steps : [{ id: createStepId(), instruction: '' }]
+        );
         setImportText('');
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -457,7 +675,9 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         setBaseServings(applied.baseServings);
         setDietaryTags(applied.dietaryTags);
         setIngredients(applied.ingredients);
-        setSteps(applied.steps.length > 0 ? applied.steps : [{ instruction: '' }]);
+        setSteps(
+          applied.steps.length > 0 ? applied.steps : [{ id: createStepId(), instruction: '' }]
+        );
         setImportUrl('');
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -483,7 +703,9 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         setBaseServings(applied.baseServings);
         setDietaryTags(applied.dietaryTags);
         setIngredients(applied.ingredients);
-        setSteps(applied.steps.length > 0 ? applied.steps : [{ instruction: '' }]);
+        setSteps(
+          applied.steps.length > 0 ? applied.steps : [{ id: createStepId(), instruction: '' }]
+        );
         handleRemoveImageFile();
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
@@ -540,7 +762,15 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
       })),
       steps: steps
         .filter((step) => step.instruction.trim())
-        .map((step) => ({ instruction: step.instruction.trim() })),
+        .map((step) => ({
+          instruction: step.instruction.trim(),
+          ...(step.durationAmount !== undefined && step.durationUnit !== undefined
+            ? { durationAmount: step.durationAmount, durationUnit: step.durationUnit }
+            : {}),
+          ...(step.temperatureAmount !== undefined && step.temperatureUnit !== undefined
+            ? { temperatureAmount: step.temperatureAmount, temperatureUnit: step.temperatureUnit }
+            : {}),
+        })),
     };
 
     if (isEditing && recipe) {
@@ -561,7 +791,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
           setBaseServings(4);
           setDietaryTags([]);
           setIngredients([{ ingredientId: '', displayName: '', amount: 1, unit: 'g' }]);
-          setSteps([{ instruction: '' }]);
+          setSteps([{ id: createStepId(), instruction: '' }]);
           setReviewNotice(null);
           if (onSuccess) onSuccess();
         },
@@ -985,62 +1215,26 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
               </Button>
             </div>
 
-            <div className="space-y-3">
+            <Reorder.Group
+              as="div"
+              axis="y"
+              values={steps}
+              onReorder={setSteps}
+              className="space-y-3"
+            >
               {steps.map((step, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-start gap-2 rounded-xl border border-stone bg-paper p-3"
-                >
-                  <span className="mt-2 shrink-0 text-xs font-semibold text-ink-muted">
-                    {idx + 1}.
-                  </span>
-                  <textarea
-                    aria-label={`Step ${idx + 1}`}
-                    placeholder={`Step ${idx + 1} instructions...`}
-                    rows={2}
-                    value={step.instruction}
-                    onChange={(e) => handleStepChange(idx, e.target.value)}
-                    className="flex-1 rounded-lg border border-stone bg-canvas p-2 text-xs text-ink placeholder:text-ink-subtle focus:border-clay focus:outline-none focus:ring-1 focus:ring-clay"
-                  />
-                  <div className="flex flex-col gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleMoveStep(idx, 'up')}
-                      disabled={idx === 0}
-                      aria-label={`Move step ${idx + 1} up`}
-                      className="h-7 w-7 p-0 text-ink-subtle hover:text-clay-hover disabled:opacity-30"
-                    >
-                      <ArrowUp className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleMoveStep(idx, 'down')}
-                      disabled={idx === steps.length - 1}
-                      aria-label={`Move step ${idx + 1} down`}
-                      className="h-7 w-7 p-0 text-ink-subtle hover:text-clay-hover disabled:opacity-30"
-                    >
-                      <ArrowDown className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                  {steps.length > 1 && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleRemoveStep(idx)}
-                      aria-label={`Remove step ${idx + 1}`}
-                      className="h-9 w-9 p-0 text-ink-subtle hover:text-clay-hover"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
+                <RecipeStepRow
+                  key={step.id}
+                  step={step}
+                  index={idx}
+                  totalSteps={steps.length}
+                  onChange={(field, value) => handleStepChange(idx, field, value)}
+                  onRemove={() => handleRemoveStep(idx)}
+                  onMoveUp={() => handleMoveStep(idx, 'up')}
+                  onMoveDown={() => handleMoveStep(idx, 'down')}
+                />
               ))}
-            </div>
+            </Reorder.Group>
           </div>
 
           <div className="pt-4 flex justify-end space-x-3">

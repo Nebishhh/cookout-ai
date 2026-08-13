@@ -18,7 +18,11 @@ export interface ImportRecipeImageResponseDto {
     amount: number;
     unit: string;
   }[];
-  instructions: string[];
+  instructions: Array<{
+    instruction: string;
+    duration: { amount: number; unit: string } | null;
+    temperature: { amount: number; unit: string } | null;
+  }>;
 }
 
 export async function handleImportImage(req: Request, res: Response): Promise<void> {
@@ -88,7 +92,13 @@ export async function handleImportImage(req: Request, res: Response): Promise<vo
         amount: ing.quantity.amount,
         unit: ing.quantity.unit,
       })),
-      instructions: validDomainRecipe.steps.map((step) => step.instruction),
+      instructions: validDomainRecipe.steps.map((step) => ({
+        instruction: step.instruction,
+        duration: step.duration ? { amount: step.duration.amount, unit: step.duration.unit } : null,
+        temperature: step.temperature
+          ? { amount: step.temperature.amount, unit: step.temperature.unit }
+          : null,
+      })),
     };
 
     res.status(200).json(responseDto);

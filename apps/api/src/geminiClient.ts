@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type, type Schema } from '@google/genai';
 
 const GEMINI_SYSTEM_PROMPT = `You are a specialized AI recipe extractor for CookOut AI.
 Your task is to parse raw recipe input (text, web page content, handwritten notes, or recipe cards) into a clean, structured JSON format.
@@ -11,7 +11,7 @@ CRITICAL INSTRUCTIONS:
    ["g", "kg", "oz", "lb", "ml", "l", "tsp", "tbsp", "cup", "fl oz", "count", "clove", "egg", "onion"]
    If an ingredient has no unit (e.g., "2 apples"), use "count".
 4. Standardize dietaryTags if explicitly stated or clearly inferrable: ["Vegetarian", "Vegan"]. If omnivore / contains meat / unknown, return an empty array [].
-5. Extract cooking steps as "instructions": an ordered array of plain strings, one instruction per array element, in the order they should be performed. If the input has no instructions (e.g. an ingredients-only recipe card), return an empty array [].
+5. Extract cooking steps as "instructions": an ordered array of objects, one per instruction, in the order they should be performed. Each object has an "instruction" string, plus OPTIONAL "duration" and "temperature" objects — include duration/temperature ONLY when explicitly stated in the source text for that step (e.g. "bake for 25 minutes at 350°F"); OMIT them entirely otherwise. Never guess or infer a typical duration/temperature that isn't stated. If the input has no instructions (e.g. an ingredients-only recipe card), return an empty array [].
 
 OUTPUT JSON SCHEMA:
 {
@@ -27,10 +27,78 @@ OUTPUT JSON SCHEMA:
     }
   ],
   "instructions": [
-    "Preheat the oven to 400°F.",
-    "Season the chicken breast and place on a baking sheet."
+    {
+      "instruction": "Preheat the oven to 400°F.",
+      "temperature": { "amount": 400, "unit": "F" }
+    },
+    {
+      "instruction": "Season the chicken breast and place on a baking sheet."
+    },
+    {
+      "instruction": "Bake until cooked through.",
+      "duration": { "amount": 25, "unit": "minutes" },
+      "temperature": { "amount": 400, "unit": "F" }
+    }
   ]
 }`;
+
+/**
+ * OpenAPI-subset schema (per @google/genai's GenerateContentConfig.responseSchema) enforced on
+ * live generateContent() calls — the root cause of instructions occasionally going missing on
+ * a live (non-fixture) response was that JSON-shape compliance was asked for in prompt text
+ * only, never guaranteed by the SDK. All fields are optional here (no `required`) rather than
+ * split into two schemas for the success/error shapes, since the model returns one JSON object
+ * that's either the error shape or the success shape as a subset of this one schema.
+ */
+const RECIPE_RESPONSE_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    error: { type: Type.STRING },
+    message: { type: Type.STRING },
+    name: { type: Type.STRING },
+    baseServings: { type: Type.INTEGER },
+    dietaryTags: { type: Type.ARRAY, items: { type: Type.STRING } },
+    ingredients: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          ingredientId: { type: Type.STRING },
+          displayName: { type: Type.STRING },
+          amount: { type: Type.NUMBER },
+          unit: { type: Type.STRING },
+        },
+        required: ['ingredientId', 'displayName', 'amount', 'unit'],
+      },
+    },
+    instructions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          instruction: { type: Type.STRING },
+          duration: {
+            type: Type.OBJECT,
+            properties: {
+              amount: { type: Type.NUMBER },
+              unit: { type: Type.STRING, enum: ['minutes', 'hours'] },
+            },
+            required: ['amount', 'unit'],
+          },
+          temperature: {
+            type: Type.OBJECT,
+            properties: {
+              amount: { type: Type.NUMBER },
+              unit: { type: Type.STRING, enum: ['F', 'C'] },
+            },
+            required: ['amount', 'unit'],
+          },
+        },
+        required: ['instruction'],
+      },
+    },
+  },
+};
 
 function checkProductionGuard() {
   if (process.env.USE_GEMINI_FIXTURES === 'true' && process.env.NODE_ENV === 'production') {
@@ -70,6 +138,10 @@ export async function parseRecipeTextWithGemini(text: string): Promise<string> {
   const response = await ai.models.generateContent({
     model: modelName,
     contents: [{ text: GEMINI_SYSTEM_PROMPT }, { text: `RAW USER RECIPE TEXT TO PARSE:\n${text}` }],
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: RECIPE_RESPONSE_SCHEMA,
+    },
   });
 
   const responseText = response.text;
@@ -151,6 +223,10 @@ export async function parseRecipeImageWithGemini(
       },
       { text: 'IMAGE OF RECIPE CARD / COOKBOOK PAGE / HANDWRITTEN RECIPE TO PARSE' },
     ],
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: RECIPE_RESPONSE_SCHEMA,
+    },
   });
 
   const responseText = response.text;

@@ -1,10 +1,19 @@
-import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  useQuery,
+  useMutation,
+  useInfiniteQuery,
+  useQueryClient,
+  keepPreviousData,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { getUnitDefinition } from '@cookout-ai/domain';
 import {
   api,
   type RecipeDto,
   type CreateRecipeInput,
   type IngredientInput,
+  type RecipeStepInput,
+  type RecipesPageDto,
   type ShoppingListRequestItem,
   type ShoppingListResponseDto,
   type PlanEventInput,
@@ -14,6 +23,8 @@ import {
   type EventDetailDto,
   type CreateShoppingListInput,
   type ShoppingListDto,
+  type PantryItemDto,
+  type SetPantryItemInput,
   type ImportRecipeTextResponseDto,
 } from './api';
 
@@ -48,19 +59,73 @@ function enrichIngredientsWithCategory(ingredients: IngredientInput[]): RecipeDt
   });
 }
 
+/**
+ * Re-nests each step's flat durationAmount/durationUnit/temperatureAmount/temperatureUnit
+ * (the write shape, RecipeStepInput) into duration/temperature objects (the read shape,
+ * RecipeStepDto), so an optimistic cache entry matches what a real GET would return.
+ */
+function enrichStepsForOptimisticCache(steps: RecipeStepInput[]): RecipeDto['steps'] {
+  return steps.map((step) => ({
+    instruction: step.instruction,
+    duration:
+      step.durationAmount !== undefined && step.durationUnit !== undefined
+        ? { amount: step.durationAmount, unit: step.durationUnit }
+        : null,
+    temperature:
+      step.temperatureAmount !== undefined && step.temperatureUnit !== undefined
+        ? { amount: step.temperatureAmount, unit: step.temperatureUnit }
+        : null,
+  }));
+}
+
 function cancelRecipesQueries(queryClient: QueryClient) {
   return queryClient.cancelQueries({ queryKey: RECIPES_QUERY_KEY });
 }
 
 /**
- * Shared query hook for fetching all recipes (GET /api/recipes).
- * Shared across RecipeList, ShoppingListBuilder, and EventPlanner so all components share a single cache entry.
+ * Shared query hook for fetching the FULL, unpaginated recipe list (GET /api/recipes, no
+ * query params). Shared across ShoppingListBuilder and EventPlanner, both of which render
+ * every recipe as a selector checkbox with no filter UI of their own — they need the complete
+ * catalog, not a page of it. RecipeList uses the separate, paginated useRecipesPage() below
+ * instead; deliberately NOT the same query key, so none of the optimistic mutations below have
+ * to reconcile two different cache shapes for the same entries.
  */
 export function useRecipes() {
   return useQuery<RecipeDto[]>({
     queryKey: RECIPES_QUERY_KEY,
     queryFn: () => api.getRecipes(),
     staleTime: 1000 * 60 * 5, // 5 minutes staleTime so switching tabs reuses cached data
+  });
+}
+
+export const RECIPES_PAGE_QUERY_KEY = ['recipes', 'page'] as const;
+
+export interface UseRecipesPageParams {
+  limit: number;
+  search?: string;
+  tags?: string[];
+}
+
+/**
+ * Paginated query hook for RecipeList's browsing view (GET /api/recipes?limit=...), built on
+ * useInfiniteQuery since cursor pagination + "Load More" is the natural fit — not classic
+ * numbered pages. `search`/`tags` are part of the query key, so changing either starts a fresh
+ * query from page 1 automatically (no manual reset needed). Not written to optimistically by
+ * the create/update/delete mutations below — they instead invalidate this query key on
+ * success/settle, same non-optimistic-for-structural-changes precedent already used for
+ * Events/ShoppingLists.
+ */
+export function useRecipesPage({ limit, search, tags }: UseRecipesPageParams) {
+  return useInfiniteQuery<RecipesPageDto>({
+    queryKey: [...RECIPES_PAGE_QUERY_KEY, { search, tags }],
+    queryFn: ({ pageParam }) =>
+      api.getRecipesPage({ limit, cursor: pageParam as string | null, search, tags }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    // Keeps the previously-loaded list visible while a new search/tag-filter query resolves,
+    // instead of flashing the full-page loading state on every keystroke.
+    placeholderData: keepPreviousData,
+    staleTime: 1000 * 60 * 5, // matches useRecipes()'s staleTime — revisiting the Recipes tab reuses this cache
   });
 }
 
@@ -83,7 +148,7 @@ export function useCreateRecipe() {
         baseServings: data.baseServings,
         dietaryTags: data.dietaryTags ?? [],
         ingredients: enrichIngredientsWithCategory(data.ingredients),
-        steps: data.steps ?? [],
+        steps: enrichStepsForOptimisticCache(data.steps ?? []),
       };
       queryClient.setQueryData<RecipeDto[]>(RECIPES_QUERY_KEY, (old = []) => [
         ...old,
@@ -99,6 +164,7 @@ export function useCreateRecipe() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: RECIPES_PAGE_QUERY_KEY, exact: false });
     },
   });
 }
@@ -132,7 +198,7 @@ export function useUpdateRecipe() {
                 baseServings: data.baseServings,
                 dietaryTags: data.dietaryTags ?? [],
                 ingredients: enrichIngredientsWithCategory(data.ingredients),
-                steps: data.steps ?? [],
+                steps: enrichStepsForOptimisticCache(data.steps ?? []),
               }
             : recipe
         )
@@ -148,6 +214,7 @@ export function useUpdateRecipe() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: RECIPES_PAGE_QUERY_KEY, exact: false });
     },
   });
 }
@@ -181,6 +248,7 @@ export function useDeleteRecipe() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: RECIPES_PAGE_QUERY_KEY, exact: false });
     },
   });
 }
@@ -245,6 +313,7 @@ export function useBulkDeleteRecipes() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: RECIPES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: RECIPES_PAGE_QUERY_KEY, exact: false });
     },
   });
 }
@@ -456,6 +525,15 @@ export function useDeleteShoppingList() {
  * recipe-CRUD optimistic-update bug fix established why that pattern causes cross-mutation
  * clobbering). This is the one interaction here where instant feedback genuinely matters —
  * checking items off while physically at the store.
+ *
+ * Offline/spotty-connectivity tolerance: `retry`+`retryDelay` handle the realistic "checking
+ * off items on flaky grocery-store WiFi" case — a fetch that's attempted and fails/times out
+ * while the browser still reports itself online, which is the common case (not literal
+ * airplane-mode offline). `onError`'s rollback only fires once retries are exhausted, so a
+ * transient blip no longer snaps the checkbox back. The separate "no network interface at
+ * all" case (navigator.onLine === false) is already handled by TanStack Query's default
+ * networkMode: 'online' behavior — it pauses the mutation without erroring and auto-resumes
+ * on reconnect via its built-in onlineManager, with no extra wiring needed here.
  */
 export function useToggleShoppingListItemChecked() {
   const queryClient = useQueryClient();
@@ -468,6 +546,8 @@ export function useToggleShoppingListItemChecked() {
   >({
     mutationFn: ({ listId, itemId, checked }) =>
       api.toggleShoppingListItem(listId, itemId, checked),
+    retry: 3,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
     onMutate: async ({ listId, itemId, checked }) => {
       const queryKey = [...SHOPPING_LISTS_QUERY_KEY, listId];
       await queryClient.cancelQueries({ queryKey });
@@ -542,6 +622,55 @@ export function useClearIngredientCategory() {
     mutationFn: (ingredientId: string) => api.clearIngredientCategory(ingredientId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: SHOPPING_LISTS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
+    },
+  });
+}
+
+export const PANTRY_QUERY_KEY = ['pantry'] as const;
+
+/**
+ * Query hook for the global pantry list (GET /api/pantry) — a standing on-hand quantity per
+ * ingredient, not scoped to any one shopping list.
+ */
+export function usePantryItems() {
+  return useQuery<PantryItemDto[]>({
+    queryKey: PANTRY_QUERY_KEY,
+    queryFn: () => api.getPantryItems(),
+  });
+}
+
+/**
+ * Mutation hook for setting on-hand pantry stock (PUT /api/pantry/:ingredientId). Invalidates
+ * ['pantry'] and ['events'] — a saved Event's embedded plan "recomputes live" (see
+ * serializeEventPlan()) and reflects current pantry stock on every read, so it goes stale the
+ * same way it would for an edited recipe. Saved ShoppingLists deliberately do NOT get
+ * invalidated: pantry subtraction only ever applies at save/regenerate time, baked into the
+ * persisted quantity — re-reading a saved list never re-derives it, unlike category.
+ */
+export function useSetPantryItem() {
+  const queryClient = useQueryClient();
+
+  return useMutation<PantryItemDto, Error, { ingredientId: string } & SetPantryItemInput>({
+    mutationFn: ({ ingredientId, ...data }) => api.setPantryItem(ingredientId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PANTRY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * Mutation hook for removing pantry stock (DELETE /api/pantry/:ingredientId). Same
+ * invalidation rationale as useSetPantryItem.
+ */
+export function useClearPantryItem() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string>({
+    mutationFn: (ingredientId: string) => api.clearPantryItem(ingredientId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PANTRY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
     },
   });

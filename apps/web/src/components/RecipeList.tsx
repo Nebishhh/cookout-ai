@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Users,
@@ -13,15 +13,19 @@ import {
   CheckSquare,
   Square,
   Filter,
+  Loader2,
+  Clock,
+  Thermometer,
 } from 'lucide-react';
 import type { RecipeDto } from '../lib/api';
 import {
-  useRecipes,
+  useRecipesPage,
   useDeleteRecipe,
   useBulkDeleteRecipes,
   OPTIMISTIC_ID_PREFIX,
 } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
+import { formatDuration, formatTemperature } from '../lib/formatStepTiming';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
@@ -33,14 +37,42 @@ export interface RecipeListProps {
   onSendToShoppingList?: (recipeIds: string[]) => void;
 }
 
-export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToShoppingList }) => {
-  const { data: recipes = [], isLoading, isError, error, refetch } = useRecipes();
-  const deleteRecipeMutation = useDeleteRecipe();
-  const bulkDeleteMutation = useBulkDeleteRecipes();
+const RECIPES_PAGE_SIZE = 20;
 
+export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToShoppingList }) => {
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  // Search moved server-side (see useRecipesPage) so it covers the whole catalog, not just
+  // the loaded page — debounced so typing doesn't fire a request per keystroke. Dietary-tag
+  // toggles are discrete clicks and fire immediately.
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
+    return () => clearTimeout(handle);
+  }, [searchQuery]);
+
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useRecipesPage({
+    limit: RECIPES_PAGE_SIZE,
+    search: debouncedSearchQuery,
+    tags: selectedTags,
+  });
+
+  // Already filtered server-side and flattened across every page loaded so far.
+  const recipes = data?.pages.flatMap((page) => page.items) ?? [];
+
+  const deleteRecipeMutation = useDeleteRecipe();
+  const bulkDeleteMutation = useBulkDeleteRecipes();
 
   // Bulk Selection State
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
@@ -53,18 +85,15 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   // editing/deleting/selecting them would 404 or act on a soon-to-be-replaced entry.
   const isOptimistic = (id: string) => id.startsWith(OPTIMISTIC_ID_PREFIX);
 
-  // Client-side filtering logic
-  const filteredRecipes = recipes.filter((recipe) => {
-    const matchesName = recipe.name.toLowerCase().includes(searchQuery.toLowerCase().trim());
-
-    const matchesTags =
-      selectedTags.length === 0 ||
-      (recipe.dietaryTags && selectedTags.some((tag) => recipe.dietaryTags.includes(tag)));
-
-    return matchesName && matchesTags;
-  });
-
+  // Immediate — drives UI feedback (Clear Filters button visibility, header copy) the instant
+  // the user types/toggles, no debounce lag.
   const isFilterActive = searchQuery.trim() !== '' || selectedTags.length > 0;
+  // Debounced — matches the params actually driving the current `recipes` fetch. Using the
+  // immediate isFilterActive here instead would flash the wrong empty state: after clearing
+  // filters, searchQuery resets synchronously but `recipes` still reflects the stale filtered
+  // query for ~300ms, so isFilterActive and "recipes.length === 0" would briefly both hold true
+  // for the wrong reason, unmounting the whole search UI into the "database is empty" state.
+  const isFetchFilterActive = debouncedSearchQuery.trim() !== '' || selectedTags.length > 0;
 
   const toggleTagFilter = (tag: string) => {
     setSelectedTags((prev) =>
@@ -85,14 +114,17 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
   };
 
   const handleToggleSelectAll = () => {
-    const filteredIds = filteredRecipes.filter((r) => !isOptimistic(r.id)).map((r) => r.id);
-    const allFilteredSelected =
-      filteredIds.length > 0 && filteredIds.every((id) => selectedRecipeIds.includes(id));
+    // "Select all" means all currently-loaded recipes, not every recipe in the database —
+    // the expected semantics for a paginated list ("select all loaded," not a server-driven
+    // "select every matching row" mechanism, which is out of scope here).
+    const loadedIds = recipes.filter((r) => !isOptimistic(r.id)).map((r) => r.id);
+    const allLoadedSelected =
+      loadedIds.length > 0 && loadedIds.every((id) => selectedRecipeIds.includes(id));
 
-    if (allFilteredSelected) {
-      setSelectedRecipeIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    if (allLoadedSelected) {
+      setSelectedRecipeIds((prev) => prev.filter((id) => !loadedIds.includes(id)));
     } else {
-      setSelectedRecipeIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+      setSelectedRecipeIds((prev) => Array.from(new Set([...prev, ...loadedIds])));
     }
   };
 
@@ -178,7 +210,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
     );
   }
 
-  if (recipes.length === 0) {
+  if (recipes.length === 0 && !isFetchFilterActive) {
     return (
       <Card className="flex flex-col items-center justify-center border-stone bg-paper p-12 text-center">
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-clay/30 bg-clay-light text-clay">
@@ -193,8 +225,8 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
     );
   }
 
-  const allFilteredAreSelected =
-    filteredRecipes.length > 0 && filteredRecipes.every((r) => selectedRecipeIds.includes(r.id));
+  const allLoadedAreSelected =
+    recipes.length > 0 && recipes.every((r) => selectedRecipeIds.includes(r.id));
 
   return (
     <div className="space-y-6">
@@ -222,17 +254,17 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
       <div className="flex flex-col gap-4 border-b border-stone pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="font-serif text-2xl font-bold tracking-tight text-ink">
-            Saved Recipes{' '}
-            {isFilterActive
-              ? `(${filteredRecipes.length} of ${recipes.length})`
-              : `(${recipes.length})`}
+            Saved Recipes ({recipes.length}
+            {hasNextPage ? '+' : ''})
           </h2>
           <p className="mt-1 text-sm text-ink-muted">
-            {isFilterActive ? 'Filtered recipe results' : 'All available recipes in database'}
+            {isFilterActive
+              ? 'Filtered recipe results — showing loaded matches'
+              : 'Showing loaded recipes'}
           </p>
         </div>
         <div className="flex items-center space-x-2">
-          {filteredRecipes.length > 0 && (
+          {recipes.length > 0 && (
             <Button
               type="button"
               variant="outline"
@@ -240,12 +272,12 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
               onClick={handleToggleSelectAll}
               className="space-x-1.5 text-xs text-ink border-stone"
             >
-              {allFilteredAreSelected ? (
+              {allLoadedAreSelected ? (
                 <CheckSquare className="h-3.5 w-3.5 text-clay" />
               ) : (
                 <Square className="h-3.5 w-3.5 text-ink-subtle" />
               )}
-              <span>{allFilteredAreSelected ? 'Deselect All' : 'Select All'}</span>
+              <span>{allLoadedAreSelected ? 'Deselect All' : 'Select All'}</span>
             </Button>
           )}
           <Button
@@ -379,7 +411,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
       )}
 
       {/* Zero Filter Results Empty State */}
-      {filteredRecipes.length === 0 ? (
+      {recipes.length === 0 ? (
         <Card className="flex flex-col items-center justify-center border-stone bg-paper/60 p-10 text-center">
           <Search className="h-10 w-10 text-ink-subtle" />
           <h3 className="mt-3 font-serif text-base font-semibold text-ink">
@@ -402,7 +434,7 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
       ) : (
         /* Recipe Cards Grid */
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredRecipes.map((recipe, index) => {
+          {recipes.map((recipe, index) => {
             const isSelected = selectedRecipeIds.includes(recipe.id);
             const cardCheckboxId = `select-recipe-${recipe.id}`;
             const pending = isOptimistic(recipe.id);
@@ -502,7 +534,28 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
                             {recipe.steps.map((step, i) => (
                               <li key={i} className="flex gap-2">
                                 <span className="shrink-0 font-mono text-ink-muted">{i + 1}.</span>
-                                <span>{step.instruction}</span>
+                                <span className="flex-1">
+                                  {step.instruction}
+                                  {(step.duration || step.temperature) && (
+                                    <span className="ml-1.5 inline-flex items-center gap-1.5 align-middle">
+                                      {step.duration && (
+                                        <span className="inline-flex items-center gap-0.5 rounded bg-canvas border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted">
+                                          <Clock className="h-2.5 w-2.5" />
+                                          {formatDuration(step.duration.amount, step.duration.unit)}
+                                        </span>
+                                      )}
+                                      {step.temperature && (
+                                        <span className="inline-flex items-center gap-0.5 rounded bg-canvas border border-stone/60 px-1.5 py-0.5 text-[10px] font-medium text-ink-muted">
+                                          <Thermometer className="h-2.5 w-2.5" />
+                                          {formatTemperature(
+                                            step.temperature.amount,
+                                            step.temperature.unit
+                                          )}
+                                        </span>
+                                      )}
+                                    </span>
+                                  )}
+                                </span>
                               </li>
                             ))}
                           </ol>
@@ -543,6 +596,26 @@ export const RecipeList: React.FC<RecipeListProps> = ({ onEditRecipe, onSendToSh
               </motion.div>
             );
           })}
+        </div>
+      )}
+
+      {hasNextPage && (
+        <div className="flex justify-center pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => fetchNextPage()}
+            disabled={isFetchingNextPage}
+            className="space-x-1.5 border-stone text-ink"
+          >
+            {isFetchingNextPage ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            <span>{isFetchingNextPage ? 'Loading...' : 'Load More'}</span>
+          </Button>
         </div>
       )}
     </div>

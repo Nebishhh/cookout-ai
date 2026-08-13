@@ -34,7 +34,13 @@ describe('POST /api/recipes/import-text', () => {
         { ingredientId: 'spaghetti', displayName: 'Spaghetti', amount: 400, unit: 'g' },
         { ingredientId: 'egg', displayName: 'Egg', amount: 4, unit: 'egg' },
       ],
-      instructions: ['Boil the spaghetti.', 'Toss with egg and cheese off the heat.'],
+      instructions: [
+        { instruction: 'Boil the spaghetti.' },
+        {
+          instruction: 'Toss with egg and cheese off the heat.',
+          duration: { amount: 2, unit: 'minutes' },
+        },
+      ],
     });
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(validRecipeJSON);
@@ -52,13 +58,41 @@ describe('POST /api/recipes/import-text', () => {
         { ingredientId: 'spaghetti', displayName: 'Spaghetti', amount: 400, unit: 'g' },
         { ingredientId: 'egg', displayName: 'Egg', amount: 4, unit: 'egg' },
       ],
-      instructions: ['Boil the spaghetti.', 'Toss with egg and cheese off the heat.'],
+      instructions: [
+        { instruction: 'Boil the spaghetti.', duration: null, temperature: null },
+        {
+          instruction: 'Toss with egg and cheese off the heat.',
+          duration: { amount: 2, unit: 'minutes' },
+          temperature: null,
+        },
+      ],
     });
 
     expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledWith(
       'Spaghetti Carbonara recipe text...'
     );
     expect(geminiClientModule.parseRecipeTextWithGemini).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a legacy bare-string instructions array as a defensive fallback (no duration/temperature)', async () => {
+    const validRecipeJSON = JSON.stringify({
+      name: 'Simple Toast',
+      baseServings: 1,
+      dietaryTags: [],
+      ingredients: [{ ingredientId: 'bread', displayName: 'Bread', amount: 2, unit: 'count' }],
+      instructions: ['Toast the bread.'],
+    });
+
+    vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(validRecipeJSON);
+
+    const response = await request(app)
+      .post('/api/recipes/import-text')
+      .send({ text: 'Simple Toast recipe text...' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.instructions).toEqual([
+      { instruction: 'Toast the bread.', duration: null, temperature: null },
+    ]);
   });
 
   it('returns 400 when text is empty or missing', async () => {

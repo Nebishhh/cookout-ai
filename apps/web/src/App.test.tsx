@@ -6,6 +6,22 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { RecipeForm } from './components/RecipeForm';
 
+/**
+ * Shared fetch-mock response builder for GET /api/recipes. RecipeList now calls the paginated
+ * shape (?limit=... -> {items, nextCursor}) while ShoppingListBuilder/EventPlanner still call
+ * the original unpaginated shape (bare array) — the same test double needs to answer both
+ * correctly based on the request URL, matching apps/api/src/app.ts's actual dual-shape route.
+ */
+function recipesGetResponse(url: string, recipes: unknown[]): Response {
+  const body = url.includes('limit=') ? { items: recipes, nextCursor: null } : recipes;
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => body,
+  } as Response;
+}
+
 describe('Web UI (TanStack Query & App Integration Tests)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -33,12 +49,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       if (url.toString().includes('/api/recipes')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes,
-        } as Response;
+        return recipesGetResponse(url.toString(), mockRecipes);
       }
       return { ok: false, status: 404 } as Response;
     });
@@ -78,12 +89,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           }),
         } as Response;
       }
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        json: async () => [],
-      } as Response;
+      return recipesGetResponse(url.toString(), []);
     });
 
     render(<App />);
@@ -133,12 +139,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           json: async () => ({ id: 'new-r2', ...(capturedBody as object), dietaryTags: [] }),
         } as Response;
       }
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        json: async () => [],
-      } as Response;
+      return recipesGetResponse(url.toString(), []);
     });
 
     render(<App />);
@@ -176,6 +177,56 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     });
   });
 
+  it("setting a step's duration/temperature amount without touching the unit dropdown still submits both fields", async () => {
+    // Regression test: the unit <select> shows a fallback default ('minutes'/'F') via its
+    // value prop even before the user interacts with it — setting only the amount must still
+    // write that default into state, or the submit payload silently drops the value (the
+    // "both durationAmount and durationUnit present" check on the write side would fail).
+    let capturedBody: unknown = null;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (url.toString().endsWith('/api/recipes') && options?.method === 'POST') {
+        capturedBody = JSON.parse(options.body as string);
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ id: 'new-r3', ...(capturedBody as object), dietaryTags: [] }),
+        } as Response;
+      }
+      return recipesGetResponse(url.toString(), []);
+    });
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText(/recipe name/i), { target: { value: 'Baked Chicken' } });
+    fireEvent.change(screen.getByLabelText(/id \(e.g. flour\)/i), { target: { value: 'chicken' } });
+    fireEvent.change(screen.getByLabelText(/display name/i), { target: { value: 'Chicken' } });
+    fireEvent.change(screen.getByLabelText('Step 1'), { target: { value: 'Bake until done.' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /add timing/i }));
+    fireEvent.change(screen.getByLabelText('Duration amount for step 1'), {
+      target: { value: '25' },
+    });
+    fireEvent.change(screen.getByLabelText('Temperature amount for step 1'), {
+      target: { value: '350' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /create recipe/i }));
+
+    await waitFor(() => {
+      expect((capturedBody as { steps: unknown }).steps).toEqual([
+        {
+          instruction: 'Bake until done.',
+          durationAmount: 25,
+          durationUnit: 'minutes',
+          temperatureAmount: 350,
+          temperatureUnit: 'F',
+        },
+      ]);
+    });
+  });
+
   it('displays 400 error response message from API when creation fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
       if (url.toString().endsWith('/api/recipes') && options?.method === 'POST') {
@@ -189,12 +240,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           }),
         } as Response;
       }
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        json: async () => [],
-      } as Response;
+      return recipesGetResponse(url.toString(), []);
     });
 
     render(<App />);
@@ -263,12 +309,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
       if (url.toString().includes('/api/recipes')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes,
-        } as Response;
+        return recipesGetResponse(url.toString(), mockRecipes);
       }
       if (url.toString().endsWith('/api/shopping-list') && options?.method === 'POST') {
         return {
@@ -319,12 +360,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
       if (url.toString().includes('/api/recipes')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes,
-        } as Response;
+        return recipesGetResponse(url.toString(), mockRecipes);
       }
       if (url.toString().endsWith('/api/shopping-list') && options?.method === 'POST') {
         return {
@@ -423,12 +459,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
       const u = url.toString();
       if (u.includes('/api/recipes')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes,
-        } as Response;
+        return recipesGetResponse(u, mockRecipes);
       }
       if (u.endsWith('/api/shopping-list') && options?.method === 'POST') {
         return {
@@ -511,8 +542,99 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     });
   });
 
-  it('does NOT trigger a duplicate fetch of GET /api/recipes when switching between views with cached data', async () => {
-    let fetchCount = 0;
+  it('checkbox toggle survives a transient PATCH failure via retry, without rolling back the optimistic check', async () => {
+    const savedList = {
+      id: 'list-1',
+      name: 'Weekly Groceries',
+      eventId: null,
+      items: [
+        {
+          id: 'item-1',
+          ingredientId: 'milk',
+          displayName: 'Whole Milk',
+          quantity: { amount: 473.176, unit: 'ml', category: 'Volume' },
+          sourceRecipeIds: ['r1'],
+          checked: false,
+          category: 'Dairy',
+        },
+      ],
+    };
+
+    let patchAttempts = 0;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const u = url.toString();
+      if (u.includes('/api/recipes')) {
+        return recipesGetResponse(u, []);
+      }
+      if (u.endsWith('/api/shopping-lists') && (!options?.method || options.method === 'GET')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => [savedList],
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-lists/list-1/items/item-1') && options?.method === 'PATCH') {
+        patchAttempts++;
+        if (patchAttempts === 1) {
+          // First attempt fails — simulates a spotty-connection fetch failure (browser still
+          // reports itself online; this is a real fetch rejection, not an offline pause).
+          throw new Error('Network request failed');
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ id: 'item-1', checked: true }),
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-lists/list-1')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            ...savedList,
+            items: [{ ...savedList.items[0], checked: patchAttempts > 1 }],
+          }),
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
+    fireEvent.click(await screen.findByText('Weekly Groceries'));
+
+    const itemCheckbox = await screen.findByRole('checkbox', {
+      name: /mark whole milk as purchased/i,
+    });
+    fireEvent.click(itemCheckbox);
+
+    // Optimistic update flushes immediately (before either PATCH attempt resolves).
+    await waitFor(() => {
+      expect(itemCheckbox).toBeChecked();
+    });
+
+    // Retry succeeds; checkbox ends up checked — onError's rollback never fires, since it
+    // only runs once retries are exhausted, not on an individual failed attempt.
+    await waitFor(
+      () => {
+        expect(patchAttempts).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 5000 }
+    );
+    expect(itemCheckbox).toBeChecked();
+  });
+
+  it("RecipeList's paginated fetch and the shared full-list fetch (ShoppingListBuilder/EventPlanner) are each cached independently across tab switches", async () => {
+    // Two genuinely separate caches by design: RecipeList uses useRecipesPage() (paginated,
+    // ?limit=... in the URL), while ShoppingListBuilder/EventPlanner still share the original
+    // unpaginated useRecipes() — they need the FULL catalog as a selector, not a page of it.
+    let paginatedFetchCount = 0;
+    let sharedFetchCount = 0;
     const mockRecipes = [
       {
         id: 'r1',
@@ -525,33 +647,44 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       if (url.toString().includes('/api/recipes')) {
-        fetchCount++;
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes,
-        } as Response;
+        if (url.toString().includes('limit=')) {
+          paginatedFetchCount++;
+        } else {
+          sharedFetchCount++;
+        }
+        return recipesGetResponse(url.toString(), mockRecipes);
       }
       return { ok: false, status: 404 } as Response;
     });
 
     render(<App />);
 
-    // 1. Initial load on /recipes tab -> triggers 1st fetch
+    // 1. Initial load on /recipes tab -> RecipeList's paginated query fetches once.
     expect(await screen.findByText('Shared Pancakes')).toBeInTheDocument();
-    expect(fetchCount).toBe(1);
+    expect(paginatedFetchCount).toBe(1);
+    expect(sharedFetchCount).toBe(0);
 
-    // 2. Switch to /shopping-list tab -> uses shared cached query, 0 additional fetches!
+    // 2. Switch to /shopping-list tab -> ShoppingListBuilder's first-ever call to the shared,
+    // unpaginated query — a genuinely new fetch (it was never called in step 1).
     fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
     expect(await screen.findByText('Shopping List Builder')).toBeInTheDocument();
-    expect(screen.getByText('Shared Pancakes')).toBeInTheDocument();
-    expect(fetchCount).toBe(1);
+    expect(await screen.findByText('Shared Pancakes')).toBeInTheDocument();
+    expect(paginatedFetchCount).toBe(1);
+    expect(sharedFetchCount).toBe(1);
 
-    // 3. Switch back to /recipes tab -> still uses cached query, 0 additional fetches!
+    // 3. Switch to /event-planner tab -> EventPlanner shares the same unpaginated query as
+    // ShoppingListBuilder, so this reuses the cache with 0 additional fetches.
+    fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+    expect(await screen.findByText('Shared Pancakes')).toBeInTheDocument();
+    expect(paginatedFetchCount).toBe(1);
+    expect(sharedFetchCount).toBe(1);
+
+    // 4. Switch back to /recipes tab -> RecipeList's own paginated cache is reused too, 0
+    // additional fetches.
     fireEvent.click(screen.getByRole('button', { name: 'Recipes' }));
     expect(await screen.findByText('Create New Recipe')).toBeInTheDocument();
-    expect(fetchCount).toBe(1);
+    expect(paginatedFetchCount).toBe(1);
+    expect(sharedFetchCount).toBe(1);
   });
 
   it('clicking Edit on a recipe card pre-fills RecipeForm with existing data', async () => {
@@ -576,12 +709,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       if (url.toString().includes('/api/recipes')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes,
-        } as Response;
+        return recipesGetResponse(url.toString(), mockRecipes);
       }
       return { ok: false, status: 404 } as Response;
     });
@@ -643,12 +771,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         } as Response;
       }
       if (url.toString().includes('/api/recipes')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes,
-        } as Response;
+        return recipesGetResponse(url.toString(), mockRecipes);
       }
       return { ok: false, status: 404 } as Response;
     });
@@ -702,12 +825,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: true, status: 204 } as Response;
       }
       if (url.toString().includes('/api/recipes')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes,
-        } as Response;
+        return recipesGetResponse(url.toString(), mockRecipes);
       }
       return { ok: false, status: 404 } as Response;
     });
@@ -742,12 +860,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: true, status: 204 } as Response;
       }
       if (url.toString().includes('/api/recipes')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => (deleteCalled ? [] : mockRecipes),
-        } as Response;
+        return recipesGetResponse(url.toString(), deleteCalled ? [] : mockRecipes);
       }
       return { ok: false, status: 404 } as Response;
     });
@@ -841,12 +954,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => mockRecipes,
-          } as Response;
+          return recipesGetResponse(url.toString(), mockRecipes);
         }
         if (url.toString().endsWith('/api/events/plan') && options?.method === 'POST') {
           capturedBody = JSON.parse(options.body as string);
@@ -929,12 +1037,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => mockRecipes,
-          } as Response;
+          return recipesGetResponse(url.toString(), mockRecipes);
         }
         if (url.toString().endsWith('/api/events/plan') && options?.method === 'POST') {
           return {
@@ -976,12 +1079,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => mockRecipes,
-          } as Response;
+          return recipesGetResponse(url.toString(), mockRecipes);
         }
         if (url.toString().endsWith('/api/events/plan') && options?.method === 'POST') {
           return {
@@ -1065,12 +1163,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
         const u = url.toString();
         if (u.includes('/api/recipes') && !u.includes('events')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => mockRecipes,
-          } as Response;
+          return recipesGetResponse(u, mockRecipes);
         }
         if (u.endsWith('/api/events/plan') && options?.method === 'POST') {
           return {
@@ -1160,12 +1253,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
         const u = url.toString();
         if (u.includes('/api/recipes') && !u.includes('events')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(u, []);
         }
         if (u.endsWith('/api/events') && (!options?.method || options.method === 'GET')) {
           return {
@@ -1247,7 +1335,14 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           { ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' },
           { ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' },
         ],
-        instructions: ['Mix dry ingredients.', 'Whisk in eggs and cook on a griddle.'],
+        instructions: [
+          { instruction: 'Mix dry ingredients.', duration: null, temperature: null },
+          {
+            instruction: 'Whisk in eggs and cook on a griddle.',
+            duration: { amount: 5, unit: 'minutes' },
+            temperature: null,
+          },
+        ],
       };
 
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
@@ -1270,12 +1365,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1342,12 +1432,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1385,12 +1470,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1423,12 +1503,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1460,12 +1535,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1537,12 +1607,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           return { ok: false, status: 500 } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1602,12 +1667,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           return { ok: false, status: 500 } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1647,12 +1707,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1689,12 +1744,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1729,12 +1779,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1795,12 +1840,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           return { ok: false, status: 500 } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1842,12 +1882,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           return { ok: false, status: 500 } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1877,12 +1912,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           return { ok: false, status: 500 } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1918,12 +1948,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -1962,12 +1987,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -2024,12 +2044,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           } as Response;
         }
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => [],
-          } as Response;
+          return recipesGetResponse(url.toString(), []);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -2078,12 +2093,10 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
             json: async () => null,
           } as Response;
         }
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes.filter((r) => !deletedIds.includes(r.id)),
-        } as Response;
+        return recipesGetResponse(
+          url.toString(),
+          mockRecipes.filter((r) => !deletedIds.includes(r.id))
+        );
       });
 
       render(<App />);
@@ -2144,12 +2157,10 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
             json: async () => ({ error: 'InternalServerError', message: 'Database failure on r2' }),
           } as Response;
         }
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => mockRecipes.filter((r) => !deletedIds.includes(r.id)),
-        } as Response;
+        return recipesGetResponse(
+          url.toString(),
+          mockRecipes.filter((r) => !deletedIds.includes(r.id))
+        );
       });
 
       render(<App />);
@@ -2188,12 +2199,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => mockRecipes,
-          } as Response;
+          return recipesGetResponse(url.toString(), mockRecipes);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -2228,14 +2234,16 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         { id: 'r2', name: 'Steak Dinner', baseServings: 2, dietaryTags: [], ingredients: [] },
       ];
 
+      // Search moved server-side (RecipeList's useRecipesPage), so the mock must actually
+      // filter by the request's `search` query param, same as the real API does.
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => mockRecipes,
-          } as Response;
+          const query = new URLSearchParams(url.toString().split('?')[1] ?? '');
+          const search = query.get('search');
+          const filtered = search
+            ? mockRecipes.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()))
+            : mockRecipes;
+          return recipesGetResponse(url.toString(), filtered);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -2245,13 +2253,16 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       expect(await screen.findByText('Classic Pancakes')).toBeInTheDocument();
       expect(screen.getByText('Steak Dinner')).toBeInTheDocument();
 
-      // Search for "Pancake"
+      // Search for "Pancake" — debounced (~300ms) before it fires a request
       const searchInput = screen.getByPlaceholderText(/search recipes by name/i);
       fireEvent.change(searchInput, { target: { value: 'Pancake' } });
 
-      // Classic Pancakes remains, Steak Dinner is excluded
+      // Classic Pancakes remains, Steak Dinner is excluded once the debounced
+      // server-side search request resolves
+      await waitFor(() => {
+        expect(screen.queryByText('Steak Dinner')).not.toBeInTheDocument();
+      });
       expect(screen.getByText('Classic Pancakes')).toBeInTheDocument();
-      expect(screen.queryByText('Steak Dinner')).not.toBeInTheDocument();
     });
 
     it('filters recipe list by active dietary tag toggle', async () => {
@@ -2260,14 +2271,17 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         { id: 'r2', name: 'Beef Stew', baseServings: 4, dietaryTags: [], ingredients: [] },
       ];
 
+      // Dietary-tag filtering also moved server-side — the mock filters by the request's
+      // `tags` query param.
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => mockRecipes,
-          } as Response;
+          const query = new URLSearchParams(url.toString().split('?')[1] ?? '');
+          const tags = query.get('tags')?.split(',').filter(Boolean) ?? [];
+          const filtered =
+            tags.length === 0
+              ? mockRecipes
+              : mockRecipes.filter((r) => tags.some((t) => r.dietaryTags.includes(t)));
+          return recipesGetResponse(url.toString(), filtered);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -2281,13 +2295,17 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       const veganToggle = screen.getByRole('button', { name: /filter by vegan/i });
       fireEvent.click(veganToggle);
 
-      // Vegan Bowl remains, non-vegan Beef Stew is excluded
+      // Vegan Bowl remains, non-vegan Beef Stew is excluded once the request resolves
+      await waitFor(() => {
+        expect(screen.queryByText('Beef Stew')).not.toBeInTheDocument();
+      });
       expect(screen.getByText('Vegan Bowl')).toBeInTheDocument();
-      expect(screen.queryByText('Beef Stew')).not.toBeInTheDocument();
 
       // Click toggle button again to deactivate filter
       fireEvent.click(veganToggle);
-      expect(screen.getByText('Beef Stew')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText('Beef Stew')).toBeInTheDocument();
+      });
     });
 
     it('renders zero-results empty state when search query matches no recipes and allows clearing filters', async () => {
@@ -2297,12 +2315,12 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
         if (url.toString().includes('/api/recipes')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => mockRecipes,
-          } as Response;
+          const query = new URLSearchParams(url.toString().split('?')[1] ?? '');
+          const search = query.get('search');
+          const filtered = search
+            ? mockRecipes.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()))
+            : mockRecipes;
+          return recipesGetResponse(url.toString(), filtered);
         }
         return { ok: false, status: 404 } as Response;
       });
@@ -2315,7 +2333,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       const searchInput = screen.getByPlaceholderText(/search recipes by name/i);
       fireEvent.change(searchInput, { target: { value: 'NonExistentRecipe' } });
 
-      // Zero results card displayed
+      // Zero results card displayed once the debounced server-side search request resolves
       expect(await screen.findByText('No recipes match your search/filter')).toBeInTheDocument();
       expect(screen.queryByText('Oatmeal')).not.toBeInTheDocument();
 
@@ -2323,7 +2341,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       const clearButtons = screen.getAllByRole('button', { name: /clear filters/i });
       fireEvent.click(clearButtons[0]);
 
-      // Oatmeal is restored and search input is cleared
+      // Oatmeal is restored (search cleared -> unfiltered request) and search input is cleared
       expect(await screen.findByText('Oatmeal')).toBeInTheDocument();
       expect(searchInput).toHaveValue('');
     });

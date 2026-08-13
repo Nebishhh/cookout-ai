@@ -170,6 +170,7 @@ export interface ShoppingListLineDto {
   sourceRecipeIds: string[];
   checked: boolean;
   category: string;
+  categoryIsOverridden: boolean;
 }
 
 export interface ShoppingListDto {
@@ -302,6 +303,10 @@ export const api = {
         body: JSON.stringify({ category }),
       }
     ),
+  clearIngredientCategory: (ingredientId: string) =>
+    request<void>(`/api/ingredient-categories/${encodeURIComponent(ingredientId)}`, {
+      method: 'DELETE',
+    }),
   importRecipeText: (text: string) =>
     request<ImportRecipeTextResponseDto>('/api/recipes/import-text', {
       method: 'POST',

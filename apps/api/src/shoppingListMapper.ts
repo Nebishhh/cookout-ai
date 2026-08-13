@@ -95,6 +95,7 @@ export function toShoppingListJSON(
       sourceRecipeIds: line.sourceRecipeIds,
       checked: line.checked,
       category: resolveCategory(line.ingredientId, line.category, categoryOverrides),
+      categoryIsOverridden: categoryOverrides.has(line.ingredientId),
     })),
   };
 }

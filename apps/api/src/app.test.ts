@@ -1058,11 +1058,13 @@ describe('CookOut AI API Endpoints', () => {
         });
       expect(eventPlanRes.body.shoppingList[0].category).toBe('Bakery');
 
-      // A shopping list saved AFTER the override reflects it immediately.
+      // A shopping list saved AFTER the override reflects it immediately, and is flagged
+      // as overridden so the client knows to offer a "reset to default" control.
       const listRes = await request(app)
         .post('/api/shopping-lists')
         .send({ name: 'Bread List', sourceItems: [{ recipeId, targetServings: 4 }] });
       expect(listRes.body.items[0].category).toBe('Bakery');
+      expect(listRes.body.items[0].categoryIsOverridden).toBe(true);
 
       // Clearing the override reverts every read path to the heuristic, including that
       // already-saved list — category is always resolved fresh, never persisted onto the row.
@@ -1071,6 +1073,7 @@ describe('CookOut AI API Endpoints', () => {
 
       const listAfterClear = await request(app).get(`/api/shopping-lists/${listRes.body.id}`);
       expect(listAfterClear.body.items[0].category).toBe('Pantry Staples');
+      expect(listAfterClear.body.items[0].categoryIsOverridden).toBe(false);
     });
 
     it('DELETE /api/ingredient-categories/:ingredientId is idempotent for an ingredient with no override', async () => {

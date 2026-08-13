@@ -9,6 +9,7 @@ import {
   ChevronUp,
   CheckCircle2,
   RefreshCw,
+  RotateCcw,
   Save,
   Trash2,
   PlusCircle,
@@ -22,6 +23,7 @@ import {
   useDeleteShoppingList,
   useToggleShoppingListItemChecked,
   useSetIngredientCategory,
+  useClearIngredientCategory,
 } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
 import { groupByCategory, GROCERY_CATEGORY_ORDER } from '../lib/groceryCategories';
@@ -83,6 +85,7 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
   const deleteListMutation = useDeleteShoppingList();
   const toggleItemMutation = useToggleShoppingListItemChecked();
   const setCategoryMutation = useSetIngredientCategory();
+  const clearCategoryMutation = useClearIngredientCategory();
 
   const [expandedRecipes, setExpandedRecipes] = useState<Record<string, boolean>>({});
 
@@ -157,6 +160,10 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
 
   const handleRecategorize = (ingredientId: string, category: string) => {
     setCategoryMutation.mutate({ ingredientId, category });
+  };
+
+  const handleResetCategory = (ingredientId: string) => {
+    clearCategoryMutation.mutate(ingredientId);
   };
 
   const toggleRecipeExpanded = (recipeId: string) => {
@@ -296,20 +303,34 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                                   >
                                     {item.displayName}
                                   </Label>
-                                  <Select
-                                    value={item.category}
-                                    onChange={(e) =>
-                                      handleRecategorize(item.ingredientId, e.target.value)
-                                    }
-                                    aria-label={`Grocery category for ${item.displayName}`}
-                                    className="mt-1 h-6 w-auto rounded-md border-stone/60 bg-canvas px-1.5 py-0 text-[11px] text-ink-muted"
-                                  >
-                                    {GROCERY_CATEGORY_ORDER.map((category) => (
-                                      <option key={category} value={category}>
-                                        {category}
-                                      </option>
-                                    ))}
-                                  </Select>
+                                  <div className="mt-1 flex items-center gap-1">
+                                    <Select
+                                      value={item.category}
+                                      onChange={(e) =>
+                                        handleRecategorize(item.ingredientId, e.target.value)
+                                      }
+                                      aria-label={`Grocery category for ${item.displayName}`}
+                                      className="h-6 w-auto rounded-md border-stone/60 bg-canvas px-1.5 py-0 text-[11px] text-ink-muted"
+                                    >
+                                      {GROCERY_CATEGORY_ORDER.map((category) => (
+                                        <option key={category} value={category}>
+                                          {category}
+                                        </option>
+                                      ))}
+                                    </Select>
+                                    {item.categoryIsOverridden && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleResetCategory(item.ingredientId)}
+                                        disabled={clearCategoryMutation.isPending}
+                                        title="Reset to default category"
+                                        aria-label={`Reset ${item.displayName} to its default category`}
+                                        className="flex h-6 w-6 items-center justify-center rounded-md text-ink-muted hover:bg-canvas hover:text-clay-hover disabled:opacity-50"
+                                      >
+                                        <RotateCcw className="h-3 w-3" />
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
 

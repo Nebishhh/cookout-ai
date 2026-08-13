@@ -530,6 +530,24 @@ export function useSetIngredientCategory() {
 }
 
 /**
+ * Mutation hook for clearing an ingredient's manual category override
+ * (DELETE /api/ingredient-categories/:ingredientId), reverting it to the categorizeIngredient()
+ * heuristic. Same invalidation rationale as useSetIngredientCategory — global by ingredientId,
+ * so both ['shoppingLists'] and ['events'] need refetching.
+ */
+export function useClearIngredientCategory() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string>({
+    mutationFn: (ingredientId: string) => api.clearIngredientCategory(ingredientId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: SHOPPING_LISTS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: EVENTS_QUERY_KEY });
+    },
+  });
+}
+
+/**
  * Mutation hook for parsing raw recipe text into structured draft data using AI (POST /api/recipes/import-text).
  * Implemented as an on-demand mutation with no cache invalidation or automatic persistence.
  */

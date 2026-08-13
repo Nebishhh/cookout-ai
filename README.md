@@ -6,9 +6,9 @@
 
 ## Features
 
+- **Dietary-Aware Event Planner**: Define a guest group by dietary breakdown (**Total Guests**, **Vegetarian Count**, **Vegan Count**, and derived **Omnivore Count**), and CookOut computes exactly how many guests each candidate recipe can actually feed — an untagged recipe only counts toward omnivores, a vegetarian recipe covers everyone but vegans, a vegan recipe covers the whole group — then scales and consolidates accordingly. This eligible-servings computation across a mixed-dietary guest list is the part of CookOut most recipe/meal-planning apps don't do at all; they support dietary tags as filters, not as a calculation.
 - **Recipe Management & Scaling**: Create, edit, delete, and view recipes with custom serving counts. Automatically scale ingredient quantities up or down while keeping measurement units consistent.
 - **Consolidated Shopping List Builder**: Select multiple recipes, set target serving counts for each, and generate a unified ingredient shopping list that merges duplicate items and converts compatible units (e.g., combining `tsp`, `tbsp`, `cup`, or `g` and `kg`).
-- **Dietary-Aware Event Planner**: Define guest groups by dietary preferences (**Total Guests**, **Vegetarian Count**, **Vegan Count**, and derived **Omnivore Count**). Automatically scale eligible recipes (Omnivore, Vegetarian, Vegan) to guest sub-groups and aggregate a complete event grocery list.
 - **AI-Powered Recipe Import (Google Gemini AI)**:
   - **Text Import**: Paste raw, unformatted recipe text to parse into structured recipe drafts.
   - **URL Import**: Import recipes from webpage URLs with built-in SSRF (Server-Side Request Forgery) protection and fallback HTML scraping via Cheerio.
@@ -26,12 +26,11 @@ cookout-ai/
 │   ├── api/                 # Express.js REST API & Gemini AI integration
 │   │   ├── src/
 │   │   │   ├── __fixtures__/ # Recorded Gemini API response fixtures for E2E testing
-│   │   │   ├── app.ts        # Express application & route definitions
+│   │   │   ├── app.ts        # Express application, route definitions (incl. import-text/import-url handlers)
 │   │   │   ├── geminiClient.ts # Gemini API client & fixture interception logic
+│   │   │   ├── aiRecipeExtraction.ts # Shared AI-response shape-guard + bounded retry orchestration
 │   │   │   ├── imageValidator.ts # Busboy streaming & magic byte sniffer
-│   │   │   ├── importImage.ts # Multipart image import endpoint handler
-│   │   │   ├── importText.ts  # Text import handler
-│   │   │   ├── importUrl.ts   # URL import handler
+│   │   │   ├── importImage.ts # Multipart image import endpoint handler (separate from app.ts)
 │   │   │   ├── recipeMapper.ts# Domain <-> Prisma model converters
 │   │   │   └── ssrfGuard.ts   # SSRF protection validator for URL fetching
 │   │   └── package.json
@@ -142,7 +141,7 @@ npm --workspace=apps/web run dev -- --host
 
 ### Unit & Integration Tests (Vitest)
 
-Run all 172 Vitest unit and integration test suites across `domain`, `api`, and `web`:
+Run the Vitest unit and integration test suites across `domain`, `api`, and `web` (see `PROJECT_STATE.md` §9 for the current passing-test count and coverage breakdown):
 
 ```bash
 npm test

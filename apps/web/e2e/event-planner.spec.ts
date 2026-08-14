@@ -142,4 +142,27 @@ test.describe('Event Planner E2E Tests', () => {
     // Assert 400 error banner displays cleanly in UI
     await expect(page.getByText(/cannot exceed vegetarianCount/i)).toBeVisible();
   });
+
+  test('quick-fill AI fallback: a no-digits description is parsed via the fixture-intercepted Gemini call and fills the guest fields', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await page.locator('#nav-tab-event-planner').click();
+
+    await expect(page.locator('#input-guest-description')).toBeVisible();
+
+    // Deliberately no digits at all, so parseGuestGroupText() returns null and the route falls
+    // back to the fixture-intercepted Gemini call (USE_GEMINI_FIXTURES=true for this e2e run).
+    await page
+      .locator('#input-guest-description')
+      .fill('a large family reunion, mostly meat eaters');
+    await page.getByRole('button', { name: /fill in/i }).click();
+
+    // GUEST_GROUP_FIXTURE: { totalGuests: 14, vegetarianCount: 5, veganCount: 2 }
+    await expect(page.locator('#input-total-guests')).toHaveValue('14');
+    await expect(page.locator('#input-vegetarian-count')).toHaveValue('5');
+    await expect(page.locator('#input-vegan-count')).toHaveValue('2');
+
+    await expect(page.getByText(/filled in from ai parsing/i)).toBeVisible();
+  });
 });

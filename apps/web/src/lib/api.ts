@@ -274,6 +274,13 @@ export interface ImportRecipeTextResponseDto {
   instructions: RecipeStepDto[];
 }
 
+export interface ParseEventDescriptionResponseDto {
+  totalGuests: number;
+  vegetarianCount: number;
+  veganCount: number;
+  source: 'heuristic' | 'ai';
+}
+
 export const api = {
   getRecipes: () => request<RecipeDto[]>('/api/recipes'),
   getRecipesPage: ({ limit, cursor, search, tags }: RecipesPageParams) => {
@@ -386,4 +393,9 @@ export const api = {
       body: formData,
     });
   },
+  parseEventDescription: (description: string) =>
+    request<ParseEventDescriptionResponseDto>('/api/events/parse-description', {
+      method: 'POST',
+      body: JSON.stringify({ description }),
+    }),
 };

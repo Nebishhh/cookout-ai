@@ -7,6 +7,7 @@ import {
   subtractPantryStock,
   planEventShoppingList,
   GuestGroup,
+  parseGuestGroupText,
   InvalidRecipeError,
   InvalidGuestGroupError,
   InvalidShoppingListError,
@@ -45,7 +46,11 @@ import {
   clearPantryItem,
 } from './pantryStore.js';
 import { encodeRecipeCursor, decodeRecipeCursor } from './recipePagination.js';
-import { parseRecipeTextWithGemini, parseRecipeTextWithGeminiTimeout } from './geminiClient.js';
+import {
+  parseRecipeTextWithGemini,
+  parseRecipeTextWithGeminiTimeout,
+  parseGuestGroupWithGeminiTimeout,
+} from './geminiClient.js';
 import { extractRecipeCandidate } from './aiRecipeExtraction.js';
 import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
@@ -656,6 +661,131 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
     next(err);
   }
 });
+
+/**
+ * Open Question / Scope Notes for Guest-Description Quick-Fill:
+ * - Regex-first, AI-fallback hybrid: parseGuestGroupText() (packages/domain) runs first, for
+ *   free and instantly; Gemini is only called when it returns null (can't confidently determine
+ *   totalGuests). A request the heuristic can resolve never requires GEMINI_API_KEY to be
+ *   configured at all — a real, testable property of this design, not just an optimization.
+ * - No bounded-retry orchestrator on the AI-fallback path — see geminiClient.ts's doc comment
+ *   on parseGuestGroupWithGemini for why that's deliberate, not missing.
+ * - ZERO database persistence — returns a draft {totalGuests, vegetarianCount, veganCount} for
+ *   the client to review and apply to local form state, same convention as every other AI
+ *   import route.
+ */
+const MAX_GUEST_DESCRIPTION_LENGTH = 500;
+
+app.post(
+  '/api/events/parse-description',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { description } = req.body || {};
+      if (typeof description !== 'string' || description.trim() === '') {
+        return res.status(400).json({
+          error: 'BadRequest',
+          message: 'Request body must contain a non-empty "description" string.',
+        });
+      }
+      if (description.length > MAX_GUEST_DESCRIPTION_LENGTH) {
+        return res.status(400).json({
+          error: 'BadRequest',
+          message: `"description" must be ${MAX_GUEST_DESCRIPTION_LENGTH} characters or fewer.`,
+        });
+      }
+
+      const heuristicResult = parseGuestGroupText(description);
+
+      let candidate: { totalGuests: number; vegetarianCount?: number; veganCount?: number };
+      let source: 'heuristic' | 'ai';
+
+      if (heuristicResult) {
+        candidate = heuristicResult;
+        source = 'heuristic';
+      } else {
+        if (
+          process.env.USE_GEMINI_FIXTURES !== 'true' &&
+          (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '')
+        ) {
+          return res.status(500).json({
+            error: 'ServerConfigurationError',
+            message:
+              'Server is not configured for AI event-description parsing: GEMINI_API_KEY is missing.',
+          });
+        }
+
+        let rawAiResponse: string;
+        try {
+          rawAiResponse = await parseGuestGroupWithGeminiTimeout(description);
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
+          return res.status(502).json({
+            error: 'BadGateway',
+            message: `Upstream AI service error: ${errorMessage}`,
+          });
+        }
+
+        let parsedCandidate: unknown;
+        try {
+          const sanitizedResponse = rawAiResponse
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/i, '')
+            .replace(/\s*```$/i, '')
+            .trim();
+          parsedCandidate = JSON.parse(sanitizedResponse);
+        } catch {
+          return res.status(502).json({
+            error: 'BadGateway',
+            message: 'Upstream AI service returned invalid JSON response.',
+          });
+        }
+
+        if (
+          parsedCandidate &&
+          typeof parsedCandidate === 'object' &&
+          'error' in parsedCandidate &&
+          (parsedCandidate as { error: string }).error === 'AmbiguousGuestCount'
+        ) {
+          return res.status(502).json({
+            error: 'ExtractionError',
+            message:
+              (parsedCandidate as { message?: string }).message ||
+              'The provided description does not clearly state a total guest count.',
+          });
+        }
+
+        candidate = parsedCandidate as {
+          totalGuests: number;
+          vegetarianCount?: number;
+          veganCount?: number;
+        };
+        source = 'ai';
+      }
+
+      let guestGroup: GuestGroup;
+      try {
+        guestGroup = new GuestGroup(candidate);
+      } catch (err) {
+        if (err instanceof DomainError) {
+          return res.status(422).json({
+            error: err.name,
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+
+      return res.status(200).json({
+        totalGuests: guestGroup.totalGuests,
+        vegetarianCount: guestGroup.vegetarianCount,
+        veganCount: guestGroup.veganCount,
+        source,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * Open Question / Scope Notes for Event Planning:

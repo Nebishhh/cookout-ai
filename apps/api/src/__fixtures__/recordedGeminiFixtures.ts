@@ -86,3 +86,15 @@ export const CAMERA_IMPORT_FIXTURE: RecipeDraftFixture = {
     { instruction: 'Slice and serve over spinach.' },
   ],
 };
+
+export interface GuestGroupFixture {
+  totalGuests: number;
+  vegetarianCount: number;
+  veganCount: number;
+}
+
+export const GUEST_GROUP_FIXTURE: GuestGroupFixture = {
+  totalGuests: 14,
+  vegetarianCount: 5,
+  veganCount: 2,
+};

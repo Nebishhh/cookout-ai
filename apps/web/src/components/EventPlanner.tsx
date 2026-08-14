@@ -14,6 +14,7 @@ import {
   Loader2,
   Eye,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react';
 import {
   useRecipes,
@@ -25,6 +26,7 @@ import {
   useSaveEventShoppingList,
   useSetIngredientCategory,
   useClearIngredientCategory,
+  useParseEventDescription,
 } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
 import { groupByCategory, GROCERY_CATEGORY_ORDER } from '../lib/groceryCategories';
@@ -65,6 +67,8 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const [vegetarianCount, setVegetarianCount] = useState<number>(0);
   const [veganCount, setVeganCount] = useState<number>(0);
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
+  const [guestDescription, setGuestDescription] = useState('');
+  const [guestParseNotice, setGuestParseNotice] = useState<string | null>(null);
 
   const planEventMutation = usePlanEvent();
   const eventQuery = useEvent(selectedEventId);
@@ -74,6 +78,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const saveShoppingListMutation = useSaveEventShoppingList();
   const setCategoryMutation = useSetIngredientCategory();
   const clearCategoryMutation = useClearIngredientCategory();
+  const parseEventDescriptionMutation = useParseEventDescription();
 
   // Pre-fill the form from the saved event whenever the selected event changes / refetches.
   useEffect(() => {
@@ -83,12 +88,16 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       setVegetarianCount(eventQuery.data.guestGroup.vegetarianCount);
       setVeganCount(eventQuery.data.guestGroup.veganCount);
       setSelectedRecipeIds(eventQuery.data.recipeIds);
+      setGuestDescription('');
+      setGuestParseNotice(null);
     } else if (!isViewMode) {
       setName('');
       setTotalGuests(10);
       setVegetarianCount(0);
       setVeganCount(0);
       setSelectedRecipeIds([]);
+      setGuestDescription('');
+      setGuestParseNotice(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventQuery.data, selectedEventId]);
@@ -114,6 +123,24 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const handleVeganCountChange = (valueStr: string) => {
     const parsed = parseInt(valueStr, 10);
     setVeganCount(isNaN(parsed) || parsed < 0 ? 0 : parsed);
+  };
+
+  const handleParseGuestDescription = () => {
+    setGuestParseNotice(null);
+    if (!guestDescription.trim()) return;
+
+    parseEventDescriptionMutation.mutate(guestDescription, {
+      onSuccess: (result) => {
+        setTotalGuests(result.totalGuests);
+        setVegetarianCount(result.vegetarianCount);
+        setVeganCount(result.veganCount);
+        setGuestParseNotice(
+          result.source === 'ai'
+            ? 'Filled in from AI parsing — please review the numbers below before submitting.'
+            : 'Filled in below — please review before submitting.'
+        );
+      },
+    });
   };
 
   const guestGroupPayload = { totalGuests, vegetarianCount, veganCount };
@@ -225,7 +252,10 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       ? saveShoppingListMutation.error.message
       : null) ||
     (eventQuery.isError && eventQuery.error ? eventQuery.error.message : null) ||
-    (recipeIsError && recipeQueryError ? recipeQueryError.message : null);
+    (recipeIsError && recipeQueryError ? recipeQueryError.message : null) ||
+    (parseEventDescriptionMutation.isError && parseEventDescriptionMutation.error
+      ? parseEventDescriptionMutation.error.message
+      : null);
 
   // In view mode the recomputed-live event detail drives the results; in create mode,
   // the ephemeral preview mutation drives it. Both expose the same guestGroup /
@@ -323,6 +353,50 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                 placeholder="e.g. Thanksgiving 2026"
                 className="mt-1 h-9 bg-canvas border-stone"
               />
+            </div>
+
+            {/* Natural-Language Guest-Breakdown Quick Fill */}
+            <div className="rounded-xl border border-clay/30 bg-clay-light/30 p-3">
+              <Label
+                htmlFor="input-guest-description"
+                className="flex items-center space-x-1.5 text-xs font-semibold text-clay-hover"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>Quick Fill: Describe Your Guest List</span>
+              </Label>
+              <div className="mt-1.5 flex gap-2">
+                <Input
+                  id="input-guest-description"
+                  type="text"
+                  value={guestDescription}
+                  onChange={(e) => setGuestDescription(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleParseGuestDescription();
+                    }
+                  }}
+                  placeholder='e.g. "dinner for 12, 3 vegetarian, 1 vegan"'
+                  className="h-9 flex-1 bg-canvas border-stone"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleParseGuestDescription}
+                  disabled={parseEventDescriptionMutation.isPending || !guestDescription.trim()}
+                  className="space-x-1.5 bg-olive text-white hover:bg-olive-hover disabled:opacity-50"
+                >
+                  {parseEventDescriptionMutation.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  <span>{parseEventDescriptionMutation.isPending ? 'Parsing...' : 'Fill In'}</span>
+                </Button>
+              </div>
+              {guestParseNotice && (
+                <p className="mt-1.5 text-xs text-clay-hover">{guestParseNotice}</p>
+              )}
             </div>
 
             {/* Guest Group Inputs */}

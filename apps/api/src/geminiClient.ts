@@ -303,3 +303,115 @@ export async function parseRecipeImageWithGeminiTimeout(
     if (timer) clearTimeout(timer);
   }
 }
+
+/**
+ * Extraction target for the natural-language event-planning wrapper — entirely separate from
+ * the recipe-import prompt/schema above; this is only the AI-fallback path used when
+ * `parseGuestGroupText()` (packages/domain) can't confidently determine a guest count from
+ * free text on its own. Applies the anyOf-with-real-`required` schema shape from the start
+ * (the fix issue #1 applied to the recipe schema after the fact), and deliberately has no
+ * bounded-retry/reinforcement-prompt mechanism: the target here is one required integer plus
+ * two optional ones, with no nested-array structure for a model to garble the way it garbled
+ * `ingredients`/`instructions` in issue #1, so that machinery isn't proportionate to this
+ * problem's actual complexity — see aiRecipeExtraction.ts for the recipe-import equivalent
+ * this deliberately doesn't reuse.
+ */
+const GUEST_GROUP_SYSTEM_PROMPT = `You are a specialized assistant for CookOut AI that extracts a guest headcount breakdown from a short free-text event description.
+
+CRITICAL INSTRUCTIONS:
+1. Return ONLY valid JSON matching the schema below. No markdown, no commentary.
+2. Extract:
+   - "totalGuests": total attendees (required, positive integer).
+   - "vegetarianCount": guests who are vegetarian, INCLUSIVE of vegan guests (every vegan is also counted here). Default 0 if unmentioned.
+   - "veganCount": guests who are specifically vegan (a subset of vegetarianCount). Default 0 if unmentioned.
+3. If the text does not clearly state or reasonably imply a total guest count, return instead:
+   {"error": "AmbiguousGuestCount", "message": "<why>"}
+4. Never invent a number that isn't stated or clearly implied.`;
+
+const GUEST_GROUP_ERROR_SHAPE: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    error: { type: Type.STRING },
+    message: { type: Type.STRING },
+  },
+  required: ['error', 'message'],
+};
+
+const GUEST_GROUP_SUCCESS_SHAPE: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    totalGuests: { type: Type.INTEGER },
+    vegetarianCount: { type: Type.INTEGER },
+    veganCount: { type: Type.INTEGER },
+  },
+  required: ['totalGuests'],
+};
+
+const GUEST_GROUP_RESPONSE_SCHEMA: Schema = {
+  anyOf: [GUEST_GROUP_ERROR_SHAPE, GUEST_GROUP_SUCCESS_SHAPE],
+};
+
+export async function parseGuestGroupWithGemini(description: string): Promise<string> {
+  checkProductionGuard();
+
+  if (process.env.USE_GEMINI_FIXTURES === 'true') {
+    const fixturePath = './__fixtures__/recordedGeminiFixtures.js';
+    const { GUEST_GROUP_FIXTURE } = await import(fixturePath);
+    if (description.includes('AMBIGUOUS_GUEST_COUNT_TEST')) {
+      return JSON.stringify({
+        error: 'AmbiguousGuestCount',
+        message: 'The provided description does not clearly state a total guest count.',
+      });
+    }
+    return JSON.stringify(GUEST_GROUP_FIXTURE);
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey.trim() === '') {
+    throw new Error('GEMINI_API_KEY is not configured on the server.');
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const modelName = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+
+  const response = await ai.models.generateContent({
+    model: modelName,
+    contents: [
+      { text: GUEST_GROUP_SYSTEM_PROMPT },
+      { text: `EVENT DESCRIPTION TO PARSE:\n${description}` },
+    ],
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: GUEST_GROUP_RESPONSE_SCHEMA,
+    },
+  });
+
+  const responseText = response.text;
+  if (!responseText) {
+    throw new Error('Empty response received from Gemini API.');
+  }
+
+  return responseText;
+}
+
+/**
+ * Wraps parseGuestGroupWithGemini with a ~30-second timeout.
+ */
+export async function parseGuestGroupWithGeminiTimeout(
+  description: string,
+  timeoutMs = 30000
+): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Gemini API request timed out after ${timeoutMs / 1000} seconds.`));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([parseGuestGroupWithGemini(description), timeoutPromise]);
+    return result;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

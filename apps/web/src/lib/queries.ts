@@ -26,6 +26,7 @@ import {
   type PantryItemDto,
   type SetPantryItemInput,
   type ImportRecipeTextResponseDto,
+  type ParseEventDescriptionResponseDto,
 } from './api';
 
 /**
@@ -704,5 +705,17 @@ export function useImportRecipeUrl() {
 export function useImportRecipeImage() {
   return useMutation<ImportRecipeTextResponseDto, Error, File>({
     mutationFn: (file: File) => api.importRecipeImage(file),
+  });
+}
+
+/**
+ * Mutation hook for parsing a free-text event description into a guest-group breakdown
+ * (POST /api/events/parse-description) — the natural-language quick-fill for EventPlanner's
+ * guest-count fields. Implemented as an on-demand mutation with no cache invalidation or
+ * automatic persistence, same as the recipe import hooks above.
+ */
+export function useParseEventDescription() {
+  return useMutation<ParseEventDescriptionResponseDto, Error, string>({
+    mutationFn: (description: string) => api.parseEventDescription(description),
   });
 }

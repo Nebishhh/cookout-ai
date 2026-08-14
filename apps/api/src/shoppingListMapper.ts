@@ -2,6 +2,7 @@ import {
   Quantity,
   ShoppingList,
   ShoppingListLine,
+  applyPracticalRounding,
   type ShoppingListItem as DomainShoppingListItem,
   type GroceryCategory,
 } from '@cookout-ai/domain';
@@ -78,16 +79,23 @@ export function toDomainShoppingList(prismaList: PrismaShoppingListWithItems): S
  * Formats a domain ShoppingList object for JSON API responses.
  * `categoryOverrides` (ingredientId -> manually-corrected GroceryCategory) is applied on top
  * of each line's heuristic-derived category — see categoryOverrides.ts.
+ * `applyPracticalRounding()` (see practicalRounding.ts in the domain package) rounds any
+ * fractional Count-category line up to a buyable whole amount. In practice a saved line is
+ * already whole by the time it's read back here (rounding happens once, before persisting —
+ * see the save/regenerate routes in app.ts), so this is normally a no-op on read; it's applied
+ * uniformly anyway so a saved list's shape always matches the preview shape the client renders.
  */
 export function toShoppingListJSON(
   domainList: ShoppingList,
   categoryOverrides: ReadonlyMap<string, GroceryCategory> = new Map()
 ) {
+  const items = applyPracticalRounding(domainList.items);
+
   return {
     id: domainList.id,
     name: domainList.name,
     eventId: domainList.eventId,
-    items: domainList.items.map((line) => ({
+    items: items.map((line) => ({
       id: line.id,
       ingredientId: line.ingredientId,
       displayName: line.displayName,
@@ -96,6 +104,8 @@ export function toShoppingListJSON(
       checked: line.checked,
       category: resolveCategory(line.ingredientId, line.category, categoryOverrides),
       categoryIsOverridden: categoryOverrides.has(line.ingredientId),
+      mathematicalQuantity: line.mathematicalQuantity.toJSON(),
+      wasRoundedForPurchase: line.wasRoundedForPurchase,
     })),
   };
 }

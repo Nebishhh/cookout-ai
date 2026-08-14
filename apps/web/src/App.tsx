@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
 import { motion } from 'framer-motion';
-import type { RecipeDto } from './lib/api';
+import { api, type RecipeDto } from './lib/api';
+import { TOGGLE_SHOPPING_LIST_ITEM_MUTATION_KEY } from './lib/queries';
 import { Navigation } from './components/Navigation';
 import { RecipeList } from './components/RecipeList';
 import { RecipeForm } from './components/RecipeForm';
@@ -10,6 +13,48 @@ import { EventPlanner } from './components/EventPlanner';
 import { EventList } from './components/EventList';
 import { SavedShoppingLists } from './components/SavedShoppingLists';
 import { PantryPanel } from './components/PantryPanel';
+
+/**
+ * Offline persistence for the shopping-list checkbox toggle: without this, a mutation that
+ * TanStack Query paused because the browser is offline (see queries.ts's
+ * useToggleShoppingListItemChecked doc comment) only lives in memory — a full page reload while
+ * still offline silently drops it. `createSyncStoragePersister` snapshots the query client
+ * (cache + any paused mutations) to localStorage; `shouldDehydrateMutation` scopes what gets
+ * persisted to only this one paused mutation, not every mutation ever run, keeping localStorage
+ * usage bounded. `gcTime` must be at least the persister's default 24h `maxAge`, or a persisted
+ * query could be garbage-collected in memory before it's ever written to storage.
+ */
+const ONE_DAY_MS = 1000 * 60 * 60 * 24;
+
+function createPersistedQueryClient(): QueryClient {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        staleTime: 1000 * 60 * 5,
+        gcTime: ONE_DAY_MS,
+      },
+    },
+  });
+
+  // Registered so a paused mutation rehydrated from localStorage (before this hook's owning
+  // component has mounted) still knows which function to call on resume.
+  queryClient.setMutationDefaults(TOGGLE_SHOPPING_LIST_ITEM_MUTATION_KEY, {
+    mutationFn: ({
+      listId,
+      itemId,
+      checked,
+    }: {
+      listId: string;
+      itemId: string;
+      checked: boolean;
+    }) => api.toggleShoppingListItem(listId, itemId, checked),
+  });
+
+  return queryClient;
+}
+
+const persister = createSyncStoragePersister({ storage: window.localStorage });
 
 /**
  * Open Questions / Scope Notes:
@@ -28,18 +73,7 @@ interface AppProps {
 }
 
 export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
-  const [queryClient] = useState(
-    () =>
-      propQueryClient ||
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            retry: false,
-            staleTime: 1000 * 60 * 5,
-          },
-        },
-      })
-  );
+  const [queryClient] = useState(() => propQueryClient || createPersistedQueryClient());
 
   const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -93,7 +127,21 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
   };
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister,
+        dehydrateOptions: {
+          shouldDehydrateMutation: (mutation) =>
+            mutation.state.isPaused &&
+            JSON.stringify(mutation.options.mutationKey) ===
+              JSON.stringify(TOGGLE_SHOPPING_LIST_ITEM_MUTATION_KEY),
+        },
+      }}
+      onSuccess={() => {
+        void queryClient.resumePausedMutations();
+      }}
+    >
       <div className="min-h-screen bg-canvas font-sans text-ink antialiased">
         <Navigation currentTab={currentTab} onTabChange={handleTabChange} />
 
@@ -149,7 +197,7 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
           </motion.div>
         </main>
       </div>
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 };
 

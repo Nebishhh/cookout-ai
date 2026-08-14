@@ -5,6 +5,7 @@ import {
   scaleRecipe,
   consolidateShoppingList,
   subtractPantryStock,
+  applyPracticalRounding,
   planEventShoppingList,
   GuestGroup,
   parseGuestGroupText,
@@ -633,16 +634,19 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
     const consolidatedList = consolidateShoppingList(scaledRecipes);
     const pantryStock = await getPantryStockMap();
     const afterPantry = subtractPantryStock(consolidatedList, pantryStock);
+    const practicallyRounded = applyPracticalRounding(afterPantry);
     const categoryOverrides = await getCategoryOverridesMap();
 
     res.status(200).json({
-      shoppingList: afterPantry.map((item) => ({
+      shoppingList: practicallyRounded.map((item) => ({
         ingredientId: item.ingredientId,
         displayName: item.displayName,
         quantity: item.quantity.toJSON(),
         sourceRecipeIds: item.sourceRecipeIds,
         category: categoryOverrides.get(item.ingredientId) ?? item.category,
         categoryIsOverridden: categoryOverrides.has(item.ingredientId),
+        mathematicalQuantity: item.mathematicalQuantity.toJSON(),
+        wasRoundedForPurchase: item.wasRoundedForPurchase,
       })),
       scaledRecipes: scaledRecipes.map((sr) => ({
         sourceRecipeId: sr.sourceRecipeId,
@@ -1076,7 +1080,8 @@ app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFu
     const consolidatedList = consolidateShoppingList(scaledRecipes);
     const pantryStock = await getPantryStockMap();
     const afterPantry = subtractPantryStock(consolidatedList, pantryStock);
-    const domainLines = buildShoppingListLinesFromConsolidated(afterPantry);
+    const practicallyRounded = applyPracticalRounding(afterPantry);
+    const domainLines = buildShoppingListLinesFromConsolidated(practicallyRounded);
 
     const createdPrismaList = await prisma.shoppingList.create({
       data: {
@@ -1142,7 +1147,8 @@ app.put(
       const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
       const pantryStock = await getPantryStockMap();
       const afterPantry = subtractPantryStock(eventPlan.shoppingList, pantryStock);
-      const domainLines = buildShoppingListLinesFromConsolidated(afterPantry);
+      const practicallyRounded = applyPracticalRounding(afterPantry);
+      const domainLines = buildShoppingListLinesFromConsolidated(practicallyRounded);
 
       const { name: overrideName } = req.body || {};
       const listName =

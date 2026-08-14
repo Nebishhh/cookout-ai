@@ -4,6 +4,7 @@ import {
   InvalidEventError,
   InvalidGuestGroupError,
   subtractPantryStock,
+  applyPracticalRounding,
 } from '@cookout-ai/domain';
 import type { EventPlan, GroceryCategory, Quantity } from '@cookout-ai/domain';
 import type { Event as PrismaEvent } from '@prisma/client';
@@ -103,13 +104,17 @@ export function toEventSummaryJSON(domainEvent: Event, shoppingListId: string | 
  * of each shopping-list item's heuristic-derived category — see categoryOverrides.ts.
  * `pantryStock` (ingredientId -> on-hand Quantity) reduces/omits shopping-list items the same
  * way it does for every other shopping-list-producing route — see pantryStore.ts.
+ * `applyPracticalRounding()` (see practicalRounding.ts in the domain package) then rounds any
+ * fractional Count-category item (e.g. 2.25 eggs) up to a buyable whole amount, same as every
+ * other shopping-list-producing route.
  */
 export function serializeEventPlan(
   eventPlan: EventPlan,
   categoryOverrides: ReadonlyMap<string, GroceryCategory> = new Map(),
   pantryStock: ReadonlyMap<string, Quantity> = new Map()
 ) {
-  const shoppingList = subtractPantryStock(eventPlan.shoppingList, pantryStock);
+  const afterPantry = subtractPantryStock(eventPlan.shoppingList, pantryStock);
+  const shoppingList = applyPracticalRounding(afterPantry);
 
   return {
     guestGroup: {
@@ -140,6 +145,8 @@ export function serializeEventPlan(
       sourceRecipeIds: item.sourceRecipeIds,
       category: resolveCategory(item.ingredientId, item.category, categoryOverrides),
       categoryIsOverridden: categoryOverrides.has(item.ingredientId),
+      mathematicalQuantity: item.mathematicalQuantity.toJSON(),
+      wasRoundedForPurchase: item.wasRoundedForPurchase,
     })),
   };
 }

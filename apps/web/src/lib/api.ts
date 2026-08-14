@@ -87,6 +87,12 @@ export interface ShoppingListItemDto {
   sourceRecipeIds: string[];
   category: string;
   categoryIsOverridden: boolean;
+  mathematicalQuantity: {
+    amount: number;
+    unit: string;
+    category: string;
+  };
+  wasRoundedForPurchase: boolean;
 }
 
 export interface ScaledRecipeDto {
@@ -198,6 +204,12 @@ export interface ShoppingListLineDto {
   checked: boolean;
   category: string;
   categoryIsOverridden: boolean;
+  mathematicalQuantity: {
+    amount: number;
+    unit: string;
+    category: string;
+  };
+  wasRoundedForPurchase: boolean;
 }
 
 export interface ShoppingListDto {

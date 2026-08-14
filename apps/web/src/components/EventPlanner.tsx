@@ -816,7 +816,14 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                             </div>
 
                             <div className="mt-2 sm:mt-0">
-                              <span className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover">
+                              <span
+                                className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover"
+                                title={
+                                  item.wasRoundedForPurchase
+                                    ? `Rounded up for purchase — exact amount needed: ${formatQuantityAmount(item.mathematicalQuantity.amount, item.mathematicalQuantity.unit, item.mathematicalQuantity.category, 'display')} ${item.mathematicalQuantity.unit}`
+                                    : undefined
+                                }
+                              >
                                 {formatQuantityAmount(
                                   item.quantity.amount,
                                   item.quantity.unit,
@@ -824,6 +831,11 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                                   'consolidated'
                                 )}{' '}
                                 {item.quantity.unit}
+                                {item.wasRoundedForPurchase && (
+                                  <sup className="ml-0.5 text-[10px] font-normal text-clay-hover/70">
+                                    *
+                                  </sup>
+                                )}
                               </span>
                             </div>
                           </div>

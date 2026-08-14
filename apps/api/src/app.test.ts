@@ -1409,6 +1409,123 @@ describe('CookOut AI API Endpoints', () => {
     });
   });
 
+  describe('Practical Scaling v2 (Non-Linear Rounding)', () => {
+    it('rounds a fractional Count total up to a buyable whole amount in the shopping-list preview', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Omelette',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
+        });
+
+      // Scaling 1 egg (base 4 servings) down to 1 serving yields a mathematical 0.25 egg.
+      const previewRes = await request(app)
+        .post('/api/shopping-list')
+        .send([{ recipeId: recipeRes.body.id, targetServings: 1 }]);
+
+      expect(previewRes.status).toBe(200);
+      expect(previewRes.body.shoppingList).toHaveLength(1);
+      const item = previewRes.body.shoppingList[0];
+      expect(item.quantity).toEqual({ amount: 1, unit: 'egg', category: 'Count' });
+      expect(item.mathematicalQuantity).toEqual({ amount: 0.25, unit: 'egg', category: 'Count' });
+      expect(item.wasRoundedForPurchase).toBe(true);
+    });
+
+    it('leaves an already-whole Count quantity unrounded', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Omelette',
+          baseServings: 2,
+          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' }],
+        });
+
+      const previewRes = await request(app)
+        .post('/api/shopping-list')
+        .send([{ recipeId: recipeRes.body.id, targetServings: 4 }]);
+
+      const item = previewRes.body.shoppingList[0];
+      expect(item.quantity.amount).toBe(4);
+      expect(item.wasRoundedForPurchase).toBe(false);
+      expect(item.mathematicalQuantity.amount).toBe(4);
+    });
+
+    it('never rounds Mass or Volume quantities', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Bread',
+          baseServings: 4,
+          ingredients: [
+            { ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' },
+            { ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' },
+          ],
+        });
+
+      const previewRes = await request(app)
+        .post('/api/shopping-list')
+        .send([{ recipeId: recipeRes.body.id, targetServings: 3 }]);
+
+      for (const item of previewRes.body.shoppingList) {
+        expect(item.wasRoundedForPurchase).toBe(false);
+        expect(item.quantity.amount).toBe(item.mathematicalQuantity.amount);
+      }
+    });
+
+    it('persists the rounded whole amount (not the fractional one) on a saved shopping list', async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Omelette',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
+        });
+
+      const saveRes = await request(app)
+        .post('/api/shopping-lists')
+        .send({
+          name: 'Brunch',
+          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 1 }],
+        });
+
+      // The save response is itself built from the freshly-read-back Prisma row (via
+      // toShoppingListJSON), same as GET — so by the time it's serialized, the persisted
+      // quantity is already whole and `wasRoundedForPurchase` is correctly false here, same as
+      // GET below. The behavior that actually matters — that the *rounded* amount (1), not the
+      // mathematical one (0.25), is what got saved — is what the quantity assertion proves.
+      expect(saveRes.status).toBe(201);
+      expect(saveRes.body.items[0].quantity.amount).toBe(1);
+      expect(saveRes.body.items[0].wasRoundedForPurchase).toBe(false);
+
+      const getRes = await request(app).get(`/api/shopping-lists/${saveRes.body.id}`);
+      expect(getRes.body.items[0].quantity.amount).toBe(1);
+      expect(getRes.body.items[0].wasRoundedForPurchase).toBe(false);
+    });
+
+    it("rounds an event plan's embedded shopping list too (POST /api/events/plan)", async () => {
+      const recipeRes = await request(app)
+        .post('/api/recipes')
+        .send({
+          name: 'Omelette',
+          baseServings: 4,
+          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
+        });
+
+      const planRes = await request(app)
+        .post('/api/events/plan')
+        .send({
+          recipeIds: [recipeRes.body.id],
+          guestGroup: { totalGuests: 1, vegetarianCount: 0, veganCount: 0 },
+        });
+
+      expect(planRes.body.shoppingList).toHaveLength(1);
+      expect(planRes.body.shoppingList[0].quantity.amount).toBe(1);
+      expect(planRes.body.shoppingList[0].wasRoundedForPurchase).toBe(true);
+      expect(planRes.body.shoppingList[0].mathematicalQuantity.amount).toBe(0.25);
+    });
+  });
+
   describe('Event-linked ShoppingList', () => {
     const validGuestGroup = { totalGuests: 8, vegetarianCount: 0, veganCount: 0 };
 

@@ -1,23 +1,49 @@
-# Practical Scaling (v2 idea — not yet built)
+# Practical Scaling
 
-## One-sentence goal
+## Status: the shopping-list-rounding slice shipped; batch-size recommendation did not
+
+**Shipped** (`packages/domain/src/shopping/practicalRounding.ts`, `applyPracticalRounding()`):
+consolidated shopping-list items in the Count unit category (`count`/`clove`/`egg`/`onion`) are
+rounded up to the nearest whole, buyable amount — "1 egg" instead of "0.25 egg," the headline
+example below. Wired through every shopping-list-producing route (preview, save, event plan,
+regenerate), same as `subtractPantryStock()`. Each item's response carries both the rounded
+`quantity` and the exact `mathematicalQuantity`/`wasRoundedForPurchase` flag, surfaced in the UI
+as a tooltip on the quantity badge.
+
+**Deliberately built differently than originally proposed below**: instead of a curated
+80-100-ingredient dataset keyed by `ingredientId`, atomicity is read directly off
+`quantity.category === Count`. `ingredientId` is free-form text (user-typed or AI-extracted), not
+a controlled vocabulary — a dataset keyed by it would silently miss most real recipes. The Count
+unit registry, by contrast, is already a small, controlled set, and every unit in it is inherently
+atomic (see `units.ts`'s own note on this). This reuses a distinction the domain already modeled
+rather than inventing a second one.
+
+**Not built, still open**: the "batch-size recommendation" idea (searching candidate serving
+sizes 1/1.5/2/3/4 for the one that minimizes a rounding-waste cost score, e.g. "make 8 servings
+instead of 6"). This conflicts with how EventPlanner already works today — a host plans for an
+exact guest count, so recommending a _different_ batch size is a real product-design question,
+not just an engineering one. The ingredient-behavior/policy layer, the curated dataset, and the
+AI-explanation layer from the original design direction below were also not built — the Count/
+Mass/Volume distinction turned out to cover the concrete, shippable part of this idea without them.
+
+## One-sentence goal (original)
 
 Practical Scaling augments mathematical recipe scaling with deterministic
 cooking heuristics to produce recommendations that are more usable in a
 home kitchen — e.g. recommending "use 1 egg, make 2 servings" instead of
 "0.25 egg."
 
-## Why this isn't in v1
+## Why this wasn't in v1
 
 Mathematically correct scaling (scaleRecipe()) can produce technically
 accurate but practically uncookable results for indivisible ingredients
 (eggs, whole peppers, bay leaves). This is a real, separate problem from
 unit conversion — but it requires new domain modeling (ingredient
-behavior/policy, a curated ingredient dataset) and is deliberately being
-deferred until v1 (Milestones 1-9) is fully shipped, to protect scope
+behavior/policy, a curated ingredient dataset) and was deliberately
+deferred until v1 (Milestones 1-9) was fully shipped, to protect scope
 discipline.
 
-## Design direction (if/when this gets built)
+## Design direction (if/when the still-open parts get built)
 
 - Layering: Quantity (dumb, food-agnostic) -> Scaling Engine ->
   Ingredient Behavior/Policy -> Practical Scaling -> AI Explanation
@@ -51,8 +77,8 @@ discipline.
   real usage volume this project won't have as a solo/small-audience
   tool — not a v2 feature, keep in mind only as a distant future direction.
 
-## Explicit non-goals for v1
+## Explicit non-goals
 
-Do not implement any of this now. v1 scope is Milestones 1-9 (domain,
-persistence, UI, edit/delete, e2e testing). This file exists only so the
-idea isn't lost.
+The batch-size recommendation search, the curated ingredient-behavior dataset, and the
+AI-explanation layer above remain unbuilt and are not currently planned — see "Status" at the
+top. This file exists so the idea isn't lost, not as a commitment to build the rest of it.

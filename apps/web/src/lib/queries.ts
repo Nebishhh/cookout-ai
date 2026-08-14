@@ -536,7 +536,16 @@ export function useDeleteShoppingList() {
  * all" case (navigator.onLine === false) is already handled by TanStack Query's default
  * networkMode: 'online' behavior — it pauses the mutation without erroring and auto-resumes
  * on reconnect via its built-in onlineManager, with no extra wiring needed here.
+ *
+ * Survives a full page reload while paused/offline (not just an in-memory pause): App.tsx
+ * persists the query client via @tanstack/react-query-persist-client and registers this
+ * mutation's `mutationFn` as a client-level default under `TOGGLE_SHOPPING_LIST_ITEM_MUTATION_KEY`
+ * — required because a persisted, paused mutation is rehydrated from localStorage before any
+ * component (and thus this hook) has mounted, so the mutation cache needs to already know which
+ * function to call. `mutationKey` here must match that registration exactly.
  */
+export const TOGGLE_SHOPPING_LIST_ITEM_MUTATION_KEY = ['toggleShoppingListItemChecked'] as const;
+
 export function useToggleShoppingListItemChecked() {
   const queryClient = useQueryClient();
 
@@ -546,6 +555,7 @@ export function useToggleShoppingListItemChecked() {
     { listId: string; itemId: string; checked: boolean },
     { previousChecked?: boolean }
   >({
+    mutationKey: [...TOGGLE_SHOPPING_LIST_ITEM_MUTATION_KEY],
     mutationFn: ({ listId, itemId, checked }) =>
       api.toggleShoppingListItem(listId, itemId, checked),
     retry: 3,

@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import App from './App';
 import { RecipeForm } from './components/RecipeForm';
 
@@ -775,6 +775,122 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       { timeout: 5000 }
     );
     expect(itemCheckbox).toBeChecked();
+  });
+
+  it('checkbox toggle paused by a full offline state survives a simulated page reload and fires once back online', async () => {
+    // Distinct from the transient-failure retry test above: this simulates the browser
+    // genuinely reporting itself offline (onlineManager.setOnline(false)), which makes
+    // TanStack Query pause the mutation entirely rather than attempt-and-fail it, PLUS a full
+    // unmount/remount of <App /> (a real page reload would tear down all in-memory React/query
+    // state) — proving the paused mutation survives via the localStorage persister + resumed
+    // via queryClient.resumePausedMutations(), not just via in-memory pause/resume.
+    const savedList = {
+      id: 'list-1',
+      name: 'Weekly Groceries',
+      eventId: null,
+      items: [
+        {
+          id: 'item-1',
+          ingredientId: 'milk',
+          displayName: 'Whole Milk',
+          quantity: { amount: 473.176, unit: 'ml', category: 'Volume' },
+          sourceRecipeIds: ['r1'],
+          checked: false,
+          category: 'Dairy',
+        },
+      ],
+    };
+
+    const patchCalls: Array<{ checked: boolean }> = [];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const u = url.toString();
+      if (u.includes('/api/recipes')) {
+        return recipesGetResponse(u, []);
+      }
+      if (u.endsWith('/api/shopping-lists') && (!options?.method || options.method === 'GET')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => [savedList],
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-lists/list-1/items/item-1') && options?.method === 'PATCH') {
+        const body = JSON.parse(options?.body as string) as { checked: boolean };
+        patchCalls.push(body);
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ id: 'item-1', checked: body.checked }),
+        } as Response;
+      }
+      if (u.endsWith('/api/shopping-lists/list-1')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            ...savedList,
+            items: [{ ...savedList.items[0], checked: patchCalls.length > 0 }],
+          }),
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    const firstRender = render(<App />);
+
+    // Load the saved list while still online — a real user opens their list before losing
+    // connectivity, not the other way around; the initial GET itself would also pause under
+    // networkMode: 'online' if issued while offline.
+    fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
+    fireEvent.click(await screen.findByText('Weekly Groceries'));
+
+    const itemCheckbox = await screen.findByRole('checkbox', {
+      name: /mark whole milk as purchased/i,
+    });
+
+    onlineManager.setOnline(false);
+    try {
+      fireEvent.click(itemCheckbox);
+
+      // Optimistic update flushes even while paused/offline.
+      await waitFor(() => {
+        expect(itemCheckbox).toBeChecked();
+      });
+
+      // Mutation is paused, not failed — no PATCH attempt yet.
+      expect(patchCalls).toHaveLength(0);
+
+      // Wait for the throttled persister write to flush the paused mutation to localStorage.
+      await waitFor(
+        () => {
+          const persisted = Object.keys(window.localStorage).some((key) =>
+            (window.localStorage.getItem(key) || '').includes('toggleShoppingListItemChecked')
+          );
+          expect(persisted).toBe(true);
+        },
+        { timeout: 3000 }
+      );
+
+      // Simulate a page reload: tear down all in-memory React/query state.
+      firstRender.unmount();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+
+    // Fresh mount == fresh QueryClient, rehydrated only from localStorage.
+    render(<App />);
+
+    await waitFor(
+      () => {
+        expect(patchCalls).toHaveLength(1);
+      },
+      { timeout: 5000 }
+    );
+    expect(patchCalls[0]).toEqual({ checked: true });
   });
 
   it("RecipeList's paginated fetch and the shared full-list fetch (ShoppingListBuilder/EventPlanner) are each cached independently across tab switches", async () => {

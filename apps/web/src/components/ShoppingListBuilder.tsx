@@ -356,6 +356,11 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                                     ? 'border-stone/60 bg-canvas text-ink-muted'
                                     : 'border-clay/30 bg-clay-light text-clay-hover'
                                 }`}
+                                title={
+                                  item.wasRoundedForPurchase
+                                    ? `Rounded up for purchase — exact amount needed: ${formatQuantityAmount(item.mathematicalQuantity.amount, item.mathematicalQuantity.unit, item.mathematicalQuantity.category, 'display')} ${item.mathematicalQuantity.unit}`
+                                    : undefined
+                                }
                               >
                                 {formatQuantityAmount(
                                   item.quantity.amount,
@@ -364,6 +369,11 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                                   'consolidated'
                                 )}{' '}
                                 {item.quantity.unit}
+                                {item.wasRoundedForPurchase && (
+                                  <sup className="ml-0.5 text-[10px] font-normal text-clay-hover/70">
+                                    *
+                                  </sup>
+                                )}
                               </span>
                             </div>
                           );
@@ -626,7 +636,14 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                               </div>
 
                               <div className="mt-2 sm:mt-0">
-                                <span className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover">
+                                <span
+                                  className="rounded-xl border border-clay/30 bg-clay-light px-4 py-2 font-mono text-sm font-semibold text-clay-hover"
+                                  title={
+                                    item.wasRoundedForPurchase
+                                      ? `Rounded up for purchase — exact amount needed: ${formatQuantityAmount(item.mathematicalQuantity.amount, item.mathematicalQuantity.unit, item.mathematicalQuantity.category, 'display')} ${item.mathematicalQuantity.unit}`
+                                      : undefined
+                                  }
+                                >
                                   {formatQuantityAmount(
                                     item.quantity.amount,
                                     item.quantity.unit,
@@ -634,6 +651,11 @@ export const ShoppingListBuilder: React.FC<ShoppingListBuilderProps> = ({
                                     'consolidated'
                                   )}{' '}
                                   {item.quantity.unit}
+                                  {item.wasRoundedForPurchase && (
+                                    <sup className="ml-0.5 text-[10px] font-normal text-clay-hover/70">
+                                      *
+                                    </sup>
+                                  )}
                                 </span>
                               </div>
                             </div>

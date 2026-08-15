@@ -51,6 +51,8 @@ import {
   parseRecipeTextWithGemini,
   parseRecipeTextWithGeminiTimeout,
   parseGuestGroupWithGeminiTimeout,
+  isGeminiRateLimitError,
+  GEMINI_RATE_LIMIT_MESSAGE,
 } from './geminiClient.js';
 import { extractRecipeCandidate } from './aiRecipeExtraction.js';
 import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js';
@@ -111,6 +113,9 @@ app.post('/api/recipes/import-text', async (req: Request, res: Response, next: N
         parseRecipeTextWithGemini(text, reinforceShape)
       );
     } catch (err) {
+      if (isGeminiRateLimitError(err)) {
+        return res.status(429).json({ error: 'RateLimited', message: GEMINI_RATE_LIMIT_MESSAGE });
+      }
       const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
       return res.status(502).json({
         error: 'BadGateway',
@@ -268,6 +273,9 @@ app.post('/api/recipes/import-url', async (req: Request, res: Response, next: Ne
         parseRecipeTextWithGeminiTimeout(extractedText, undefined, reinforceShape)
       );
     } catch (err) {
+      if (isGeminiRateLimitError(err)) {
+        return res.status(429).json({ error: 'RateLimited', message: GEMINI_RATE_LIMIT_MESSAGE });
+      }
       const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
       return res.status(502).json({
         error: 'BadGateway',
@@ -722,6 +730,11 @@ app.post(
         try {
           rawAiResponse = await parseGuestGroupWithGeminiTimeout(description);
         } catch (err) {
+          if (isGeminiRateLimitError(err)) {
+            return res
+              .status(429)
+              .json({ error: 'RateLimited', message: GEMINI_RATE_LIMIT_MESSAGE });
+          }
           const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
           return res.status(502).json({
             error: 'BadGateway',

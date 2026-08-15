@@ -1,7 +1,11 @@
 import type { Request, Response } from 'express';
 import { DomainError } from '@cookout-ai/domain';
 import { parseAndValidateImageStream, ImageValidationError } from './imageValidator.js';
-import { parseRecipeImageWithGeminiTimeout } from './geminiClient.js';
+import {
+  parseRecipeImageWithGeminiTimeout,
+  isGeminiRateLimitError,
+  GEMINI_RATE_LIMIT_MESSAGE,
+} from './geminiClient.js';
 import {
   validateAndCreateDomainRecipe,
   stepsFromInstructions,
@@ -113,6 +117,11 @@ export async function handleImportImage(req: Request, res: Response): Promise<vo
         error: error.errorName,
         message: error.message,
       });
+      return;
+    }
+
+    if (isGeminiRateLimitError(error)) {
+      res.status(429).json({ error: 'RateLimited', message: GEMINI_RATE_LIMIT_MESSAGE });
       return;
     }
 

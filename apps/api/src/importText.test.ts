@@ -4,8 +4,11 @@ import { app } from './app.js';
 import { prisma } from './prisma.js';
 import * as geminiClientModule from './geminiClient.js';
 
-// Mock geminiClient module so tests never make real network API calls
-vi.mock('./geminiClient.js', () => ({
+// Mock geminiClient module so tests never make real network API calls. Keeps the real
+// isGeminiRateLimitError/GEMINI_RATE_LIMIT_MESSAGE exports (pure helpers, no network call) via
+// importActual, since app.ts imports those directly and would otherwise get `undefined`.
+vi.mock('./geminiClient.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./geminiClient.js')>()),
   parseRecipeTextWithGemini: vi.fn(),
   parseRecipeTextWithGeminiTimeout: vi.fn(),
 }));
@@ -260,6 +263,32 @@ describe('POST /api/recipes/import-text', () => {
     expect(response.status).toBe(502);
     expect(response.body.error).toBe('BadGateway');
     expect(response.body.message).toContain('Network timeout');
+  });
+
+  it('returns a clean 429 message (not the raw upstream error blob) when Gemini rate-limits the request', async () => {
+    const { ApiError } = await import('@google/genai');
+    vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockRejectedValue(
+      new ApiError({
+        status: 429,
+        message: JSON.stringify({
+          error: {
+            code: 429,
+            message: 'You exceeded your current quota, please check your plan and billing details.',
+            status: 'RESOURCE_EXHAUSTED',
+          },
+        }),
+      })
+    );
+
+    const response = await request(app)
+      .post('/api/recipes/import-text')
+      .send({ text: 'Recipe text' });
+
+    expect(response.status).toBe(429);
+    expect(response.body.error).toBe('RateLimited');
+    expect(response.body.message).not.toContain('RESOURCE_EXHAUSTED');
+    expect(response.body.message).not.toContain('quota');
+    expect(response.body.message).toMatch(/wait a minute and try again/i);
   });
 
   it('returns 422 with domain error when Gemini returns an invalid unit (e.g. "pinch")', async () => {

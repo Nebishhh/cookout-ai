@@ -1,4 +1,21 @@
-import { GoogleGenAI, Type, type Schema } from '@google/genai';
+import { GoogleGenAI, Type, ApiError, type Schema } from '@google/genai';
+
+/**
+ * Detects a Gemini quota/rate-limit rejection (HTTP 429, `RESOURCE_EXHAUSTED`) specifically, as
+ * opposed to any other upstream failure. The SDK throws its own `ApiError` (status = the HTTP
+ * status code) for these — checked via `instanceof`/`.status` rather than string-matching
+ * `.message`, since `.message` on a live `ApiError` is the raw JSON-stringified error body
+ * (quota metrics, a Google Cloud console link, project-level detail) that every caller of this
+ * function exists specifically to avoid handing straight to an end user. See
+ * `docs/COOKOUT_STRATEGY.md` §6 — discovered via a live volume re-check of AI-import
+ * reliability, not hypothetically.
+ */
+export function isGeminiRateLimitError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 429;
+}
+
+export const GEMINI_RATE_LIMIT_MESSAGE =
+  'AI import is temporarily busy (rate-limited by the upstream AI provider). Please wait a minute and try again.';
 
 const GEMINI_SYSTEM_PROMPT = `You are a specialized AI recipe extractor for CookOut AI.
 Your task is to parse raw recipe input (text, web page content, handwritten notes, or recipe cards) into a clean, structured JSON format.

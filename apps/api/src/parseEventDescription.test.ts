@@ -4,7 +4,8 @@ import { app } from './app.js';
 import * as geminiClientModule from './geminiClient.js';
 
 // Mock geminiClient module so tests never make real network API calls
-vi.mock('./geminiClient.js', () => ({
+vi.mock('./geminiClient.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./geminiClient.js')>()),
   parseGuestGroupWithGeminiTimeout: vi.fn(),
 }));
 
@@ -114,6 +115,27 @@ describe('POST /api/events/parse-description', () => {
     expect(response.status).toBe(502);
     expect(response.body.error).toBe('BadGateway');
     expect(response.body.message).toContain('timed out');
+  });
+
+  it('returns a clean 429 message (not the raw upstream error blob) when Gemini rate-limits the request', async () => {
+    const { ApiError } = await import('@google/genai');
+    vi.mocked(geminiClientModule.parseGuestGroupWithGeminiTimeout).mockRejectedValue(
+      new ApiError({
+        status: 429,
+        message: JSON.stringify({
+          error: { code: 429, message: 'quota exceeded', status: 'RESOURCE_EXHAUSTED' },
+        }),
+      })
+    );
+
+    const response = await request(app)
+      .post('/api/events/parse-description')
+      .send({ description: 'twenty five friends, five vegetarian' });
+
+    expect(response.status).toBe(429);
+    expect(response.body.error).toBe('RateLimited');
+    expect(response.body.message).not.toContain('RESOURCE_EXHAUSTED');
+    expect(response.body.message).not.toContain('quota exceeded');
   });
 
   it('returns 502 BadGateway when Gemini returns non-JSON text', async () => {

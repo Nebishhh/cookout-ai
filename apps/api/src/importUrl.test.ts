@@ -6,7 +6,8 @@ import { prisma } from './prisma.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
 import * as geminiModule from './geminiClient.js';
 
-vi.mock('./geminiClient.js', () => ({
+vi.mock('./geminiClient.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./geminiClient.js')>()),
   parseRecipeTextWithGemini: vi.fn(),
   parseRecipeTextWithGeminiTimeout: vi.fn(),
 }));
@@ -347,6 +348,49 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       expect(res.status).toBe(502);
       expect(res.body.error).toBe('BadGateway');
       expect(res.body.message).toContain('Gemini API request timed out');
+    });
+
+    it('returns a clean 429 message (not the raw upstream error blob) when Gemini rate-limits the request', async () => {
+      vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
+        { address: '93.184.216.34', family: 4 },
+      ] as unknown as dns.LookupAddress);
+
+      const validHtml = `
+        <html>
+          <head>
+            <script type="application/ld+json">
+              { "@type": "Recipe", "name": "Rate Limited Recipe", "recipeIngredient": ["1 egg"] }
+            </script>
+          </head>
+        </html>
+      `;
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        body: null,
+        text: async () => validHtml,
+      } as Response);
+
+      const { ApiError } = await import('@google/genai');
+      vi.mocked(geminiModule.parseRecipeTextWithGeminiTimeout).mockRejectedValueOnce(
+        new ApiError({
+          status: 429,
+          message: JSON.stringify({
+            error: { code: 429, message: 'quota exceeded', status: 'RESOURCE_EXHAUSTED' },
+          }),
+        })
+      );
+
+      const res = await request(app)
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/rate-limited' });
+
+      expect(res.status).toBe(429);
+      expect(res.body.error).toBe('RateLimited');
+      expect(res.body.message).not.toContain('RESOURCE_EXHAUSTED');
+      expect(res.body.message).not.toContain('quota exceeded');
     });
 
     it('executes full pipeline successfully (200 OK) for mocked fetch + valid JSON-LD and invokes parseRecipeTextWithGemini exactly once', async () => {

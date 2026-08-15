@@ -205,6 +205,27 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
     });
   });
 
+  it('returns a clean 429 message (not the raw upstream error blob) when Gemini rate-limits the request', async () => {
+    const { ApiError } = await import('@google/genai');
+    vi.spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout').mockRejectedValue(
+      new ApiError({
+        status: 429,
+        message: JSON.stringify({
+          error: { code: 429, message: 'quota exceeded', status: 'RESOURCE_EXHAUSTED' },
+        }),
+      })
+    );
+
+    const res = await request(app)
+      .post('/api/recipes/import-image')
+      .attach('file', VALID_JPEG_BUFFER, { filename: 'recipe.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(429);
+    expect(res.body.error).toBe('RateLimited');
+    expect(res.body.message).not.toContain('RESOURCE_EXHAUSTED');
+    expect(res.body.message).not.toContain('quota exceeded');
+  });
+
   it('11. returns 502 ExtractionError when Gemini response returns malformed non-JSON text', async () => {
     const geminiSpy = vi
       .spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout')

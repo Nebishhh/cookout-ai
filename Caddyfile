@@ -1,0 +1,7 @@
+{
+	email you@example.com
+}
+
+your-domain.example.com {
+	reverse_proxy app:3001
+}

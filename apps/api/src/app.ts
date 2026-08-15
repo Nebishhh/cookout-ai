@@ -1,5 +1,8 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import {
   DOMAIN_PACKAGE_NAME,
   scaleRecipe,
@@ -59,11 +62,23 @@ import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
 import { handleImportImage } from './importImage.js';
 import { errorHandler, NotFoundError } from './middleware/errorHandler.js';
+import { accessGate } from './middleware/accessGate.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Gated on NODE_ENV=production for the same reason as the static-serving block below:
+// local dev (`npm run dev`) and the test suite never set APP_ACCESS_PASSWORD, and
+// accessGate fails closed (500) when it's unset — applying the gate unconditionally
+// would break every existing route in dev/test, not just deployed instances.
+if (process.env.NODE_ENV === 'production') {
+  app.use(accessGate);
+}
 
 // Health Check
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -77,7 +92,11 @@ app.get('/api/health', (_req: Request, res: Response) => {
 
 /**
  * Open Question / Scope Notes:
- * - No authentication/authorization exists yet — anyone can create or read any recipe.
+ * - `accessGate` (see middleware/accessGate.ts) is a deliberate stopgap, not real
+ *   authorization: one shared password behind APP_ACCESS_PASSWORD, meant to keep
+ *   strangers out of a deployed instance. There is still no per-user identity or data
+ *   isolation — anyone who has the password can create or read any recipe. Real
+ *   multi-user auth (accounts, `userId` scoping) is a separate, not-yet-built project.
  */
 
 /**
@@ -1396,6 +1415,27 @@ app.delete('/api/pantry/:ingredientId', async (req: Request, res: Response, next
     next(err);
   }
 });
+
+/**
+ * Serve the built frontend (apps/web/dist) from the same origin as the API, so
+ * VITE_API_BASE_URL can stay unset in production and calls stay same-origin.
+ * Gated on NODE_ENV=production AND the dist actually existing, so local dev
+ * (separate Vite dev server on :3000) and any misconfigured non-production run
+ * are completely unaffected — this never runs during `npm run dev` or in CI.
+ * The fallback route's negative lookahead excludes /api/* so it can never shadow
+ * an API route or turn an unmatched /api/* request into an HTML response. Hash-based
+ * routing (#recipes, #shopping-list, #event-planner) means only `/` needs to resolve
+ * to index.html — there's no server-side deep path to reconstruct.
+ */
+const webDistPath = path.resolve(__dirname, '../../web/dist');
+const webIndexHtmlPath = path.join(webDistPath, 'index.html');
+
+if (process.env.NODE_ENV === 'production' && fs.existsSync(webIndexHtmlPath)) {
+  app.use(express.static(webDistPath));
+  app.get(/^\/(?!api\/).*/, (_req: Request, res: Response) => {
+    res.sendFile(webIndexHtmlPath);
+  });
+}
 
 // Central error handling middleware
 app.use(errorHandler);

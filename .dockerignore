@@ -1,0 +1,31 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.vite
+**/.vite
+coverage
+**/coverage
+test-results
+**/test-results
+playwright-report
+**/playwright-report
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# SQLite artifacts — never bake dev/test data into the image
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+prisma/dev.db
+prisma/test.db
+prisma/e2e.db
+
+# Secrets — never in the build context
+.env
+.env.local
+.env.*.local
+
+.git
+.github

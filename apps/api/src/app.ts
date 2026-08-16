@@ -1,5 +1,6 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -62,23 +63,48 @@ import { fetchRecipeHtml, SsrfValidationError, FetchError } from './ssrfGuard.js
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
 import { handleImportImage } from './importImage.js';
 import { errorHandler, NotFoundError } from './middleware/errorHandler.js';
-import { accessGate } from './middleware/accessGate.js';
+import { requireAuth } from './middleware/requireAuth.js';
+import { csrfGuard } from './middleware/csrfGuard.js';
+import { getAllowedOrigins } from './allowedOrigins.js';
+import {
+  signup as createUserAccount,
+  login as verifyUserCredentials,
+  validateSignupInput,
+  createSession,
+  deleteSession,
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_MS,
+  InvalidCredentialsError,
+  EmailAlreadyRegisteredError,
+} from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const app = express();
 
-app.use(cors());
+// A credentialed cookie session requires CORS to echo a specific allowed origin rather
+// than the previous blanket `*` — `getAllowedOrigins()` is shared with csrfGuard.ts so
+// both layers agree on exactly which origins are trusted (ALLOWED_ORIGINS env var,
+// comma-separated; defaults to the Vite dev server's origin).
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || getAllowedOrigins().includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
+app.use(cookieParser());
 
-// Gated on NODE_ENV=production for the same reason as the static-serving block below:
-// local dev (`npm run dev`) and the test suite never set APP_ACCESS_PASSWORD, and
-// accessGate fails closed (500) when it's unset — applying the gate unconditionally
-// would break every existing route in dev/test, not just deployed instances.
-if (process.env.NODE_ENV === 'production') {
-  app.use(accessGate);
-}
+// CSRF defense for cookie-authenticated state-changing requests (on top of the
+// SameSite=Lax session cookie set below) — applied to the whole /api surface, including
+// /api/auth/login and /api/auth/signup themselves, since login CSRF is a distinct attack.
+app.use('/api', csrfGuard);
 
 // Health Check
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -90,14 +116,76 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
-/**
- * Open Question / Scope Notes:
- * - `accessGate` (see middleware/accessGate.ts) is a deliberate stopgap, not real
- *   authorization: one shared password behind APP_ACCESS_PASSWORD, meant to keep
- *   strangers out of a deployed instance. There is still no per-user identity or data
- *   isolation — anyone who has the password can create or read any recipe. Real
- *   multi-user auth (accounts, `userId` scoping) is a separate, not-yet-built project.
- */
+const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: 'lax' as const,
+  secure: process.env.NODE_ENV === 'production',
+  maxAge: SESSION_TTL_MS,
+  path: '/',
+};
+
+// POST /api/auth/signup — create an account and log in immediately.
+app.post('/api/auth/signup', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, password } = validateSignupInput(req.body?.email, req.body?.password);
+    const user = await createUserAccount(email, password);
+    const { rawToken } = await createSession(user.id);
+    res.cookie(SESSION_COOKIE_NAME, rawToken, SESSION_COOKIE_OPTIONS);
+    res.status(201).json(user);
+  } catch (err) {
+    if (err instanceof InvalidCredentialsError) {
+      return res.status(400).json({ error: err.name, message: err.message });
+    }
+    if (err instanceof EmailAlreadyRegisteredError) {
+      return res.status(409).json({ error: err.name, message: err.message });
+    }
+    next(err);
+  }
+});
+
+// POST /api/auth/login
+app.post('/api/auth/login', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, password } = req.body || {};
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      return res
+        .status(400)
+        .json({ error: 'BadRequest', message: 'Email and password are required.' });
+    }
+    const user = await verifyUserCredentials(email, password);
+    const { rawToken } = await createSession(user.id);
+    res.cookie(SESSION_COOKIE_NAME, rawToken, SESSION_COOKIE_OPTIONS);
+    res.status(200).json(user);
+  } catch (err) {
+    if (err instanceof InvalidCredentialsError) {
+      return res.status(401).json({ error: err.name, message: err.message });
+    }
+    next(err);
+  }
+});
+
+// POST /api/auth/logout — idempotent; clears the cookie regardless of session validity.
+app.post('/api/auth/logout', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rawToken = req.cookies?.[SESSION_COOKIE_NAME];
+    if (typeof rawToken === 'string' && rawToken !== '') {
+      await deleteSession(rawToken);
+    }
+    res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/auth/me — how the frontend discovers "am I logged in" on load.
+app.get('/api/auth/me', requireAuth, (req: Request, res: Response) => {
+  res.json(req.user);
+});
+
+// Every route registered from this point on requires a valid session. /api/health and
+// /api/auth/* above are the only exemptions (mounted before this line).
+app.use('/api', requireAuth);
 
 /**
  * Open Question / Scope Notes for Recipe Import:
@@ -384,6 +472,7 @@ app.post('/api/recipes', async (req: Request, res: Response, next: NextFunction)
     const createdPrismaRecipe = await prisma.recipe.create({
       data: {
         id: domainRecipe.id,
+        userId: req.user!.id,
         name: domainRecipe.name,
         baseServings: domainRecipe.baseServings,
         dietaryTagsJson: JSON.stringify(domainRecipe.dietaryTags),
@@ -435,6 +524,7 @@ app.get('/api/recipes', async (req: Request, res: Response, next: NextFunction) 
 
     if (typeof limitRaw !== 'string') {
       const prismaRecipes = await prisma.recipe.findMany({
+        where: { userId: req.user!.id },
         include: {
           ingredients: true,
           steps: true,
@@ -454,7 +544,7 @@ app.get('/api/recipes', async (req: Request, res: Response, next: NextFunction) 
       throw new InvalidRecipeError(`Invalid limit: "${limitRaw}". Must be a positive integer.`);
     }
 
-    const andClauses: Prisma.RecipeWhereInput[] = [];
+    const andClauses: Prisma.RecipeWhereInput[] = [{ userId: req.user!.id }];
 
     if (typeof search === 'string' && search.trim().length > 0) {
       andClauses.push({ name: { contains: search.trim() } });
@@ -511,8 +601,8 @@ app.get('/api/recipes', async (req: Request, res: Response, next: NextFunction) 
 app.get('/api/recipes/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
-    const prismaRecipe = await prisma.recipe.findUnique({
-      where: { id },
+    const prismaRecipe = await prisma.recipe.findFirst({
+      where: { id, userId: req.user!.id },
       include: {
         ingredients: true,
         steps: true,
@@ -535,9 +625,10 @@ app.put('/api/recipes/:id', async (req: Request, res: Response, next: NextFuncti
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
 
-    // 1. Check if recipe exists
-    const existingRecipe = await prisma.recipe.findUnique({
-      where: { id },
+    // 1. Check if recipe exists AND is owned by the caller — a wrong-owner id 404s exactly
+    // like a nonexistent one, so ownership is never leaked via a different status code.
+    const existingRecipe = await prisma.recipe.findFirst({
+      where: { id, userId: req.user!.id },
     });
     if (!existingRecipe) {
       throw new NotFoundError(`Recipe with id "${id}" not found.`);
@@ -602,8 +693,8 @@ app.delete('/api/recipes/:id', async (req: Request, res: Response, next: NextFun
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
 
-    const existingRecipe = await prisma.recipe.findUnique({
-      where: { id },
+    const existingRecipe = await prisma.recipe.findFirst({
+      where: { id, userId: req.user!.id },
     });
     if (!existingRecipe) {
       throw new NotFoundError(`Recipe with id "${id}" not found.`);
@@ -637,8 +728,8 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
       const recipeId = String(entry.recipeId);
       const targetServings = entry.targetServings;
 
-      const prismaRecipe = await prisma.recipe.findUnique({
-        where: { id: recipeId },
+      const prismaRecipe = await prisma.recipe.findFirst({
+        where: { id: recipeId, userId: req.user!.id },
         include: {
           ingredients: true,
           steps: true,
@@ -659,10 +750,10 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
 
     // Consolidate shopping list reusing consolidateShoppingList() from @cookout-ai/domain
     const consolidatedList = consolidateShoppingList(scaledRecipes);
-    const pantryStock = await getPantryStockMap();
+    const pantryStock = await getPantryStockMap(req.user!.id);
     const afterPantry = subtractPantryStock(consolidatedList, pantryStock);
     const practicallyRounded = applyPracticalRounding(afterPantry);
-    const categoryOverrides = await getCategoryOverridesMap();
+    const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
 
     res.status(200).json({
       shoppingList: practicallyRounded.map((item) => ({
@@ -852,8 +943,8 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
         throw new InvalidRecipeError(`Invalid recipeId in array: ${id}`);
       }
 
-      const prismaRecipe = await prisma.recipe.findUnique({
-        where: { id },
+      const prismaRecipe = await prisma.recipe.findFirst({
+        where: { id, userId: req.user!.id },
         include: {
           ingredients: true,
           steps: true,
@@ -873,8 +964,8 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
     const eventPlan = planEventShoppingList(recipes, guestGroup);
 
     // 5. Serialize EventPlan to JSON output
-    const categoryOverrides = await getCategoryOverridesMap();
-    const pantryStock = await getPantryStockMap();
+    const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
+    const pantryStock = await getPantryStockMap(req.user!.id);
     res.status(200).json(serializeEventPlan(eventPlan, categoryOverrides, pantryStock));
   } catch (err) {
     next(err);
@@ -897,6 +988,7 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
     const createdPrismaEvent = await prisma.event.create({
       data: {
         id: domainEvent.id,
+        userId: req.user!.id,
         name: domainEvent.name,
         totalGuests: domainEvent.guestGroup.totalGuests,
         vegetarianCount: domainEvent.guestGroup.vegetarianCount,
@@ -909,8 +1001,8 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
 
     const recipes = [];
     for (const id of reconstructedEvent.recipeIds) {
-      const prismaRecipe = await prisma.recipe.findUnique({
-        where: { id },
+      const prismaRecipe = await prisma.recipe.findFirst({
+        where: { id, userId: req.user!.id },
         include: { ingredients: true, steps: true },
       });
       if (prismaRecipe) {
@@ -919,8 +1011,8 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
     }
 
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
-    const categoryOverrides = await getCategoryOverridesMap();
-    const pantryStock = await getPantryStockMap();
+    const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
+    const pantryStock = await getPantryStockMap(req.user!.id);
 
     res.status(201).json({
       ...toEventSummaryJSON(reconstructedEvent),
@@ -933,9 +1025,10 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
 });
 
 // GET /api/events — summary shape only, no recomputed plan per row
-app.get('/api/events', async (_req: Request, res: Response, next: NextFunction) => {
+app.get('/api/events', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const prismaEvents = await prisma.event.findMany({
+      where: { userId: req.user!.id },
       include: { shoppingList: { select: { id: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -952,8 +1045,8 @@ app.get('/api/events', async (_req: Request, res: Response, next: NextFunction) 
 app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
-    const prismaEvent = await prisma.event.findUnique({
-      where: { id },
+    const prismaEvent = await prisma.event.findFirst({
+      where: { id, userId: req.user!.id },
       include: { shoppingList: { select: { id: true } } },
     });
 
@@ -966,8 +1059,8 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     const recipes = [];
     const droppedRecipeIds: string[] = [];
     for (const recipeId of domainEvent.recipeIds) {
-      const prismaRecipe = await prisma.recipe.findUnique({
-        where: { id: recipeId },
+      const prismaRecipe = await prisma.recipe.findFirst({
+        where: { id: recipeId, userId: req.user!.id },
         include: { ingredients: true, steps: true },
       });
       if (prismaRecipe) {
@@ -978,8 +1071,8 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     }
 
     const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
-    const categoryOverrides = await getCategoryOverridesMap();
-    const pantryStock = await getPantryStockMap();
+    const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
+    const pantryStock = await getPantryStockMap(req.user!.id);
 
     res.json({
       ...toEventSummaryJSON(domainEvent, prismaEvent.shoppingList?.id ?? null),
@@ -996,7 +1089,7 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
 
-    const existingEvent = await prisma.event.findUnique({ where: { id } });
+    const existingEvent = await prisma.event.findFirst({ where: { id, userId: req.user!.id } });
     if (!existingEvent) {
       throw new NotFoundError(`Event with id "${id}" not found.`);
     }
@@ -1020,8 +1113,8 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     const recipes = [];
     const droppedRecipeIds: string[] = [];
     for (const recipeId of reconstructedEvent.recipeIds) {
-      const prismaRecipe = await prisma.recipe.findUnique({
-        where: { id: recipeId },
+      const prismaRecipe = await prisma.recipe.findFirst({
+        where: { id: recipeId, userId: req.user!.id },
         include: { ingredients: true, steps: true },
       });
       if (prismaRecipe) {
@@ -1032,8 +1125,8 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     }
 
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
-    const categoryOverrides = await getCategoryOverridesMap();
-    const pantryStock = await getPantryStockMap();
+    const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
+    const pantryStock = await getPantryStockMap(req.user!.id);
 
     res.json({
       ...toEventSummaryJSON(reconstructedEvent, updatedPrismaEvent.shoppingList?.id ?? null),
@@ -1050,7 +1143,7 @@ app.delete('/api/events/:id', async (req: Request, res: Response, next: NextFunc
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
 
-    const existingEvent = await prisma.event.findUnique({ where: { id } });
+    const existingEvent = await prisma.event.findFirst({ where: { id, userId: req.user!.id } });
     if (!existingEvent) {
       throw new NotFoundError(`Event with id "${id}" not found.`);
     }
@@ -1096,8 +1189,8 @@ app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFu
       const recipeId = String(entry.recipeId);
       const targetServings = entry.targetServings;
 
-      const prismaRecipe = await prisma.recipe.findUnique({
-        where: { id: recipeId },
+      const prismaRecipe = await prisma.recipe.findFirst({
+        where: { id: recipeId, userId: req.user!.id },
         include: { ingredients: true, steps: true },
       });
 
@@ -1110,7 +1203,7 @@ app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFu
     }
 
     const consolidatedList = consolidateShoppingList(scaledRecipes);
-    const pantryStock = await getPantryStockMap();
+    const pantryStock = await getPantryStockMap(req.user!.id);
     const afterPantry = subtractPantryStock(consolidatedList, pantryStock);
     const practicallyRounded = applyPracticalRounding(afterPantry);
     const domainLines = buildShoppingListLinesFromConsolidated(practicallyRounded);
@@ -1118,6 +1211,7 @@ app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFu
     const createdPrismaList = await prisma.shoppingList.create({
       data: {
         id: crypto.randomUUID(),
+        userId: req.user!.id,
         name: name.trim(),
         eventId: null,
         items: {
@@ -1136,7 +1230,7 @@ app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFu
     });
 
     const reconstructedList = toDomainShoppingList(createdPrismaList);
-    const categoryOverrides = await getCategoryOverridesMap();
+    const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     res.status(201).json(toShoppingListJSON(reconstructedList, categoryOverrides));
   } catch (err) {
     next(err);
@@ -1158,7 +1252,9 @@ app.put(
         Array.isArray(req.params.eventId) ? req.params.eventId[0] : req.params.eventId
       ) as string;
 
-      const prismaEvent = await prisma.event.findUnique({ where: { id: eventId } });
+      const prismaEvent = await prisma.event.findFirst({
+        where: { id: eventId, userId: req.user!.id },
+      });
       if (!prismaEvent) {
         throw new NotFoundError(`Event with id "${eventId}" not found.`);
       }
@@ -1167,8 +1263,8 @@ app.put(
 
       const recipes = [];
       for (const recipeId of domainEvent.recipeIds) {
-        const prismaRecipe = await prisma.recipe.findUnique({
-          where: { id: recipeId },
+        const prismaRecipe = await prisma.recipe.findFirst({
+          where: { id: recipeId, userId: req.user!.id },
           include: { ingredients: true, steps: true },
         });
         if (prismaRecipe) {
@@ -1177,7 +1273,7 @@ app.put(
       }
 
       const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
-      const pantryStock = await getPantryStockMap();
+      const pantryStock = await getPantryStockMap(req.user!.id);
       const afterPantry = subtractPantryStock(eventPlan.shoppingList, pantryStock);
       const practicallyRounded = applyPracticalRounding(afterPantry);
       const domainLines = buildShoppingListLinesFromConsolidated(practicallyRounded);
@@ -1196,6 +1292,7 @@ app.put(
         return tx.shoppingList.create({
           data: {
             id: crypto.randomUUID(),
+            userId: req.user!.id,
             name: listName,
             eventId,
             items: {
@@ -1214,7 +1311,7 @@ app.put(
         });
       });
 
-      const categoryOverrides = await getCategoryOverridesMap();
+      const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
       res
         .status(200)
         .json(toShoppingListJSON(toDomainShoppingList(newPrismaList), categoryOverrides));
@@ -1225,14 +1322,15 @@ app.put(
 );
 
 // GET /api/shopping-lists — plain DB read, safe to include items (no recompute cost)
-app.get('/api/shopping-lists', async (_req: Request, res: Response, next: NextFunction) => {
+app.get('/api/shopping-lists', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const prismaLists = await prisma.shoppingList.findMany({
+      where: { userId: req.user!.id },
       include: { items: true },
       orderBy: { createdAt: 'desc' },
     });
 
-    const categoryOverrides = await getCategoryOverridesMap();
+    const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     res.json(
       prismaLists.map((l) => toShoppingListJSON(toDomainShoppingList(l), categoryOverrides))
     );
@@ -1245,8 +1343,8 @@ app.get('/api/shopping-lists', async (_req: Request, res: Response, next: NextFu
 app.get('/api/shopping-lists/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
-    const prismaList = await prisma.shoppingList.findUnique({
-      where: { id },
+    const prismaList = await prisma.shoppingList.findFirst({
+      where: { id, userId: req.user!.id },
       include: { items: true },
     });
 
@@ -1254,7 +1352,7 @@ app.get('/api/shopping-lists/:id', async (req: Request, res: Response, next: Nex
       throw new NotFoundError(`Shopping list with id "${id}" not found.`);
     }
 
-    const categoryOverrides = await getCategoryOverridesMap();
+    const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     res.json(toShoppingListJSON(toDomainShoppingList(prismaList), categoryOverrides));
   } catch (err) {
     next(err);
@@ -1266,7 +1364,9 @@ app.delete('/api/shopping-lists/:id', async (req: Request, res: Response, next: 
   try {
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
 
-    const existingList = await prisma.shoppingList.findUnique({ where: { id } });
+    const existingList = await prisma.shoppingList.findFirst({
+      where: { id, userId: req.user!.id },
+    });
     if (!existingList) {
       throw new NotFoundError(`Shopping list with id "${id}" not found.`);
     }
@@ -1297,7 +1397,7 @@ app.patch(
       }
 
       const existingItem = await prisma.shoppingListItem.findFirst({
-        where: { id: itemId, shoppingListId: listId },
+        where: { id: itemId, shoppingListId: listId, shoppingList: { userId: req.user!.id } },
       });
       if (!existingItem) {
         throw new NotFoundError(
@@ -1334,7 +1434,7 @@ app.put(
       ) as string;
       const { category } = req.body || {};
 
-      const saved = await setCategoryOverride(ingredientId, category);
+      const saved = await setCategoryOverride(req.user!.id, ingredientId, category);
       res.status(200).json(saved);
     } catch (err) {
       next(err);
@@ -1353,7 +1453,7 @@ app.delete(
           : req.params.ingredientId
       ) as string;
 
-      await clearCategoryOverride(ingredientId);
+      await clearCategoryOverride(req.user!.id, ingredientId);
       res.status(204).send();
     } catch (err) {
       next(err);
@@ -1362,15 +1462,15 @@ app.delete(
 );
 
 /**
- * Pantry endpoints — a global, standing on-hand quantity per ingredient (see pantryStore.ts).
+ * Pantry endpoints — a per-user, standing on-hand quantity per ingredient (see pantryStore.ts).
  * Read by every shopping-list-producing route via getPantryStockMap() + subtractPantryStock();
  * these three routes are the only place pantry state itself is written.
  */
 
 // GET /api/pantry — list all pantry items, for the pantry-management UI.
-app.get('/api/pantry', async (_req: Request, res: Response, next: NextFunction) => {
+app.get('/api/pantry', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const items = await listPantryItems();
+    const items = await listPantryItems(req.user!.id);
     res.json(
       items.map((item) => ({
         ingredientId: item.ingredientId,
@@ -1391,7 +1491,7 @@ app.put('/api/pantry/:ingredientId', async (req: Request, res: Response, next: N
     ) as string;
     const { displayName, amount, unit } = req.body || {};
 
-    const saved = await setPantryItem(ingredientId, displayName, amount, unit);
+    const saved = await setPantryItem(req.user!.id, ingredientId, displayName, amount, unit);
     res.status(200).json({
       ingredientId: saved.ingredientId,
       displayName: saved.displayName,
@@ -1409,7 +1509,7 @@ app.delete('/api/pantry/:ingredientId', async (req: Request, res: Response, next
       Array.isArray(req.params.ingredientId) ? req.params.ingredientId[0] : req.params.ingredientId
     ) as string;
 
-    await clearPantryItem(ingredientId);
+    await clearPantryItem(req.user!.id, ingredientId);
     res.status(204).send();
   } catch (err) {
     next(err);

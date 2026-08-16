@@ -3,13 +3,14 @@ import { prisma } from './prisma.js';
 
 /**
  * Design Note:
- * Pantry stock is a global, ingredientId-keyed standing fact — same shape as
+ * Pantry stock is a per-user, ingredientId-keyed standing fact — same shape as
  * categoryOverrides.ts's IngredientCategoryOverride, and for the same reason: "how much of
  * this ingredient do I have on hand" isn't scoped to one recipe or one shopping list, it's a
- * fact about the ingredient itself. Amount/unit validation is delegated to the domain
- * Quantity constructor rather than reimplemented here — an invalid unit or negative amount
- * throws a DomainError (InvalidQuantityError/InvalidUnitError), which the error middleware
- * already maps to 400.
+ * fact about the ingredient itself, for that user. (Was globally keyed by ingredientId alone
+ * before multi-tenancy.) Amount/unit validation is delegated to the domain Quantity
+ * constructor rather than reimplemented here — an invalid unit or negative amount throws a
+ * DomainError (InvalidQuantityError/InvalidUnitError), which the error middleware already
+ * maps to 400.
  */
 
 export interface PantryItemResult {
@@ -18,15 +19,15 @@ export interface PantryItemResult {
   quantity: Quantity;
 }
 
-/** Fetches every pantry row as a Map keyed by ingredientId, for a single lookup pass per request. */
-export async function getPantryStockMap(): Promise<Map<string, Quantity>> {
-  const rows = await prisma.pantryItem.findMany();
+/** Fetches the given user's pantry rows as a Map keyed by ingredientId, for a single lookup pass per request. */
+export async function getPantryStockMap(userId: string): Promise<Map<string, Quantity>> {
+  const rows = await prisma.pantryItem.findMany({ where: { userId } });
   return new Map(rows.map((row) => [row.ingredientId, new Quantity(row.amount, row.unit)]));
 }
 
-/** Fetches every pantry row for the pantry-management UI. */
-export async function listPantryItems(): Promise<PantryItemResult[]> {
-  const rows = await prisma.pantryItem.findMany();
+/** Fetches the given user's pantry rows for the pantry-management UI. */
+export async function listPantryItems(userId: string): Promise<PantryItemResult[]> {
+  const rows = await prisma.pantryItem.findMany({ where: { userId } });
   return rows.map((row) => ({
     ingredientId: row.ingredientId,
     displayName: row.displayName,
@@ -36,6 +37,7 @@ export async function listPantryItems(): Promise<PantryItemResult[]> {
 
 /** Upserts on-hand stock for an ingredient. Throws a DomainError for a malformed input. */
 export async function setPantryItem(
+  userId: string,
   ingredientId: string,
   displayName: unknown,
   amount: unknown,
@@ -53,8 +55,9 @@ export async function setPantryItem(
   const quantity = new Quantity(amount as number, unit as string);
 
   const saved = await prisma.pantryItem.upsert({
-    where: { ingredientId },
+    where: { userId_ingredientId: { userId, ingredientId } },
     create: {
+      userId,
       ingredientId,
       displayName: displayName.trim(),
       amount: quantity.amount,
@@ -71,6 +74,6 @@ export async function setPantryItem(
 }
 
 /** Removes a pantry entry (the ingredient is fully needed again). Idempotent. */
-export async function clearPantryItem(ingredientId: string): Promise<void> {
-  await prisma.pantryItem.deleteMany({ where: { ingredientId } });
+export async function clearPantryItem(userId: string, ingredientId: string): Promise<void> {
+  await prisma.pantryItem.deleteMany({ where: { userId, ingredientId } });
 }

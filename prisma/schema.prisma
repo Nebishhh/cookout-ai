@@ -10,11 +10,29 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+  recipes      Recipe[]
+  events       Event[]
+  shoppingLists ShoppingList[]
+  categoryOverrides IngredientCategoryOverride[]
+  pantryItems  PantryItem[]
+}
+
+// `id` stores SHA-256(rawToken), never the raw token itself — the raw token only ever
+// exists in the Set-Cookie header and the browser's cookie jar, so a leaked database
+// can't be replayed as a live session. See apps/api/src/auth.ts's hashToken().
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 // Tradeoff Note: SQLite (via Prisma) does not support native string arrays.
@@ -23,12 +41,16 @@ model User {
 // would be more relationally correct but is out of scope for this milestone.
 model Recipe {
   id              String           @id @default(uuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   name            String
   baseServings    Int
   dietaryTagsJson String           @default("[]")
   createdAt       DateTime         @default(now())
   ingredients     IngredientLine[]
   steps           RecipeStep[]
+
+  @@index([userId])
 }
 
 model IngredientLine {
@@ -66,6 +88,8 @@ model RecipeStep {
 // (filtered out at read time) rather than depending on DB referential integrity.
 model Event {
   id              String        @id @default(uuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   name            String
   totalGuests     Int
   vegetarianCount Int           @default(0)
@@ -73,17 +97,23 @@ model Event {
   recipeIdsJson   String        @default("[]")
   createdAt       DateTime      @default(now())
   shoppingList    ShoppingList?
+
+  @@index([userId])
 }
 
 // eventId is nullable + @unique: usable standalone (null) or attached to at most one
 // Event. Deleting the Event cascades to its linked ShoppingList; the reverse never happens.
 model ShoppingList {
   id        String             @id @default(uuid())
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
   eventId   String?            @unique
   event     Event?             @relation(fields: [eventId], references: [id], onDelete: Cascade)
   createdAt DateTime           @default(now())
   items     ShoppingListItem[]
+
+  @@index([userId])
 }
 
 // Tradeoff Note: sourceRecipeIds is stored as a JSON-encoded string column
@@ -102,24 +132,36 @@ model ShoppingListItem {
 }
 
 // A user-triggered correction to categorizeIngredient()'s keyword-heuristic result, keyed
-// globally by ingredientId (not scoped to one recipe or list) — category is already treated
+// per-user by ingredientId (not scoped to one recipe or list) — category is already treated
 // as a pure function of ingredient identity everywhere else, so a correction here is applied
-// wherever that ingredientId appears, not persisted onto individual ShoppingListItem rows.
+// wherever that ingredientId appears *for that user*, not persisted onto individual
+// ShoppingListItem rows. Was globally keyed by ingredientId alone before multi-tenancy;
+// userId was added to the uniqueness key so each user corrects their own catalog.
 model IngredientCategoryOverride {
-  ingredientId String   @id
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ingredientId String
   category     String
   updatedAt    DateTime @updatedAt
+
+  @@unique([userId, ingredientId])
 }
 
-// A global, standing on-hand quantity per ingredient — one fact per ingredientId, same shape
-// as IngredientCategoryOverride above, resolved server-side and subtracted from every
-// generated shopping list (preview, save, and event-linked regenerate) rather than scoped to
-// one build. Flat amount/unit columns, matching ShoppingListItem's precedent, not a Quantity
-// JSON blob.
+// A per-user, standing on-hand quantity per ingredient — one fact per (userId, ingredientId),
+// same shape as IngredientCategoryOverride above, resolved server-side and subtracted from
+// every generated shopping list (preview, save, and event-linked regenerate) rather than
+// scoped to one build. Flat amount/unit columns, matching ShoppingListItem's precedent, not a
+// Quantity JSON blob. Was globally keyed by ingredientId alone before multi-tenancy.
 model PantryItem {
-  ingredientId String   @id
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ingredientId String
   displayName  String
   amount       Float
   unit         String
   updatedAt    DateTime @updatedAt
+
+  @@unique([userId, ingredientId])
 }

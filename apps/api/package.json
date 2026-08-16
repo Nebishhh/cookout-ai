@@ -15,13 +15,17 @@
     "@cookout-ai/domain": "*",
     "@google/genai": "^2.13.0",
     "@prisma/client": "^6.3.1",
+    "bcryptjs": "^3.0.3",
     "busboy": "^1.6.0",
     "cheerio": "^1.2.0",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "express": "^4.21.2"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/busboy": "^1.5.4",
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/supertest": "^6.0.2",

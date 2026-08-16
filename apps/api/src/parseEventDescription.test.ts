@@ -1,7 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterAll } from 'vitest';
-import request from 'supertest';
-import { app } from './app.js';
 import * as geminiClientModule from './geminiClient.js';
+import { createAuthenticatedAgent, type TestAgent } from './__testHelpers__/testAuth.js';
 
 // Mock geminiClient module so tests never make real network API calls
 vi.mock('./geminiClient.js', async (importOriginal) => ({
@@ -11,10 +10,12 @@ vi.mock('./geminiClient.js', async (importOriginal) => ({
 
 describe('POST /api/events/parse-description', () => {
   const originalApiKey = process.env.GEMINI_API_KEY;
+  let agent: TestAgent;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetAllMocks();
     process.env.GEMINI_API_KEY = 'test-mock-key';
+    ({ agent } = await createAuthenticatedAgent());
   });
 
   afterAll(() => {
@@ -22,7 +23,7 @@ describe('POST /api/events/parse-description', () => {
   });
 
   it('returns 200 via the heuristic when the description is confidently parseable, without calling Gemini', async () => {
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'dinner for 12, 3 vegetarian, 1 vegan' });
 
@@ -41,7 +42,7 @@ describe('POST /api/events/parse-description', () => {
       JSON.stringify({ totalGuests: 9, vegetarianCount: 2, veganCount: 0 })
     );
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'a big family gathering, most eat everything' });
 
@@ -56,13 +57,11 @@ describe('POST /api/events/parse-description', () => {
   });
 
   it('returns 400 when description is missing or empty', async () => {
-    const resMissing = await request(app).post('/api/events/parse-description').send({});
+    const resMissing = await agent.post('/api/events/parse-description').send({});
     expect(resMissing.status).toBe(400);
     expect(resMissing.body.error).toBe('BadRequest');
 
-    const resEmpty = await request(app)
-      .post('/api/events/parse-description')
-      .send({ description: '   ' });
+    const resEmpty = await agent.post('/api/events/parse-description').send({ description: '   ' });
     expect(resEmpty.status).toBe(400);
     expect(resEmpty.body.error).toBe('BadRequest');
 
@@ -70,7 +69,7 @@ describe('POST /api/events/parse-description', () => {
   });
 
   it('returns 400 when description exceeds the length cap', async () => {
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'a'.repeat(501) });
 
@@ -81,7 +80,7 @@ describe('POST /api/events/parse-description', () => {
 
   it('returns 422 when the heuristic extracts a value that violates GuestGroup invariants, without calling Gemini', async () => {
     // veganCount (9) > vegetarianCount (8) — extracted as-is, GuestGroup rejects it.
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'party for 5, 8 vegetarian, 9 vegan' });
 
@@ -95,7 +94,7 @@ describe('POST /api/events/parse-description', () => {
       JSON.stringify({ totalGuests: 4, vegetarianCount: 10, veganCount: 0 })
     );
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'a small gathering of friends' });
 
@@ -108,7 +107,7 @@ describe('POST /api/events/parse-description', () => {
       new Error('Gemini API request timed out after 30 seconds.')
     );
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'some ambiguous gathering' });
 
@@ -128,7 +127,7 @@ describe('POST /api/events/parse-description', () => {
       })
     );
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'twenty five friends, five vegetarian' });
 
@@ -143,7 +142,7 @@ describe('POST /api/events/parse-description', () => {
       'Sorry, I cannot parse this.'
     );
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'some ambiguous gathering' });
 
@@ -160,7 +159,7 @@ describe('POST /api/events/parse-description', () => {
       })
     );
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'we might have some people over sometime' });
 
@@ -172,7 +171,7 @@ describe('POST /api/events/parse-description', () => {
   it('returns 500 ServerConfigurationError when the heuristic is inconclusive and GEMINI_API_KEY is missing, without calling Gemini', async () => {
     delete process.env.GEMINI_API_KEY;
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/events/parse-description')
       .send({ description: 'a big family gathering, most eat everything' });
 

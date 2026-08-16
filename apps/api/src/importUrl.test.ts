@@ -1,10 +1,9 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import request from 'supertest';
 import dns from 'dns';
-import { app } from './app.js';
 import { prisma } from './prisma.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
 import * as geminiModule from './geminiClient.js';
+import { createAuthenticatedAgent, type TestAgent } from './__testHelpers__/testAuth.js';
 
 vi.mock('./geminiClient.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./geminiClient.js')>()),
@@ -13,11 +12,14 @@ vi.mock('./geminiClient.js', async (importOriginal) => ({
 }));
 
 describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
+  let agent: TestAgent;
+
   beforeEach(async () => {
     vi.restoreAllMocks();
     process.env.GEMINI_API_KEY = 'test-gemini-api-key';
     await prisma.ingredientLine.deleteMany();
     await prisma.recipe.deleteMany();
+    ({ agent } = await createAuthenticatedAgent());
   });
 
   describe('extractRecipeText Module Tests', () => {
@@ -157,9 +159,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
 
   describe('SSRF & URL Validation Security Tests', () => {
     it('returns 400 when protocol is non-http/https (e.g. ftp:// or file://)', async () => {
-      const res = await request(app)
-        .post('/api/recipes/import-url')
-        .send({ url: 'file:///etc/passwd' });
+      const res = await agent.post('/api/recipes/import-url').send({ url: 'file:///etc/passwd' });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('SsrfValidationError');
@@ -169,7 +169,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
     it('returns 400 for literal "localhost" hostname before DNS lookup occurs', async () => {
       const dnsSpy = vi.spyOn(dns.promises, 'lookup');
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://localhost:3001/api/recipes' });
 
@@ -184,7 +184,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         { address: '10.0.0.15', family: 4 },
       ] as unknown as dns.LookupAddress);
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://internal.company-server.local/recipe' });
 
@@ -217,7 +217,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         return { ok: false, status: 500 } as Response;
       });
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-redirector.com/recipe' });
 
@@ -241,7 +241,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         } as Response;
       });
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-redirector.com/hop?hop=0' });
 
@@ -262,7 +262,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         text: async () => '%PDF-1.4 PDF content',
       } as Response);
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/recipe.pdf' });
 
@@ -286,7 +286,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         text: async () => oversizedBuffer.toString('utf8'),
       } as Response);
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/huge-recipe.html' });
 
@@ -302,7 +302,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
 
       vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Connection refused'));
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/down' });
 
@@ -341,7 +341,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         new Error('Gemini API request timed out after 30 seconds.')
       );
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/slow' });
 
@@ -383,7 +383,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         })
       );
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/rate-limited' });
 
@@ -439,7 +439,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         .mocked(geminiModule.parseRecipeTextWithGeminiTimeout)
         .mockResolvedValue(mockGeminiJson);
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/guacamole' });
 
@@ -492,7 +492,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         .mocked(geminiModule.parseRecipeTextWithGeminiTimeout)
         .mockResolvedValue(mockInvalidUnitJson);
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/pepper-soup' });
 
@@ -524,7 +524,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         .mocked(geminiModule.parseRecipeTextWithGeminiTimeout)
         .mockResolvedValue('Sorry, I cannot parse this.');
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/broth-soup' });
 
@@ -556,7 +556,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         })
       );
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/not-a-recipe' });
 
@@ -613,7 +613,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         .mockResolvedValueOnce(malformedShapeJSON)
         .mockResolvedValueOnce(validRecipeJSON);
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/guacamole' });
 
@@ -647,7 +647,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         .mocked(geminiModule.parseRecipeTextWithGeminiTimeout)
         .mockResolvedValue(malformedShapeJSON);
 
-      const res = await request(app)
+      const res = await agent
         .post('/api/recipes/import-url')
         .send({ url: 'http://public-recipe.com/broth-soup-again' });
 

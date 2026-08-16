@@ -1,8 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterAll } from 'vitest';
-import request from 'supertest';
-import { app } from './app.js';
 import { prisma } from './prisma.js';
 import * as geminiClientModule from './geminiClient.js';
+import { createAuthenticatedAgent, type TestAgent } from './__testHelpers__/testAuth.js';
 
 // Mock geminiClient module so tests never make real network API calls. Keeps the real
 // isGeminiRateLimitError/GEMINI_RATE_LIMIT_MESSAGE exports (pure helpers, no network call) via
@@ -15,6 +14,7 @@ vi.mock('./geminiClient.js', async (importOriginal) => ({
 
 describe('POST /api/recipes/import-text', () => {
   const originalApiKey = process.env.GEMINI_API_KEY;
+  let agent: TestAgent;
 
   beforeEach(async () => {
     vi.resetAllMocks();
@@ -22,6 +22,7 @@ describe('POST /api/recipes/import-text', () => {
     // Clean test database before each test
     await prisma.ingredientLine.deleteMany();
     await prisma.recipe.deleteMany();
+    ({ agent } = await createAuthenticatedAgent());
   });
 
   afterAll(() => {
@@ -48,7 +49,7 @@ describe('POST /api/recipes/import-text', () => {
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(validRecipeJSON);
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'Spaghetti Carbonara recipe text...' });
 
@@ -90,7 +91,7 @@ describe('POST /api/recipes/import-text', () => {
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(validRecipeJSON);
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'Simple Toast recipe text...' });
 
@@ -117,7 +118,7 @@ describe('POST /api/recipes/import-text', () => {
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(validRecipeJSON);
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'Baked Chicken recipe text...' });
 
@@ -134,12 +135,12 @@ describe('POST /api/recipes/import-text', () => {
   });
 
   it('returns 400 when text is empty or missing', async () => {
-    const responseEmpty = await request(app).post('/api/recipes/import-text').send({ text: '   ' });
+    const responseEmpty = await agent.post('/api/recipes/import-text').send({ text: '   ' });
 
     expect(responseEmpty.status).toBe(400);
     expect(responseEmpty.body.error).toBe('BadRequest');
 
-    const responseMissing = await request(app).post('/api/recipes/import-text').send({});
+    const responseMissing = await agent.post('/api/recipes/import-text').send({});
 
     expect(responseMissing.status).toBe(400);
     expect(responseMissing.body.error).toBe('BadRequest');
@@ -150,7 +151,7 @@ describe('POST /api/recipes/import-text', () => {
   it('returns 500 when GEMINI_API_KEY is not configured', async () => {
     delete process.env.GEMINI_API_KEY;
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'Some recipe text' });
 
@@ -164,9 +165,7 @@ describe('POST /api/recipes/import-text', () => {
       'Sorry, I cannot parse this text.'
     );
 
-    const response = await request(app)
-      .post('/api/recipes/import-text')
-      .send({ text: 'Some bad text' });
+    const response = await agent.post('/api/recipes/import-text').send({ text: 'Some bad text' });
 
     expect(response.status).toBe(502);
     expect(response.body.error).toBe('BadGateway');
@@ -183,7 +182,7 @@ describe('POST /api/recipes/import-text', () => {
       })
     );
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'This is just a grocery store review, not a recipe.' });
 
@@ -213,7 +212,7 @@ describe('POST /api/recipes/import-text', () => {
       .mockResolvedValueOnce(malformedShapeJSON)
       .mockResolvedValueOnce(validRecipeJSON);
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'Grandma Pancakes recipe text...' });
 
@@ -241,7 +240,7 @@ describe('POST /api/recipes/import-text', () => {
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(malformedShapeJSON);
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'Some recipe text that keeps confusing the model' });
 
@@ -256,9 +255,7 @@ describe('POST /api/recipes/import-text', () => {
       new Error('Network timeout')
     );
 
-    const response = await request(app)
-      .post('/api/recipes/import-text')
-      .send({ text: 'Recipe text' });
+    const response = await agent.post('/api/recipes/import-text').send({ text: 'Recipe text' });
 
     expect(response.status).toBe(502);
     expect(response.body.error).toBe('BadGateway');
@@ -280,9 +277,7 @@ describe('POST /api/recipes/import-text', () => {
       })
     );
 
-    const response = await request(app)
-      .post('/api/recipes/import-text')
-      .send({ text: 'Recipe text' });
+    const response = await agent.post('/api/recipes/import-text').send({ text: 'Recipe text' });
 
     expect(response.status).toBe(429);
     expect(response.body.error).toBe('RateLimited');
@@ -301,9 +296,7 @@ describe('POST /api/recipes/import-text', () => {
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(invalidUnitJSON);
 
-    const response = await request(app)
-      .post('/api/recipes/import-text')
-      .send({ text: 'Salad recipe...' });
+    const response = await agent.post('/api/recipes/import-text').send({ text: 'Salad recipe...' });
 
     expect(response.status).toBe(422);
     expect(response.body.error).toBe('InvalidUnitError');
@@ -323,7 +316,7 @@ describe('POST /api/recipes/import-text', () => {
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(invalidServingsJSON);
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'Zero servings recipe...' });
 
@@ -346,7 +339,7 @@ describe('POST /api/recipes/import-text', () => {
 
     vi.mocked(geminiClientModule.parseRecipeTextWithGemini).mockResolvedValue(validRecipeJSON);
 
-    const response = await request(app)
+    const response = await agent
       .post('/api/recipes/import-text')
       .send({ text: 'Tofu recipe text' });
 

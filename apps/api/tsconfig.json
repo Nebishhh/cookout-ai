@@ -5,6 +5,6 @@
     "outDir": "./dist"
   },
   "include": ["src/**/*"],
-  "exclude": ["src/__fixtures__/**/*", "src/**/*.test.ts"],
+  "exclude": ["src/__fixtures__/**/*", "src/__testHelpers__/**/*", "src/**/*.test.ts"],
   "references": [{ "path": "../../packages/domain" }]
 }

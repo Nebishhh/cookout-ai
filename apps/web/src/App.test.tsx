@@ -22,6 +22,13 @@ function recipesGetResponse(url: string, recipes: unknown[]): Response {
   } as Response;
 }
 
+/**
+ * Passed as `initialUser` to every `<App/>` render below — the AuthProvider test seam that
+ * skips the real `GET /api/auth/me` call, so each test's own fetch mock only needs to answer
+ * the feature routes it cares about, not the auth check on top of it.
+ */
+const TEST_USER = { id: 'test-user-1', email: 'test@example.com' };
+
 describe('Web UI (TanStack Query & App Integration Tests)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -54,7 +61,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     expect(await screen.findByText('Classic Pancakes')).toBeInTheDocument();
     expect(screen.getByText('4 servings')).toBeInTheDocument();
@@ -92,7 +99,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return recipesGetResponse(url.toString(), []);
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.change(screen.getByLabelText(/recipe name/i), {
       target: { value: 'Waffles' },
@@ -142,7 +149,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return recipesGetResponse(url.toString(), []);
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.change(screen.getByLabelText(/recipe name/i), {
       target: { value: 'Waffles' },
@@ -197,7 +204,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return recipesGetResponse(url.toString(), []);
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.change(screen.getByLabelText(/recipe name/i), { target: { value: 'Baked Chicken' } });
     fireEvent.change(screen.getByLabelText(/id \(e.g. flour\)/i), { target: { value: 'chicken' } });
@@ -243,7 +250,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return recipesGetResponse(url.toString(), []);
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.change(screen.getByLabelText(/recipe name/i), { target: { value: 'Baked Chicken' } });
     fireEvent.change(screen.getByLabelText(/id \(e.g. flour\)/i), { target: { value: 'chicken' } });
@@ -283,7 +290,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return recipesGetResponse(url.toString(), []);
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.change(screen.getByLabelText(/recipe name/i), {
       target: { value: 'Bad Recipe' },
@@ -362,7 +369,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
 
@@ -459,7 +466,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
     expect(await screen.findByText('Pancakes')).toBeInTheDocument();
@@ -524,7 +531,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
 
@@ -658,7 +665,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
 
@@ -751,7 +758,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     fireEvent.click(screen.getByRole('button', { name: /shopping list/i }));
     fireEvent.click(await screen.findByText('Weekly Groceries'));
@@ -840,7 +847,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    const firstRender = render(<App />);
+    const firstRender = render(<App initialUser={TEST_USER} />);
 
     // Load the saved list while still online — a real user opens their list before losing
     // connectivity, not the other way around; the initial GET itself would also pause under
@@ -882,7 +889,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     }
 
     // Fresh mount == fresh QueryClient, rehydrated only from localStorage.
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     await waitFor(
       () => {
@@ -921,7 +928,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     // 1. Initial load on /recipes tab -> RecipeList's paginated query fetches once.
     expect(await screen.findByText('Shared Pancakes')).toBeInTheDocument();
@@ -978,7 +985,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     expect(await screen.findByText('Pre-filled Pancake')).toBeInTheDocument();
 
@@ -1040,7 +1047,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     expect(await screen.findByText('Old Pancake Name')).toBeInTheDocument();
 
@@ -1094,7 +1101,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     expect(await screen.findByText('Safe Recipe')).toBeInTheDocument();
 
@@ -1129,7 +1136,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       return { ok: false, status: 404 } as Response;
     });
 
-    render(<App />);
+    render(<App initialUser={TEST_USER} />);
 
     expect(await screen.findByText('Doomed Recipe')).toBeInTheDocument();
 
@@ -1232,7 +1239,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       // Switch to Event Planner tab
       fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
@@ -1363,7 +1370,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
       expect(await screen.findByText('Beef Roast')).toBeInTheDocument();
@@ -1418,7 +1425,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
 
@@ -1460,7 +1467,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
 
@@ -1567,7 +1574,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
 
@@ -1656,7 +1663,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       vi.spyOn(window, 'confirm').mockReturnValue(true);
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
 
@@ -1735,7 +1742,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       // Open import section
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
@@ -1802,7 +1809,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
@@ -1840,7 +1847,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
@@ -1873,7 +1880,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
@@ -1905,7 +1912,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       const textarea = screen.getByLabelText(/paste unformatted recipe text below/i);
@@ -1977,7 +1984,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /url link/i }));
@@ -2037,7 +2044,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /url link/i }));
@@ -2077,7 +2084,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /url link/i }));
@@ -2114,7 +2121,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /url link/i }));
@@ -2149,7 +2156,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /url link/i }));
@@ -2210,7 +2217,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
@@ -2252,7 +2259,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
@@ -2282,7 +2289,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
@@ -2318,7 +2325,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
@@ -2357,7 +2364,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /upload image/i }));
@@ -2376,7 +2383,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
     });
 
     it('renders Take Picture tab with capture="environment" file input', async () => {
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /take picture/i }));
@@ -2414,7 +2421,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
       fireEvent.click(screen.getByRole('button', { name: /take picture/i }));
@@ -2464,7 +2471,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         );
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       expect(await screen.findByText('Recipe One')).toBeInTheDocument();
       expect(screen.getByText('Recipe Two')).toBeInTheDocument();
@@ -2528,7 +2535,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         );
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       expect(await screen.findByText('Recipe One')).toBeInTheDocument();
       expect(screen.getByText('Recipe Two (Fails)')).toBeInTheDocument();
@@ -2569,7 +2576,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       expect(await screen.findByText('Recipe One')).toBeInTheDocument();
 
@@ -2613,7 +2620,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       expect(await screen.findByText('Classic Pancakes')).toBeInTheDocument();
       expect(screen.getByText('Steak Dinner')).toBeInTheDocument();
@@ -2651,7 +2658,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       expect(await screen.findByText('Vegan Bowl')).toBeInTheDocument();
       expect(screen.getByText('Beef Stew')).toBeInTheDocument();
@@ -2690,7 +2697,7 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
         return { ok: false, status: 404 } as Response;
       });
 
-      render(<App />);
+      render(<App initialUser={TEST_USER} />);
 
       expect(await screen.findByText('Oatmeal')).toBeInTheDocument();
 

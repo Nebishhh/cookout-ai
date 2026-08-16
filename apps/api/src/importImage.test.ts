@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import request from 'supertest';
-import { app } from './app.js';
 import { prisma } from './prisma.js';
 import * as geminiClient from './geminiClient.js';
+import { createAuthenticatedAgent, type TestAgent } from './__testHelpers__/testAuth.js';
 
 // Valid 1x1 image buffers with correct magic bytes
 // JPEG header: FF D8 FF E0 00 10 4A 46 49 46 00 01
@@ -39,11 +38,13 @@ const MOCK_VALID_GEMINI_RECIPE_JSON = JSON.stringify({
 
 describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
   const originalApiKey = process.env.GEMINI_API_KEY;
+  let agent: TestAgent;
 
   beforeEach(async () => {
     process.env.GEMINI_API_KEY = 'test-fake-gemini-api-key';
     await prisma.ingredientLine.deleteMany();
     await prisma.recipe.deleteMany();
+    ({ agent } = await createAuthenticatedAgent());
   });
 
   afterEach(() => {
@@ -56,12 +57,10 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       MOCK_VALID_GEMINI_RECIPE_JSON
     );
 
-    const res = await request(app)
-      .post('/api/recipes/import-image')
-      .attach('file', VALID_JPEG_BUFFER, {
-        filename: 'recipe_card.jpg',
-        contentType: 'image/jpeg',
-      });
+    const res = await agent.post('/api/recipes/import-image').attach('file', VALID_JPEG_BUFFER, {
+      filename: 'recipe_card.jpg',
+      contentType: 'image/jpeg',
+    });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -82,7 +81,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       MOCK_VALID_GEMINI_RECIPE_JSON
     );
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_PNG_BUFFER, { filename: 'recipe_page.png', contentType: 'image/png' });
 
@@ -96,7 +95,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       MOCK_VALID_GEMINI_RECIPE_JSON
     );
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_WEBP_BUFFER, { filename: 'recipe.webp', contentType: 'image/webp' });
 
@@ -105,7 +104,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
   });
 
   it('4. returns 400 BadRequest when request is not multipart/form-data', async () => {
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .send({ text: 'not a multipart stream' });
 
@@ -117,9 +116,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
   });
 
   it('5. returns 400 BadRequest when no image file field is present in multipart payload', async () => {
-    const res = await request(app)
-      .post('/api/recipes/import-image')
-      .field('someField', 'someValue');
+    const res = await agent.post('/api/recipes/import-image').field('someField', 'someValue');
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('BadRequest');
@@ -129,7 +126,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
   it('6. returns 400 InvalidFileError when uploaded file is zero bytes (empty file)', async () => {
     const emptyBuffer = Buffer.alloc(0);
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', emptyBuffer, { filename: 'empty.png', contentType: 'image/png' });
 
@@ -143,7 +140,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
   it('7. returns 400 InvalidFileError when file extension is .jpg/.png but byte signature is disallowed (e.g. text/pdf content)', async () => {
     const fakeTextBuffer = Buffer.from('Plain text file masquerading as an image card.');
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', fakeTextBuffer, { filename: 'fake_recipe.jpg', contentType: 'image/jpeg' });
 
@@ -160,7 +157,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
     oversizedBuffer[1] = 0xd8;
     oversizedBuffer[2] = 0xff;
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', oversizedBuffer, { filename: 'giant_image.jpg', contentType: 'image/jpeg' });
 
@@ -178,7 +175,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       new Error('GEMINI_API_KEY is not configured on the server.')
     );
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_JPEG_BUFFER, { filename: 'recipe.jpg', contentType: 'image/jpeg' });
 
@@ -194,7 +191,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       new Error('Gemini API request timed out after 30 seconds.')
     );
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_PNG_BUFFER, { filename: 'recipe.png', contentType: 'image/png' });
 
@@ -216,7 +213,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       })
     );
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_JPEG_BUFFER, { filename: 'recipe.jpg', contentType: 'image/jpeg' });
 
@@ -231,7 +228,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       .spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout')
       .mockResolvedValue('Sorry, I could not parse this photo into JSON format.');
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_JPEG_BUFFER, { filename: 'recipe.jpg', contentType: 'image/jpeg' });
 
@@ -252,7 +249,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       })
     );
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_JPEG_BUFFER, { filename: 'blur.jpg', contentType: 'image/jpeg' });
 
@@ -275,7 +272,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       })
     );
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_PNG_BUFFER, { filename: 'recipe.png', contentType: 'image/png' });
 
@@ -297,7 +294,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       })
     );
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_JPEG_BUFFER, { filename: 'recipe.jpg', contentType: 'image/jpeg' });
 
@@ -317,12 +314,10 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       .mockResolvedValueOnce(malformedShapeJSON)
       .mockResolvedValueOnce(MOCK_VALID_GEMINI_RECIPE_JSON);
 
-    const res = await request(app)
-      .post('/api/recipes/import-image')
-      .attach('file', VALID_JPEG_BUFFER, {
-        filename: 'recipe_card.jpg',
-        contentType: 'image/jpeg',
-      });
+    const res = await agent.post('/api/recipes/import-image').attach('file', VALID_JPEG_BUFFER, {
+      filename: 'recipe_card.jpg',
+      contentType: 'image/jpeg',
+    });
 
     expect(res.status).toBe(200);
     expect(res.body.name).toBe("Grandma's Blueberry Muffins");
@@ -348,7 +343,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
       .spyOn(geminiClient, 'parseRecipeImageWithGeminiTimeout')
       .mockResolvedValue(malformedShapeJSON);
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_PNG_BUFFER, { filename: 'blurry_card.png', contentType: 'image/png' });
 
@@ -364,7 +359,7 @@ describe('POST /api/recipes/import-image & Image Extractor Tests', () => {
     );
     const createSpy = vi.spyOn(prisma.recipe, 'create');
 
-    const res = await request(app)
+    const res = await agent
       .post('/api/recipes/import-image')
       .attach('file', VALID_JPEG_BUFFER, { filename: 'recipe.jpg', contentType: 'image/jpeg' });
 

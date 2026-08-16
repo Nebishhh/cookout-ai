@@ -2,15 +2,25 @@ import { describe, expect, it, beforeAll, beforeEach } from 'vitest';
 import request from 'supertest';
 import { app } from './app.js';
 import { prisma } from './prisma.js';
+import { createAuthenticatedAgent, type TestAgent } from './__testHelpers__/testAuth.js';
 
 /**
  * Testing Architecture & Database Isolation Note:
- * - We use `supertest` with Vitest to perform HTTP integration tests against the Express app.
+ * - We use `supertest` (via testAuth.ts's createAuthenticatedAgent()) with Vitest to perform
+ *   HTTP integration tests against the Express app, through a cookie-authenticated agent —
+ *   every route below /api/health and /api/auth/* now requires a session.
  * - A dedicated SQLite database file `prisma/test.db` is specified via process.env.DATABASE_URL in `vitest.config.ts` during test execution.
  * - Before tests run, we clear `test.db` tables before each test for complete test isolation without touching `dev.db`.
+ * - `agent` below is a single authenticated user shared across this describe block's tests
+ *   (a fresh account created in `beforeEach`), so pre-existing assertions like "GET /api/recipes
+ *   returns everything" still hold — they now mean "everything this test user owns." Cross-user
+ *   isolation itself (can user B see/touch user A's data) is covered separately, see
+ *   describe('Cross-user data isolation') near the end of this file.
  */
 
 describe('CookOut AI API Endpoints', () => {
+  let agent: TestAgent;
+
   beforeAll(async () => {
     // Ensure test database has schema applied
     try {
@@ -22,6 +32,8 @@ describe('CookOut AI API Endpoints', () => {
       await prisma.$executeRawUnsafe('DELETE FROM Event');
       await prisma.$executeRawUnsafe('DELETE FROM IngredientCategoryOverride');
       await prisma.$executeRawUnsafe('DELETE FROM PantryItem');
+      await prisma.$executeRawUnsafe('DELETE FROM Session');
+      await prisma.$executeRawUnsafe('DELETE FROM User');
     } catch {
       // Table creation handled by initial migration/db push
     }
@@ -37,11 +49,15 @@ describe('CookOut AI API Endpoints', () => {
     await prisma.event.deleteMany();
     await prisma.ingredientCategoryOverride.deleteMany();
     await prisma.pantryItem.deleteMany();
+    await prisma.session.deleteMany();
+    await prisma.user.deleteMany();
+
+    ({ agent } = await createAuthenticatedAgent());
   });
 
   describe('GET /api/health', () => {
     it('returns health status', async () => {
-      const response = await request(app).get('/api/health');
+      const response = await agent.get('/api/health');
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('status', 'ok');
       expect(response.body).toHaveProperty('app', 'CookOut AI Backend API');
@@ -61,7 +77,7 @@ describe('CookOut AI API Endpoints', () => {
         ],
       };
 
-      const createRes = await request(app).post('/api/recipes').send(newRecipe);
+      const createRes = await agent.post('/api/recipes').send(newRecipe);
       expect(createRes.status).toBe(201);
       expect(createRes.body).toHaveProperty('id');
       expect(createRes.body.name).toBe('Classic Pancakes');
@@ -72,7 +88,7 @@ describe('CookOut AI API Endpoints', () => {
       const recipeId = createRes.body.id;
 
       // GET /api/recipes/:id
-      const getRes = await request(app).get(`/api/recipes/${recipeId}`);
+      const getRes = await agent.get(`/api/recipes/${recipeId}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body.id).toBe(recipeId);
       expect(getRes.body.name).toBe('Classic Pancakes');
@@ -85,7 +101,7 @@ describe('CookOut AI API Endpoints', () => {
         baseServings: 2,
         ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
       };
-      const noStepsRes = await request(app).post('/api/recipes').send(noStepsRecipe);
+      const noStepsRes = await agent.post('/api/recipes').send(noStepsRecipe);
       expect(noStepsRes.status).toBe(201);
       expect(noStepsRes.body.steps).toEqual([]);
 
@@ -95,14 +111,14 @@ describe('CookOut AI API Endpoints', () => {
         ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' }],
         steps: [{ instruction: 'Mix dry ingredients.' }, { instruction: 'Add wet ingredients.' }],
       };
-      const createRes = await request(app).post('/api/recipes').send(withStepsRecipe);
+      const createRes = await agent.post('/api/recipes').send(withStepsRecipe);
       expect(createRes.status).toBe(201);
       expect(createRes.body.steps).toEqual([
         { instruction: 'Mix dry ingredients.', duration: null, temperature: null, notes: null },
         { instruction: 'Add wet ingredients.', duration: null, temperature: null, notes: null },
       ]);
 
-      const getRes = await request(app).get(`/api/recipes/${createRes.body.id}`);
+      const getRes = await agent.get(`/api/recipes/${createRes.body.id}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body.steps).toEqual([
         { instruction: 'Mix dry ingredients.', duration: null, temperature: null, notes: null },
@@ -111,31 +127,27 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('round-trips per-step duration/temperature/notes through create, read, and update', async () => {
-      const createRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Baked Chicken',
-          baseServings: 4,
-          ingredients: [
-            { ingredientId: 'chicken', displayName: 'Chicken', amount: 500, unit: 'g' },
-          ],
-          steps: [
-            {
-              instruction: 'Preheat the oven.',
-              temperatureAmount: 400,
-              temperatureUnit: 'F',
-            },
-            {
-              instruction: 'Bake until cooked through.',
-              durationAmount: 25,
-              durationUnit: 'minutes',
-              temperatureAmount: 400,
-              temperatureUnit: 'F',
-              notes: 'Tent with foil if browning too quickly.',
-            },
-            { instruction: 'Let rest before serving.' },
-          ],
-        });
+      const createRes = await agent.post('/api/recipes').send({
+        name: 'Baked Chicken',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'chicken', displayName: 'Chicken', amount: 500, unit: 'g' }],
+        steps: [
+          {
+            instruction: 'Preheat the oven.',
+            temperatureAmount: 400,
+            temperatureUnit: 'F',
+          },
+          {
+            instruction: 'Bake until cooked through.',
+            durationAmount: 25,
+            durationUnit: 'minutes',
+            temperatureAmount: 400,
+            temperatureUnit: 'F',
+            notes: 'Tent with foil if browning too quickly.',
+          },
+          { instruction: 'Let rest before serving.' },
+        ],
+      });
 
       expect(createRes.status).toBe(201);
       expect(createRes.body.steps).toEqual([
@@ -159,26 +171,22 @@ describe('CookOut AI API Endpoints', () => {
         },
       ]);
 
-      const getRes = await request(app).get(`/api/recipes/${createRes.body.id}`);
+      const getRes = await agent.get(`/api/recipes/${createRes.body.id}`);
       expect(getRes.body.steps).toEqual(createRes.body.steps);
 
-      const putRes = await request(app)
-        .put(`/api/recipes/${createRes.body.id}`)
-        .send({
-          name: 'Baked Chicken',
-          baseServings: 4,
-          ingredients: [
-            { ingredientId: 'chicken', displayName: 'Chicken', amount: 500, unit: 'g' },
-          ],
-          steps: [
-            {
-              instruction: 'Chill in the fridge.',
-              durationAmount: 2,
-              durationUnit: 'hours',
-              notes: '  Cover loosely.  ',
-            },
-          ],
-        });
+      const putRes = await agent.put(`/api/recipes/${createRes.body.id}`).send({
+        name: 'Baked Chicken',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'chicken', displayName: 'Chicken', amount: 500, unit: 'g' }],
+        steps: [
+          {
+            instruction: 'Chill in the fridge.',
+            durationAmount: 2,
+            durationUnit: 'hours',
+            notes: '  Cover loosely.  ',
+          },
+        ],
+      });
 
       expect(putRes.status).toBe(200);
       expect(putRes.body.steps).toEqual([
@@ -192,14 +200,12 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('rejects an invalid step duration unit (422-equivalent 400 domain error)', async () => {
-      const res = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Bad Step',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' }],
-          steps: [{ instruction: 'Rest.', durationAmount: 10, durationUnit: 'seconds' }],
-        });
+      const res = await agent.post('/api/recipes').send({
+        name: 'Bad Step',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' }],
+        steps: [{ instruction: 'Rest.', durationAmount: 10, durationUnit: 'seconds' }],
+      });
 
       expect(res.status).toBe(400);
       expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
@@ -213,7 +219,7 @@ describe('CookOut AI API Endpoints', () => {
         ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' }],
       };
 
-      const res0 = await request(app).post('/api/recipes').send(invalidRecipe);
+      const res0 = await agent.post('/api/recipes').send(invalidRecipe);
       expect(res0.status).toBe(400);
       expect(res0.body).toHaveProperty('error', 'InvalidRecipeError');
 
@@ -226,12 +232,12 @@ describe('CookOut AI API Endpoints', () => {
         ],
       };
 
-      const resUnit = await request(app).post('/api/recipes').send(invalidUnitRecipe);
+      const resUnit = await agent.post('/api/recipes').send(invalidUnitRecipe);
       expect(resUnit.status).toBe(400);
       expect(resUnit.body).toHaveProperty('error', 'InvalidUnitError');
 
       // Verify no recipe was created in database
-      const listRes = await request(app).get('/api/recipes');
+      const listRes = await agent.get('/api/recipes');
       expect(listRes.status).toBe(200);
       expect(listRes.body).toHaveLength(0);
     });
@@ -248,16 +254,16 @@ describe('CookOut AI API Endpoints', () => {
         ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
       };
 
-      await request(app).post('/api/recipes').send(r1);
-      await request(app).post('/api/recipes').send(r2);
+      await agent.post('/api/recipes').send(r1);
+      await agent.post('/api/recipes').send(r2);
 
-      const listRes = await request(app).get('/api/recipes');
+      const listRes = await agent.get('/api/recipes');
       expect(listRes.status).toBe(200);
       expect(listRes.body).toHaveLength(2);
     });
 
     it('GET /api/recipes/:id with a nonexistent id returns 404', async () => {
-      const res = await request(app).get('/api/recipes/non-existent-id-123');
+      const res = await agent.get('/api/recipes/non-existent-id-123');
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
     });
@@ -272,11 +278,11 @@ describe('CookOut AI API Endpoints', () => {
         ],
       };
 
-      const createRes = await request(app).post('/api/recipes').send(recipeWithTags);
+      const createRes = await agent.post('/api/recipes').send(recipeWithTags);
       expect(createRes.status).toBe(201);
       const id = createRes.body.id;
 
-      const getRes = await request(app).get(`/api/recipes/${id}`);
+      const getRes = await agent.get(`/api/recipes/${id}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body.dietaryTags).toEqual(['Vegetarian', 'Vegan']);
     });
@@ -284,14 +290,12 @@ describe('CookOut AI API Endpoints', () => {
 
   describe('GET /api/recipes pagination', () => {
     async function createRecipe(name: string, dietaryTags: string[] = []) {
-      const res = await request(app)
-        .post('/api/recipes')
-        .send({
-          name,
-          baseServings: 2,
-          dietaryTags,
-          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' }],
-        });
+      const res = await agent.post('/api/recipes').send({
+        name,
+        baseServings: 2,
+        dietaryTags,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' }],
+      });
       return res.body.id as string;
     }
 
@@ -299,7 +303,7 @@ describe('CookOut AI API Endpoints', () => {
       await createRecipe('Pancakes');
       await createRecipe('Waffles');
 
-      const res = await request(app).get('/api/recipes');
+      const res = await agent.get('/api/recipes');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body).toHaveLength(2);
@@ -309,7 +313,7 @@ describe('CookOut AI API Endpoints', () => {
       await createRecipe('Pancakes');
       await createRecipe('Waffles');
 
-      const res = await request(app).get('/api/recipes?limit=10');
+      const res = await agent.get('/api/recipes?limit=10');
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('items');
       expect(res.body).toHaveProperty('nextCursor', null);
@@ -323,11 +327,11 @@ describe('CookOut AI API Endpoints', () => {
       await createRecipe('Recipe B');
       await createRecipe('Recipe C');
 
-      const page1 = await request(app).get('/api/recipes?limit=2');
+      const page1 = await agent.get('/api/recipes?limit=2');
       expect(page1.body.items).toHaveLength(2);
       expect(page1.body.nextCursor).not.toBeNull();
 
-      const page2 = await request(app).get(
+      const page2 = await agent.get(
         `/api/recipes?limit=2&cursor=${encodeURIComponent(page1.body.nextCursor)}`
       );
       expect(page2.body.items).toHaveLength(1);
@@ -343,7 +347,7 @@ describe('CookOut AI API Endpoints', () => {
       await createRecipe('Vanilla Cake');
       await createRecipe('Beef Stew');
 
-      const res = await request(app).get('/api/recipes?limit=10&search=cake');
+      const res = await agent.get('/api/recipes?limit=10&search=cake');
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(2);
       expect(res.body.items.map((r: { name: string }) => r.name).sort()).toEqual([
@@ -357,20 +361,20 @@ describe('CookOut AI API Endpoints', () => {
       await createRecipe('Veggie Stir Fry', ['Vegetarian']);
       await createRecipe('Beef Stew', []);
 
-      const res = await request(app).get('/api/recipes?limit=10&tags=Vegan');
+      const res = await agent.get('/api/recipes?limit=10&tags=Vegan');
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(1);
       expect(res.body.items[0].name).toBe('Vegan Bowl');
     });
 
     it('rejects an invalid limit', async () => {
-      const res = await request(app).get('/api/recipes?limit=not-a-number');
+      const res = await agent.get('/api/recipes?limit=not-a-number');
       expect(res.status).toBe(400);
       expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
     });
 
     it('rejects a malformed cursor', async () => {
-      const res = await request(app).get('/api/recipes?limit=10&cursor=not-valid-base64json');
+      const res = await agent.get('/api/recipes?limit=10&cursor=not-valid-base64json');
       expect(res.status).toBe(400);
       expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
     });
@@ -379,28 +383,24 @@ describe('CookOut AI API Endpoints', () => {
   describe('POST /api/shopping-list', () => {
     it('returns a scaled and consolidated shopping list for multiple real recipes', async () => {
       // Recipe 1: 4 servings, needs 2 cups milk (Volume)
-      const r1Res = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Pancakes',
-          baseServings: 4,
-          ingredients: [
-            { ingredientId: 'milk', displayName: 'Whole Milk', amount: 2, unit: 'cup' },
-            { ingredientId: 'sugar', displayName: 'White Sugar', amount: 100, unit: 'g' },
-          ],
-        });
+      const r1Res = await agent.post('/api/recipes').send({
+        name: 'Pancakes',
+        baseServings: 4,
+        ingredients: [
+          { ingredientId: 'milk', displayName: 'Whole Milk', amount: 2, unit: 'cup' },
+          { ingredientId: 'sugar', displayName: 'White Sugar', amount: 100, unit: 'g' },
+        ],
+      });
 
       // Recipe 2: 2 servings, needs 100 ml milk (Volume)
-      const r2Res = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Sauce',
-          baseServings: 2,
-          ingredients: [
-            { ingredientId: 'milk', displayName: 'Fresh Milk', amount: 100, unit: 'ml' },
-            { ingredientId: 'sugar', displayName: 'Fine Sugar', amount: 50, unit: 'g' },
-          ],
-        });
+      const r2Res = await agent.post('/api/recipes').send({
+        name: 'Sauce',
+        baseServings: 2,
+        ingredients: [
+          { ingredientId: 'milk', displayName: 'Fresh Milk', amount: 100, unit: 'ml' },
+          { ingredientId: 'sugar', displayName: 'Fine Sugar', amount: 50, unit: 'g' },
+        ],
+      });
 
       const r1Id = r1Res.body.id;
       const r2Id = r2Res.body.id;
@@ -411,7 +411,7 @@ describe('CookOut AI API Endpoints', () => {
         { recipeId: r2Id, targetServings: 2 },
       ];
 
-      const res = await request(app).post('/api/shopping-list').send(shoppingReq);
+      const res = await agent.post('/api/shopping-list').send(shoppingReq);
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('shoppingList');
@@ -437,13 +437,11 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('returns 404 naming the missing recipeId when recipeId does not exist', async () => {
-      const r1Res = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Pancakes',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
-        });
+      const r1Res = await agent.post('/api/recipes').send({
+        name: 'Pancakes',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
+      });
 
       const missingId = 'non-existent-recipe-999';
       const shoppingReq = [
@@ -451,7 +449,7 @@ describe('CookOut AI API Endpoints', () => {
         { recipeId: missingId, targetServings: 2 },
       ];
 
-      const res = await request(app).post('/api/shopping-list').send(shoppingReq);
+      const res = await agent.post('/api/shopping-list').send(shoppingReq);
 
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
@@ -459,21 +457,19 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('returns 400 when targetServings is invalid (0 or negative)', async () => {
-      const r1Res = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Pancakes',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
-        });
+      const r1Res = await agent.post('/api/recipes').send({
+        name: 'Pancakes',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
+      });
 
-      const res0 = await request(app)
+      const res0 = await agent
         .post('/api/shopping-list')
         .send([{ recipeId: r1Res.body.id, targetServings: 0 }]);
       expect(res0.status).toBe(400);
       expect(res0.body).toHaveProperty('error', 'InvalidRecipeError');
 
-      const resNeg = await request(app)
+      const resNeg = await agent
         .post('/api/shopping-list')
         .send([{ recipeId: r1Res.body.id, targetServings: -3 }]);
       expect(resNeg.status).toBe(400);
@@ -490,7 +486,7 @@ describe('CookOut AI API Endpoints', () => {
         ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' }],
       };
 
-      const createRes = await request(app).post('/api/recipes').send(initialRecipe);
+      const createRes = await agent.post('/api/recipes').send(initialRecipe);
       expect(createRes.status).toBe(201);
       const recipeId = createRes.body.id;
 
@@ -505,7 +501,7 @@ describe('CookOut AI API Endpoints', () => {
         ],
       };
 
-      const putRes = await request(app).put(`/api/recipes/${recipeId}`).send(updatedPayload);
+      const putRes = await agent.put(`/api/recipes/${recipeId}`).send(updatedPayload);
       expect(putRes.status).toBe(200);
       expect(putRes.body.id).toBe(recipeId);
       expect(putRes.body.name).toBe('New Fluffy Waffles');
@@ -513,7 +509,7 @@ describe('CookOut AI API Endpoints', () => {
       expect(putRes.body.dietaryTags).toEqual(['Vegan']);
       expect(putRes.body.ingredients).toHaveLength(3);
 
-      const getRes = await request(app).get(`/api/recipes/${recipeId}`);
+      const getRes = await agent.get(`/api/recipes/${recipeId}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body.name).toBe('New Fluffy Waffles');
       expect(getRes.body.ingredients[0].ingredientId).toBe('waffle-mix');
@@ -526,7 +522,7 @@ describe('CookOut AI API Endpoints', () => {
         ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' }],
         steps: [{ instruction: 'Old step one.' }, { instruction: 'Old step two.' }],
       };
-      const createRes = await request(app).post('/api/recipes').send(initialRecipe);
+      const createRes = await agent.post('/api/recipes').send(initialRecipe);
       const recipeId = createRes.body.id;
 
       const updatedPayload = {
@@ -537,13 +533,13 @@ describe('CookOut AI API Endpoints', () => {
         ],
         steps: [{ instruction: 'New step one.' }],
       };
-      const putRes = await request(app).put(`/api/recipes/${recipeId}`).send(updatedPayload);
+      const putRes = await agent.put(`/api/recipes/${recipeId}`).send(updatedPayload);
       expect(putRes.status).toBe(200);
       expect(putRes.body.steps).toEqual([
         { instruction: 'New step one.', duration: null, temperature: null, notes: null },
       ]);
 
-      const getRes = await request(app).get(`/api/recipes/${recipeId}`);
+      const getRes = await agent.get(`/api/recipes/${recipeId}`);
       expect(getRes.body.steps).toEqual([
         { instruction: 'New step one.', duration: null, temperature: null, notes: null },
       ]);
@@ -557,7 +553,7 @@ describe('CookOut AI API Endpoints', () => {
         ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 2, unit: 'cup' }],
       };
 
-      const createRes = await request(app).post('/api/recipes').send(originalRecipe);
+      const createRes = await agent.post('/api/recipes').send(originalRecipe);
       expect(createRes.status).toBe(201);
       const recipeId = createRes.body.id;
 
@@ -567,12 +563,12 @@ describe('CookOut AI API Endpoints', () => {
         ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 10, unit: 'cup' }],
       };
 
-      const putRes = await request(app).put(`/api/recipes/${recipeId}`).send(invalidPayload);
+      const putRes = await agent.put(`/api/recipes/${recipeId}`).send(invalidPayload);
       expect(putRes.status).toBe(400);
       expect(putRes.body).toHaveProperty('error', 'InvalidRecipeError');
 
       // Verify original recipe in DB is completely UNCHANGED
-      const getRes = await request(app).get(`/api/recipes/${recipeId}`);
+      const getRes = await agent.get(`/api/recipes/${recipeId}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body.name).toBe('Original Safe Recipe');
       expect(getRes.body.baseServings).toBe(4);
@@ -581,13 +577,11 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('PUT /api/recipes/:id for a nonexistent id returns 404', async () => {
-      const res = await request(app)
-        .put('/api/recipes/non-existent-id-404')
-        .send({
-          name: 'Ghosts',
-          baseServings: 2,
-          ingredients: [{ ingredientId: 'air', displayName: 'Air', amount: 1, unit: 'count' }],
-        });
+      const res = await agent.put('/api/recipes/non-existent-id-404').send({
+        name: 'Ghosts',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'air', displayName: 'Air', amount: 1, unit: 'count' }],
+      });
 
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
@@ -600,13 +594,13 @@ describe('CookOut AI API Endpoints', () => {
         ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 1, unit: 'egg' }],
       };
 
-      const createRes = await request(app).post('/api/recipes').send(recipe);
+      const createRes = await agent.post('/api/recipes').send(recipe);
       const id = createRes.body.id;
 
-      const deleteRes = await request(app).delete(`/api/recipes/${id}`);
+      const deleteRes = await agent.delete(`/api/recipes/${id}`);
       expect(deleteRes.status).toBe(204);
 
-      const getRes = await request(app).get(`/api/recipes/${id}`);
+      const getRes = await agent.get(`/api/recipes/${id}`);
       expect(getRes.status).toBe(404);
     });
 
@@ -620,14 +614,14 @@ describe('CookOut AI API Endpoints', () => {
         ],
       };
 
-      const createRes = await request(app).post('/api/recipes').send(recipe);
+      const createRes = await agent.post('/api/recipes').send(recipe);
       const id = createRes.body.id;
 
       // Verify ingredient lines exist in Prisma DB before delete
       const linesBefore = await prisma.ingredientLine.findMany({ where: { recipeId: id } });
       expect(linesBefore).toHaveLength(2);
 
-      await request(app).delete(`/api/recipes/${id}`);
+      await agent.delete(`/api/recipes/${id}`);
 
       // Verify ingredient lines were cascade deleted in Prisma DB
       const linesAfter = await prisma.ingredientLine.findMany({ where: { recipeId: id } });
@@ -635,7 +629,7 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('DELETE /api/recipes/:id for a nonexistent id returns 404', async () => {
-      const res = await request(app).delete('/api/recipes/non-existent-id-404');
+      const res = await agent.delete('/api/recipes/non-existent-id-404');
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
     });
@@ -644,31 +638,25 @@ describe('CookOut AI API Endpoints', () => {
   describe('POST /api/events/plan', () => {
     it('POST /api/events/plan with a valid guest group and a mix of real created recipes returns 200 with correct eligible servings for EACH recipe', async () => {
       // 1. Create 3 real recipes via POST /api/recipes
-      const meatRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Beef Roast',
-          baseServings: 6,
-          ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
-        });
+      const meatRes = await agent.post('/api/recipes').send({
+        name: 'Beef Roast',
+        baseServings: 6,
+        ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+      });
 
-      const vegRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Mac and Cheese',
-          baseServings: 4,
-          dietaryTags: ['Vegetarian'],
-          ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
-        });
+      const vegRes = await agent.post('/api/recipes').send({
+        name: 'Mac and Cheese',
+        baseServings: 4,
+        dietaryTags: ['Vegetarian'],
+        ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
+      });
 
-      const veganRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Fruit Salad',
-          baseServings: 6,
-          dietaryTags: ['Vegan'],
-          ingredients: [{ ingredientId: 'apple', displayName: 'Apple', amount: 3, unit: 'count' }],
-        });
+      const veganRes = await agent.post('/api/recipes').send({
+        name: 'Fruit Salad',
+        baseServings: 6,
+        dietaryTags: ['Vegan'],
+        ingredients: [{ ingredientId: 'apple', displayName: 'Apple', amount: 3, unit: 'count' }],
+      });
 
       const meatId = meatRes.body.id;
       const vegId = vegRes.body.id;
@@ -684,7 +672,7 @@ describe('CookOut AI API Endpoints', () => {
         },
       };
 
-      const res = await request(app).post('/api/events/plan').send(planReq);
+      const res = await agent.post('/api/events/plan').send(planReq);
 
       expect(res.status).toBe(200);
       expect(res.body.guestGroup).toEqual({
@@ -713,13 +701,11 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('POST /api/events/plan with an invalid guestGroup returns 400 with error name InvalidGuestGroupError', async () => {
-      const meatRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Beef Roast',
-          baseServings: 6,
-          ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
-        });
+      const meatRes = await agent.post('/api/recipes').send({
+        name: 'Beef Roast',
+        baseServings: 6,
+        ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+      });
 
       const invalidReq = {
         recipeIds: [meatRes.body.id],
@@ -730,20 +716,18 @@ describe('CookOut AI API Endpoints', () => {
         },
       };
 
-      const res = await request(app).post('/api/events/plan').send(invalidReq);
+      const res = await agent.post('/api/events/plan').send(invalidReq);
 
       expect(res.status).toBe(400);
       expect(res.body).toHaveProperty('error', 'InvalidGuestGroupError');
     });
 
     it('POST /api/events/plan with a nonexistent recipeId returns 404 naming the missing id', async () => {
-      const realRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Beef Roast',
-          baseServings: 6,
-          ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
-        });
+      const realRes = await agent.post('/api/recipes').send({
+        name: 'Beef Roast',
+        baseServings: 6,
+        ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+      });
 
       const missingId = 'non-existent-recipe-id-999';
       const planReq = {
@@ -755,7 +739,7 @@ describe('CookOut AI API Endpoints', () => {
         },
       };
 
-      const res = await request(app).post('/api/events/plan').send(planReq);
+      const res = await agent.post('/api/events/plan').send(planReq);
 
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
@@ -772,20 +756,18 @@ describe('CookOut AI API Endpoints', () => {
         },
       };
 
-      const res = await request(app).post('/api/events/plan').send(emptyReq);
+      const res = await agent.post('/api/events/plan').send(emptyReq);
 
       expect(res.status).toBe(400);
       expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
     });
 
     it('POST /api/events/plan correctly excludes a recipe with 0 eligible guests and includes the reason in the response', async () => {
-      const meatRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Steak Dinner',
-          baseServings: 2,
-          ingredients: [{ ingredientId: 'beef', displayName: 'Steak', amount: 2, unit: 'lb' }],
-        });
+      const meatRes = await agent.post('/api/recipes').send({
+        name: 'Steak Dinner',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'beef', displayName: 'Steak', amount: 2, unit: 'lb' }],
+      });
 
       const allVegReq = {
         recipeIds: [meatRes.body.id],
@@ -796,7 +778,7 @@ describe('CookOut AI API Endpoints', () => {
         },
       };
 
-      const res = await request(app).post('/api/events/plan').send(allVegReq);
+      const res = await agent.post('/api/events/plan').send(allVegReq);
 
       expect(res.status).toBe(200);
       expect(res.body.includedRecipes).toHaveLength(0);
@@ -809,27 +791,23 @@ describe('CookOut AI API Endpoints', () => {
     it('POST /api/events/plan shoppingList correctly consolidates ingredients across multiple included recipes', async () => {
       // Group: 10 guests (2 vegetarians, 0 vegans) => 8 omnivores, 2 vegetarians
       // Recipe 1: Meat dish (8 eligible, base 4 => scale 2.0). Needs 500g potatoes
-      const r1Res = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Shepherd Pie',
-          baseServings: 4,
-          ingredients: [
-            { ingredientId: 'potato', displayName: 'Russet Potato', amount: 500, unit: 'g' },
-          ],
-        });
+      const r1Res = await agent.post('/api/recipes').send({
+        name: 'Shepherd Pie',
+        baseServings: 4,
+        ingredients: [
+          { ingredientId: 'potato', displayName: 'Russet Potato', amount: 500, unit: 'g' },
+        ],
+      });
 
       // Recipe 2: Vegan dish (10 eligible, base 5 => scale 2.0). Needs 1 kg potatoes
-      const r2Res = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Mashed Potatoes',
-          baseServings: 5,
-          dietaryTags: ['Vegan'],
-          ingredients: [
-            { ingredientId: 'potato', displayName: 'Yukon Potato', amount: 1, unit: 'kg' },
-          ],
-        });
+      const r2Res = await agent.post('/api/recipes').send({
+        name: 'Mashed Potatoes',
+        baseServings: 5,
+        dietaryTags: ['Vegan'],
+        ingredients: [
+          { ingredientId: 'potato', displayName: 'Yukon Potato', amount: 1, unit: 'kg' },
+        ],
+      });
 
       const r1Id = r1Res.body.id;
       const r2Id = r2Res.body.id;
@@ -843,7 +821,7 @@ describe('CookOut AI API Endpoints', () => {
         },
       };
 
-      const res = await request(app).post('/api/events/plan').send(planReq);
+      const res = await agent.post('/api/events/plan').send(planReq);
 
       expect(res.status).toBe(200);
       expect(res.body.includedRecipes).toHaveLength(2);
@@ -862,21 +840,17 @@ describe('CookOut AI API Endpoints', () => {
     const validGuestGroup = { totalGuests: 10, vegetarianCount: 2, veganCount: 0 };
 
     it('POST /api/events creates a persisted event and returns the recomputed plan immediately', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Beef Roast',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Beef Roast',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+      });
 
-      const res = await request(app)
-        .post('/api/events')
-        .send({
-          name: 'Thanksgiving 2026',
-          guestGroup: validGuestGroup,
-          recipeIds: [recipeRes.body.id],
-        });
+      const res = await agent.post('/api/events').send({
+        name: 'Thanksgiving 2026',
+        guestGroup: validGuestGroup,
+        recipeIds: [recipeRes.body.id],
+      });
 
       expect(res.status).toBe(201);
       expect(res.body).toHaveProperty('id');
@@ -895,7 +869,7 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('POST /api/events allows zero recipeIds (menu filled in later)', async () => {
-      const res = await request(app)
+      const res = await agent
         .post('/api/events')
         .send({ name: 'Someday BBQ', guestGroup: validGuestGroup, recipeIds: [] });
 
@@ -906,20 +880,18 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('POST /api/events with an invalid guestGroup returns 400', async () => {
-      const res = await request(app)
-        .post('/api/events')
-        .send({
-          name: 'Bad Event',
-          guestGroup: { totalGuests: 10, vegetarianCount: 2, veganCount: 5 },
-          recipeIds: [],
-        });
+      const res = await agent.post('/api/events').send({
+        name: 'Bad Event',
+        guestGroup: { totalGuests: 10, vegetarianCount: 2, veganCount: 5 },
+        recipeIds: [],
+      });
 
       expect(res.status).toBe(400);
       expect(res.body).toHaveProperty('error', 'InvalidGuestGroupError');
     });
 
     it('POST /api/events with an empty name returns 400', async () => {
-      const res = await request(app)
+      const res = await agent
         .post('/api/events')
         .send({ name: '', guestGroup: validGuestGroup, recipeIds: [] });
 
@@ -928,14 +900,14 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('GET /api/events returns summary shape only (no recomputed plan fields)', async () => {
-      await request(app)
+      await agent
         .post('/api/events')
         .send({ name: 'Event A', guestGroup: validGuestGroup, recipeIds: [] });
-      await request(app)
+      await agent
         .post('/api/events')
         .send({ name: 'Event B', guestGroup: validGuestGroup, recipeIds: [] });
 
-      const res = await request(app).get('/api/events');
+      const res = await agent.get('/api/events');
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(2);
@@ -948,33 +920,27 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('GET /api/events/:id recomputes the plan live from current recipe data', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Mac and Cheese',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Mac and Cheese',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
+      });
 
-      const createRes = await request(app)
-        .post('/api/events')
-        .send({
-          name: 'Potluck',
-          guestGroup: validGuestGroup,
-          recipeIds: [recipeRes.body.id],
-        });
+      const createRes = await agent.post('/api/events').send({
+        name: 'Potluck',
+        guestGroup: validGuestGroup,
+        recipeIds: [recipeRes.body.id],
+      });
 
       // Edit the underlying recipe's base servings — the event's live-recomputed plan
       // should reflect this change without the event itself being touched.
-      await request(app)
-        .put(`/api/recipes/${recipeRes.body.id}`)
-        .send({
-          name: 'Mac and Cheese',
-          baseServings: 2,
-          ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
-        });
+      await agent.put(`/api/recipes/${recipeRes.body.id}`).send({
+        name: 'Mac and Cheese',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'cheese', displayName: 'Cheddar', amount: 200, unit: 'g' }],
+      });
 
-      const getRes = await request(app).get(`/api/events/${createRes.body.id}`);
+      const getRes = await agent.get(`/api/events/${createRes.body.id}`);
 
       expect(getRes.status).toBe(200);
       // eligibleServings unchanged (still 8 omnivores), but scaled ingredient amount
@@ -983,25 +949,21 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('GET /api/events/:id drops stale recipe references and reports them in droppedRecipeIds', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Temp Recipe',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Temp Recipe',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
+      });
 
-      const createRes = await request(app)
-        .post('/api/events')
-        .send({
-          name: 'Fragile Plan',
-          guestGroup: validGuestGroup,
-          recipeIds: [recipeRes.body.id],
-        });
+      const createRes = await agent.post('/api/events').send({
+        name: 'Fragile Plan',
+        guestGroup: validGuestGroup,
+        recipeIds: [recipeRes.body.id],
+      });
 
-      await request(app).delete(`/api/recipes/${recipeRes.body.id}`);
+      await agent.delete(`/api/recipes/${recipeRes.body.id}`);
 
-      const getRes = await request(app).get(`/api/events/${createRes.body.id}`);
+      const getRes = await agent.get(`/api/events/${createRes.body.id}`);
 
       expect(getRes.status).toBe(200);
       expect(getRes.body.droppedRecipeIds).toEqual([recipeRes.body.id]);
@@ -1010,45 +972,41 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('GET /api/events/:id with a nonexistent id returns 404', async () => {
-      const res = await request(app).get('/api/events/non-existent-event-id');
+      const res = await agent.get('/api/events/non-existent-event-id');
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
     });
 
     it('PUT /api/events/:id updates name/guestGroup/recipeIds and GET afterward reflects new values', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Salad',
-          baseServings: 4,
-          ingredients: [
-            { ingredientId: 'lettuce', displayName: 'Lettuce', amount: 1, unit: 'count' },
-          ],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Salad',
+        baseServings: 4,
+        ingredients: [
+          { ingredientId: 'lettuce', displayName: 'Lettuce', amount: 1, unit: 'count' },
+        ],
+      });
 
-      const createRes = await request(app)
+      const createRes = await agent
         .post('/api/events')
         .send({ name: 'Old Name', guestGroup: validGuestGroup, recipeIds: [] });
 
-      const putRes = await request(app)
-        .put(`/api/events/${createRes.body.id}`)
-        .send({
-          name: 'New Name',
-          guestGroup: { totalGuests: 20, vegetarianCount: 4, veganCount: 2 },
-          recipeIds: [recipeRes.body.id],
-        });
+      const putRes = await agent.put(`/api/events/${createRes.body.id}`).send({
+        name: 'New Name',
+        guestGroup: { totalGuests: 20, vegetarianCount: 4, veganCount: 2 },
+        recipeIds: [recipeRes.body.id],
+      });
 
       expect(putRes.status).toBe(200);
       expect(putRes.body.name).toBe('New Name');
       expect(putRes.body.guestGroup.totalGuests).toBe(20);
       expect(putRes.body.recipeIds).toEqual([recipeRes.body.id]);
 
-      const getRes = await request(app).get(`/api/events/${createRes.body.id}`);
+      const getRes = await agent.get(`/api/events/${createRes.body.id}`);
       expect(getRes.body.name).toBe('New Name');
     });
 
     it('PUT /api/events/:id for a nonexistent id returns 404', async () => {
-      const res = await request(app)
+      const res = await agent
         .put('/api/events/non-existent-event-id')
         .send({ name: 'X', guestGroup: validGuestGroup, recipeIds: [] });
 
@@ -1057,19 +1015,19 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('DELETE /api/events/:id removes the event; subsequent GET returns 404', async () => {
-      const createRes = await request(app)
+      const createRes = await agent
         .post('/api/events')
         .send({ name: 'To Delete', guestGroup: validGuestGroup, recipeIds: [] });
 
-      const deleteRes = await request(app).delete(`/api/events/${createRes.body.id}`);
+      const deleteRes = await agent.delete(`/api/events/${createRes.body.id}`);
       expect(deleteRes.status).toBe(204);
 
-      const getRes = await request(app).get(`/api/events/${createRes.body.id}`);
+      const getRes = await agent.get(`/api/events/${createRes.body.id}`);
       expect(getRes.status).toBe(404);
     });
 
     it('DELETE /api/events/:id for a nonexistent id returns 404', async () => {
-      const res = await request(app).delete('/api/events/non-existent-event-id');
+      const res = await agent.delete('/api/events/non-existent-event-id');
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
     });
@@ -1077,20 +1035,16 @@ describe('CookOut AI API Endpoints', () => {
 
   describe('ShoppingList CRUD', () => {
     it('POST /api/shopping-lists creates a standalone persisted list (eventId null) with checked defaulting to false', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Pancakes',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 100, unit: 'g' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Pancakes',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 100, unit: 'g' }],
+      });
 
-      const res = await request(app)
-        .post('/api/shopping-lists')
-        .send({
-          name: 'Weekly Groceries',
-          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 8 }],
-        });
+      const res = await agent.post('/api/shopping-lists').send({
+        name: 'Weekly Groceries',
+        sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 8 }],
+      });
 
       expect(res.status).toBe(201);
       expect(res.body).toHaveProperty('id');
@@ -1103,16 +1057,14 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('POST /api/shopping-lists rejects an empty name', async () => {
-      const res = await request(app)
-        .post('/api/shopping-lists')
-        .send({ name: '', sourceItems: [] });
+      const res = await agent.post('/api/shopping-lists').send({ name: '', sourceItems: [] });
 
       expect(res.status).toBe(400);
       expect(res.body).toHaveProperty('error', 'InvalidShoppingListError');
     });
 
     it('POST /api/shopping-lists with a nonexistent recipeId returns 404', async () => {
-      const res = await request(app)
+      const res = await agent
         .post('/api/shopping-lists')
         .send({ name: 'List', sourceItems: [{ recipeId: 'missing-id', targetServings: 2 }] });
 
@@ -1121,84 +1073,76 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('GET /api/shopping-lists returns all lists with items included', async () => {
-      await request(app).post('/api/shopping-lists').send({ name: 'List A', sourceItems: [] });
-      await request(app).post('/api/shopping-lists').send({ name: 'List B', sourceItems: [] });
+      await agent.post('/api/shopping-lists').send({ name: 'List A', sourceItems: [] });
+      await agent.post('/api/shopping-lists').send({ name: 'List B', sourceItems: [] });
 
-      const res = await request(app).get('/api/shopping-lists');
+      const res = await agent.get('/api/shopping-lists');
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(2);
       expect(res.body[0]).toHaveProperty('items');
     });
 
     it('GET /api/shopping-lists/:id with a nonexistent id returns 404', async () => {
-      const res = await request(app).get('/api/shopping-lists/non-existent-list-id');
+      const res = await agent.get('/api/shopping-lists/non-existent-list-id');
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
     });
 
     it('DELETE /api/shopping-lists/:id removes the list; subsequent GET returns 404', async () => {
-      const createRes = await request(app)
+      const createRes = await agent
         .post('/api/shopping-lists')
         .send({ name: 'To Delete', sourceItems: [] });
 
-      const deleteRes = await request(app).delete(`/api/shopping-lists/${createRes.body.id}`);
+      const deleteRes = await agent.delete(`/api/shopping-lists/${createRes.body.id}`);
       expect(deleteRes.status).toBe(204);
 
-      const getRes = await request(app).get(`/api/shopping-lists/${createRes.body.id}`);
+      const getRes = await agent.get(`/api/shopping-lists/${createRes.body.id}`);
       expect(getRes.status).toBe(404);
     });
 
     it('PATCH /api/shopping-lists/:listId/items/:itemId toggles checked without resending the whole list', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Eggs',
-          baseServings: 2,
-          ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Eggs',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
+      });
 
-      const listRes = await request(app)
-        .post('/api/shopping-lists')
-        .send({
-          name: 'Breakfast List',
-          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 2 }],
-        });
+      const listRes = await agent.post('/api/shopping-lists').send({
+        name: 'Breakfast List',
+        sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 2 }],
+      });
 
       const itemId = listRes.body.items[0].id;
 
-      const patchRes = await request(app)
+      const patchRes = await agent
         .patch(`/api/shopping-lists/${listRes.body.id}/items/${itemId}`)
         .send({ checked: true });
 
       expect(patchRes.status).toBe(200);
       expect(patchRes.body).toEqual({ id: itemId, checked: true });
 
-      const getRes = await request(app).get(`/api/shopping-lists/${listRes.body.id}`);
+      const getRes = await agent.get(`/api/shopping-lists/${listRes.body.id}`);
       expect(getRes.body.items[0].checked).toBe(true);
     });
 
     it('PATCH /api/shopping-lists/:listId/items/:itemId returns 404 for a mismatched list/item pair', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Eggs',
-          baseServings: 2,
-          ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Eggs',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
+      });
 
-      const listA = await request(app)
-        .post('/api/shopping-lists')
-        .send({
-          name: 'List A',
-          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 2 }],
-        });
-      const listB = await request(app)
+      const listA = await agent.post('/api/shopping-lists').send({
+        name: 'List A',
+        sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 2 }],
+      });
+      const listB = await agent
         .post('/api/shopping-lists')
         .send({ name: 'List B', sourceItems: [] });
 
       const itemFromListA = listA.body.items[0].id;
 
-      const res = await request(app)
+      const res = await agent
         .patch(`/api/shopping-lists/${listB.body.id}/items/${itemFromListA}`)
         .send({ checked: true });
 
@@ -1208,7 +1152,7 @@ describe('CookOut AI API Endpoints', () => {
 
   describe('Ingredient Category Overrides', () => {
     it('PUT /api/ingredient-categories/:ingredientId rejects an unknown category', async () => {
-      const res = await request(app)
+      const res = await agent
         .put('/api/ingredient-categories/flour')
         .send({ category: 'Not A Real Category' });
 
@@ -1217,23 +1161,21 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('a saved override corrects category everywhere: preview, saved list, and event plan', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Bread',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Bread',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
+      });
       const recipeId = recipeRes.body.id;
 
       // Default heuristic: "flour" falls under Pantry Staples.
-      const beforePreview = await request(app)
+      const beforePreview = await agent
         .post('/api/shopping-list')
         .send([{ recipeId, targetServings: 4 }]);
       expect(beforePreview.body.shoppingList[0].category).toBe('Pantry Staples');
       expect(beforePreview.body.shoppingList[0].categoryIsOverridden).toBe(false);
 
-      const putRes = await request(app)
+      const putRes = await agent
         .put('/api/ingredient-categories/flour')
         .send({ category: 'Bakery' });
       expect(putRes.status).toBe(200);
@@ -1242,25 +1184,23 @@ describe('CookOut AI API Endpoints', () => {
       // Ephemeral shopping-list preview picks up the override, and flags it as overridden
       // too — previews have no persisted row to attach a correction to, but they can still
       // tell the client an override is active so an edit UI can offer a reset control.
-      const afterPreview = await request(app)
+      const afterPreview = await agent
         .post('/api/shopping-list')
         .send([{ recipeId, targetServings: 4 }]);
       expect(afterPreview.body.shoppingList[0].category).toBe('Bakery');
       expect(afterPreview.body.shoppingList[0].categoryIsOverridden).toBe(true);
 
       // Ephemeral event-plan preview picks up the override too.
-      const eventPlanRes = await request(app)
-        .post('/api/events/plan')
-        .send({
-          recipeIds: [recipeId],
-          guestGroup: { totalGuests: 4, vegetarianCount: 0, veganCount: 0 },
-        });
+      const eventPlanRes = await agent.post('/api/events/plan').send({
+        recipeIds: [recipeId],
+        guestGroup: { totalGuests: 4, vegetarianCount: 0, veganCount: 0 },
+      });
       expect(eventPlanRes.body.shoppingList[0].category).toBe('Bakery');
       expect(eventPlanRes.body.shoppingList[0].categoryIsOverridden).toBe(true);
 
       // A shopping list saved AFTER the override reflects it immediately, and is flagged
       // as overridden so the client knows to offer a "reset to default" control.
-      const listRes = await request(app)
+      const listRes = await agent
         .post('/api/shopping-lists')
         .send({ name: 'Bread List', sourceItems: [{ recipeId, targetServings: 4 }] });
       expect(listRes.body.items[0].category).toBe('Bakery');
@@ -1268,23 +1208,23 @@ describe('CookOut AI API Endpoints', () => {
 
       // Clearing the override reverts every read path to the heuristic, including that
       // already-saved list — category is always resolved fresh, never persisted onto the row.
-      const deleteRes = await request(app).delete('/api/ingredient-categories/flour');
+      const deleteRes = await agent.delete('/api/ingredient-categories/flour');
       expect(deleteRes.status).toBe(204);
 
-      const listAfterClear = await request(app).get(`/api/shopping-lists/${listRes.body.id}`);
+      const listAfterClear = await agent.get(`/api/shopping-lists/${listRes.body.id}`);
       expect(listAfterClear.body.items[0].category).toBe('Pantry Staples');
       expect(listAfterClear.body.items[0].categoryIsOverridden).toBe(false);
     });
 
     it('DELETE /api/ingredient-categories/:ingredientId is idempotent for an ingredient with no override', async () => {
-      const res = await request(app).delete('/api/ingredient-categories/never-overridden');
+      const res = await agent.delete('/api/ingredient-categories/never-overridden');
       expect(res.status).toBe(204);
     });
   });
 
   describe('Pantry Inventory Subtraction', () => {
     it('PUT /api/pantry/:ingredientId sets on-hand stock; GET /api/pantry lists it', async () => {
-      const putRes = await request(app)
+      const putRes = await agent
         .put('/api/pantry/flour')
         .send({ displayName: 'Flour', amount: 200, unit: 'g' });
 
@@ -1295,14 +1235,14 @@ describe('CookOut AI API Endpoints', () => {
         quantity: { amount: 200, unit: 'g', category: 'Mass' },
       });
 
-      const listRes = await request(app).get('/api/pantry');
+      const listRes = await agent.get('/api/pantry');
       expect(listRes.status).toBe(200);
       expect(listRes.body).toHaveLength(1);
       expect(listRes.body[0].ingredientId).toBe('flour');
     });
 
     it('PUT /api/pantry/:ingredientId rejects an invalid unit', async () => {
-      const res = await request(app)
+      const res = await agent
         .put('/api/pantry/flour')
         .send({ displayName: 'Flour', amount: 200, unit: 'not-a-unit' });
 
@@ -1311,24 +1251,20 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('DELETE /api/pantry/:ingredientId is idempotent for an ingredient with no stock', async () => {
-      const res = await request(app).delete('/api/pantry/never-stocked');
+      const res = await agent.delete('/api/pantry/never-stocked');
       expect(res.status).toBe(204);
     });
 
     it('reduces a shopping-list preview item partially covered by pantry stock', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Bread',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Bread',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
+      });
 
-      await request(app)
-        .put('/api/pantry/flour')
-        .send({ displayName: 'Flour', amount: 200, unit: 'g' });
+      await agent.put('/api/pantry/flour').send({ displayName: 'Flour', amount: 200, unit: 'g' });
 
-      const previewRes = await request(app)
+      const previewRes = await agent
         .post('/api/shopping-list')
         .send([{ recipeId: recipeRes.body.id, targetServings: 4 }]);
 
@@ -1337,27 +1273,21 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('omits an item entirely from a saved shopping list when pantry stock fully covers it', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Bread',
-          baseServings: 4,
-          ingredients: [
-            { ingredientId: 'flour', displayName: 'Flour', amount: 200, unit: 'g' },
-            { ingredientId: 'salt', displayName: 'Salt', amount: 5, unit: 'g' },
-          ],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Bread',
+        baseServings: 4,
+        ingredients: [
+          { ingredientId: 'flour', displayName: 'Flour', amount: 200, unit: 'g' },
+          { ingredientId: 'salt', displayName: 'Salt', amount: 5, unit: 'g' },
+        ],
+      });
 
-      await request(app)
-        .put('/api/pantry/flour')
-        .send({ displayName: 'Flour', amount: 500, unit: 'g' });
+      await agent.put('/api/pantry/flour').send({ displayName: 'Flour', amount: 500, unit: 'g' });
 
-      const listRes = await request(app)
-        .post('/api/shopping-lists')
-        .send({
-          name: 'Bread List',
-          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 4 }],
-        });
+      const listRes = await agent.post('/api/shopping-lists').send({
+        name: 'Bread List',
+        sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 4 }],
+      });
 
       expect(listRes.status).toBe(201);
       expect(listRes.body.items).toHaveLength(1);
@@ -1365,42 +1295,32 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it("reduces an event plan's embedded shopping list too (POST /api/events/plan)", async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Bread',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Bread',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' }],
+      });
 
-      await request(app)
-        .put('/api/pantry/flour')
-        .send({ displayName: 'Flour', amount: 500, unit: 'g' });
+      await agent.put('/api/pantry/flour').send({ displayName: 'Flour', amount: 500, unit: 'g' });
 
-      const planRes = await request(app)
-        .post('/api/events/plan')
-        .send({
-          recipeIds: [recipeRes.body.id],
-          guestGroup: { totalGuests: 4, vegetarianCount: 0, veganCount: 0 },
-        });
+      const planRes = await agent.post('/api/events/plan').send({
+        recipeIds: [recipeRes.body.id],
+        guestGroup: { totalGuests: 4, vegetarianCount: 0, veganCount: 0 },
+      });
 
       expect(planRes.body.shoppingList).toHaveLength(0);
     });
 
     it('leaves an item untouched when pantry stock is recorded in an incompatible unit/category', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Bread',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'butter', displayName: 'Butter', amount: 200, unit: 'g' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Bread',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'butter', displayName: 'Butter', amount: 200, unit: 'g' }],
+      });
 
-      await request(app)
-        .put('/api/pantry/butter')
-        .send({ displayName: 'Butter', amount: 1, unit: 'cup' });
+      await agent.put('/api/pantry/butter').send({ displayName: 'Butter', amount: 1, unit: 'cup' });
 
-      const previewRes = await request(app)
+      const previewRes = await agent
         .post('/api/shopping-list')
         .send([{ recipeId: recipeRes.body.id, targetServings: 4 }]);
 
@@ -1411,16 +1331,14 @@ describe('CookOut AI API Endpoints', () => {
 
   describe('Practical Scaling v2 (Non-Linear Rounding)', () => {
     it('rounds a fractional Count total up to a buyable whole amount in the shopping-list preview', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Omelette',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Omelette',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
+      });
 
       // Scaling 1 egg (base 4 servings) down to 1 serving yields a mathematical 0.25 egg.
-      const previewRes = await request(app)
+      const previewRes = await agent
         .post('/api/shopping-list')
         .send([{ recipeId: recipeRes.body.id, targetServings: 1 }]);
 
@@ -1433,15 +1351,13 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('leaves an already-whole Count quantity unrounded', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Omelette',
-          baseServings: 2,
-          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Omelette',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 2, unit: 'egg' }],
+      });
 
-      const previewRes = await request(app)
+      const previewRes = await agent
         .post('/api/shopping-list')
         .send([{ recipeId: recipeRes.body.id, targetServings: 4 }]);
 
@@ -1452,18 +1368,16 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('never rounds Mass or Volume quantities', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Bread',
-          baseServings: 4,
-          ingredients: [
-            { ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' },
-            { ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' },
-          ],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Bread',
+        baseServings: 4,
+        ingredients: [
+          { ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' },
+          { ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' },
+        ],
+      });
 
-      const previewRes = await request(app)
+      const previewRes = await agent
         .post('/api/shopping-list')
         .send([{ recipeId: recipeRes.body.id, targetServings: 3 }]);
 
@@ -1474,20 +1388,16 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('persists the rounded whole amount (not the fractional one) on a saved shopping list', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Omelette',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Omelette',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
+      });
 
-      const saveRes = await request(app)
-        .post('/api/shopping-lists')
-        .send({
-          name: 'Brunch',
-          sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 1 }],
-        });
+      const saveRes = await agent.post('/api/shopping-lists').send({
+        name: 'Brunch',
+        sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 1 }],
+      });
 
       // The save response is itself built from the freshly-read-back Prisma row (via
       // toShoppingListJSON), same as GET — so by the time it's serialized, the persisted
@@ -1498,26 +1408,22 @@ describe('CookOut AI API Endpoints', () => {
       expect(saveRes.body.items[0].quantity.amount).toBe(1);
       expect(saveRes.body.items[0].wasRoundedForPurchase).toBe(false);
 
-      const getRes = await request(app).get(`/api/shopping-lists/${saveRes.body.id}`);
+      const getRes = await agent.get(`/api/shopping-lists/${saveRes.body.id}`);
       expect(getRes.body.items[0].quantity.amount).toBe(1);
       expect(getRes.body.items[0].wasRoundedForPurchase).toBe(false);
     });
 
     it("rounds an event plan's embedded shopping list too (POST /api/events/plan)", async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Omelette',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Omelette',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Eggs', amount: 1, unit: 'egg' }],
+      });
 
-      const planRes = await request(app)
-        .post('/api/events/plan')
-        .send({
-          recipeIds: [recipeRes.body.id],
-          guestGroup: { totalGuests: 1, vegetarianCount: 0, veganCount: 0 },
-        });
+      const planRes = await agent.post('/api/events/plan').send({
+        recipeIds: [recipeRes.body.id],
+        guestGroup: { totalGuests: 1, vegetarianCount: 0, veganCount: 0 },
+      });
 
       expect(planRes.body.shoppingList).toHaveLength(1);
       expect(planRes.body.shoppingList[0].quantity.amount).toBe(1);
@@ -1530,56 +1436,52 @@ describe('CookOut AI API Endpoints', () => {
     const validGuestGroup = { totalGuests: 8, vegetarianCount: 0, veganCount: 0 };
 
     it('PUT /api/events/:eventId/shopping-list creates a linked list on first call, and regenerating discards prior checked state', async () => {
-      const recipeRes = await request(app)
-        .post('/api/recipes')
-        .send({
-          name: 'Chili',
-          baseServings: 4,
-          ingredients: [{ ingredientId: 'beans', displayName: 'Beans', amount: 400, unit: 'g' }],
-        });
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Chili',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'beans', displayName: 'Beans', amount: 400, unit: 'g' }],
+      });
 
-      const eventRes = await request(app)
-        .post('/api/events')
-        .send({
-          name: 'Chili Night',
-          guestGroup: validGuestGroup,
-          recipeIds: [recipeRes.body.id],
-        });
+      const eventRes = await agent.post('/api/events').send({
+        name: 'Chili Night',
+        guestGroup: validGuestGroup,
+        recipeIds: [recipeRes.body.id],
+      });
 
-      const firstSave = await request(app).put(`/api/events/${eventRes.body.id}/shopping-list`);
+      const firstSave = await agent.put(`/api/events/${eventRes.body.id}/shopping-list`);
       expect(firstSave.status).toBe(200);
       expect(firstSave.body.eventId).toBe(eventRes.body.id);
       expect(firstSave.body.name).toBe('Chili Night'); // defaults to event name
       expect(firstSave.body.items).toHaveLength(1);
 
       // Standalone GET confirms it's a first-class, independently fetchable ShoppingList
-      const standaloneGet = await request(app).get(`/api/shopping-lists/${firstSave.body.id}`);
+      const standaloneGet = await agent.get(`/api/shopping-lists/${firstSave.body.id}`);
       expect(standaloneGet.status).toBe(200);
       expect(standaloneGet.body.eventId).toBe(eventRes.body.id);
 
       // Check an item, then regenerate — checked state should reset
       const itemId = firstSave.body.items[0].id;
-      await request(app)
+      await agent
         .patch(`/api/shopping-lists/${firstSave.body.id}/items/${itemId}`)
         .send({ checked: true });
 
-      const regenerated = await request(app).put(`/api/events/${eventRes.body.id}/shopping-list`);
+      const regenerated = await agent.put(`/api/events/${eventRes.body.id}/shopping-list`);
       expect(regenerated.status).toBe(200);
       expect(regenerated.body.items[0].checked).toBe(false);
       // The list itself was deleted and recreated, so it has a fresh id
       expect(regenerated.body.id).not.toBe(firstSave.body.id);
 
       // The event now reports the fresh shoppingListId
-      const eventGet = await request(app).get(`/api/events/${eventRes.body.id}`);
+      const eventGet = await agent.get(`/api/events/${eventRes.body.id}`);
       expect(eventGet.body.shoppingListId).toBe(regenerated.body.id);
     });
 
     it('PUT /api/events/:eventId/shopping-list accepts an explicit name override', async () => {
-      const eventRes = await request(app)
+      const eventRes = await agent
         .post('/api/events')
         .send({ name: 'Default Name Event', guestGroup: validGuestGroup, recipeIds: [] });
 
-      const res = await request(app)
+      const res = await agent
         .put(`/api/events/${eventRes.body.id}/shopping-list`)
         .send({ name: 'Custom List Name' });
 
@@ -1588,22 +1490,271 @@ describe('CookOut AI API Endpoints', () => {
     });
 
     it('PUT /api/events/:eventId/shopping-list for a nonexistent event returns 404', async () => {
-      const res = await request(app).put('/api/events/non-existent-event-id/shopping-list');
+      const res = await agent.put('/api/events/non-existent-event-id/shopping-list');
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
     });
 
     it('DELETE /api/events/:id cascades its linked ShoppingList', async () => {
-      const eventRes = await request(app)
+      const eventRes = await agent
         .post('/api/events')
         .send({ name: 'Cascade Test', guestGroup: validGuestGroup, recipeIds: [] });
 
-      const listRes = await request(app).put(`/api/events/${eventRes.body.id}/shopping-list`);
+      const listRes = await agent.put(`/api/events/${eventRes.body.id}/shopping-list`);
 
-      await request(app).delete(`/api/events/${eventRes.body.id}`);
+      await agent.delete(`/api/events/${eventRes.body.id}`);
 
-      const getListRes = await request(app).get(`/api/shopping-lists/${listRes.body.id}`);
+      const getListRes = await agent.get(`/api/shopping-lists/${listRes.body.id}`);
       expect(getListRes.status).toBe(404);
+    });
+  });
+
+  describe('Authentication', () => {
+    it('POST /api/auth/signup rejects a duplicate email with 409', async () => {
+      const email = 'duplicate@example.com';
+      const first = await request(app)
+        .post('/api/auth/signup')
+        .set('Origin', 'http://localhost:3000')
+        .send({ email, password: 'TestPassword123!' });
+      expect(first.status).toBe(201);
+
+      const second = await request(app)
+        .post('/api/auth/signup')
+        .set('Origin', 'http://localhost:3000')
+        .send({ email, password: 'AnotherPassword123!' });
+      expect(second.status).toBe(409);
+      expect(second.body).toHaveProperty('error', 'EmailAlreadyRegisteredError');
+    });
+
+    it('POST /api/auth/login with a wrong password returns 401', async () => {
+      const email = 'wrongpass@example.com';
+      await request(app)
+        .post('/api/auth/signup')
+        .set('Origin', 'http://localhost:3000')
+        .send({ email, password: 'TestPassword123!' });
+
+      const res = await request(app)
+        .post('/api/auth/login')
+        .set('Origin', 'http://localhost:3000')
+        .send({ email, password: 'WrongPassword!!' });
+      expect(res.status).toBe(401);
+      expect(res.body).toHaveProperty('error', 'InvalidCredentialsError');
+    });
+
+    it('a request with no session cookie is rejected with 401', async () => {
+      const res = await request(app).get('/api/recipes');
+      expect(res.status).toBe(401);
+      expect(res.body).toHaveProperty('error', 'Unauthorized');
+    });
+
+    it('GET /api/auth/me with no session returns 401', async () => {
+      const res = await request(app).get('/api/auth/me');
+      expect(res.status).toBe(401);
+    });
+
+    it('GET /api/auth/me with a valid session returns the current user', async () => {
+      const res = await agent.get('/api/auth/me');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('email');
+    });
+
+    it('POST /api/auth/logout clears the session so subsequent requests are rejected', async () => {
+      const before = await agent.get('/api/recipes');
+      expect(before.status).toBe(200);
+
+      const logoutRes = await agent.post('/api/auth/logout');
+      expect(logoutRes.status).toBe(204);
+
+      const after = await agent.get('/api/recipes');
+      expect(after.status).toBe(401);
+    });
+
+    it('a state-changing request with a valid session but no Origin/Referer is rejected with 403 (CSRF)', async () => {
+      const { rawAgent } = await createAuthenticatedAgent();
+      const res = await rawAgent.post('/api/recipes').send({
+        name: 'CSRF Test',
+        baseServings: 1,
+        ingredients: [{ ingredientId: 'x', displayName: 'X', amount: 1, unit: 'count' }],
+      });
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error', 'Forbidden');
+    });
+
+    it('a state-changing request with a valid session but an untrusted Origin is rejected with 403', async () => {
+      const { rawAgent } = await createAuthenticatedAgent();
+      const res = await rawAgent
+        .post('/api/recipes')
+        .set('Origin', 'http://evil.example.com')
+        .send({
+          name: 'CSRF Test 2',
+          baseServings: 1,
+          ingredients: [{ ingredientId: 'x', displayName: 'X', amount: 1, unit: 'count' }],
+        });
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty('error', 'Forbidden');
+    });
+
+    it('GET requests are exempt from the Origin/Referer CSRF check', async () => {
+      const { rawAgent } = await createAuthenticatedAgent();
+      const res = await rawAgent.get('/api/recipes');
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('Cross-user data isolation', () => {
+    const validGuestGroup = { totalGuests: 10, vegetarianCount: 2, veganCount: 0 };
+
+    it('a Recipe created by one user is invisible to another via list, get, update, and delete', async () => {
+      const { agent: agentA } = await createAuthenticatedAgent();
+      const { agent: agentB } = await createAuthenticatedAgent();
+
+      const createRes = await agentA.post('/api/recipes').send({
+        name: "A's Secret Recipe",
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' }],
+      });
+      expect(createRes.status).toBe(201);
+      const recipeId = createRes.body.id;
+
+      const listRes = await agentB.get('/api/recipes');
+      expect(listRes.body.map((r: { id: string }) => r.id)).not.toContain(recipeId);
+
+      const getRes = await agentB.get(`/api/recipes/${recipeId}`);
+      expect(getRes.status).toBe(404);
+
+      const putRes = await agentB.put(`/api/recipes/${recipeId}`).send({
+        name: 'Hijacked',
+        baseServings: 1,
+        ingredients: [{ ingredientId: 'x', displayName: 'X', amount: 1, unit: 'count' }],
+      });
+      expect(putRes.status).toBe(404);
+
+      const deleteRes = await agentB.delete(`/api/recipes/${recipeId}`);
+      expect(deleteRes.status).toBe(404);
+
+      // Confirm A's recipe is untouched
+      const confirmRes = await agentA.get(`/api/recipes/${recipeId}`);
+      expect(confirmRes.status).toBe(200);
+    });
+
+    it('an Event created by one user is invisible to another via list, get, update, and delete', async () => {
+      const { agent: agentA } = await createAuthenticatedAgent();
+      const { agent: agentB } = await createAuthenticatedAgent();
+
+      const createRes = await agentA
+        .post('/api/events')
+        .send({ name: "A's Party", guestGroup: validGuestGroup, recipeIds: [] });
+      expect(createRes.status).toBe(201);
+      const eventId = createRes.body.id;
+
+      const listRes = await agentB.get('/api/events');
+      expect(listRes.body.map((e: { id: string }) => e.id)).not.toContain(eventId);
+
+      const getRes = await agentB.get(`/api/events/${eventId}`);
+      expect(getRes.status).toBe(404);
+
+      const putRes = await agentB
+        .put(`/api/events/${eventId}`)
+        .send({ name: 'Hijacked', guestGroup: validGuestGroup, recipeIds: [] });
+      expect(putRes.status).toBe(404);
+
+      const deleteRes = await agentB.delete(`/api/events/${eventId}`);
+      expect(deleteRes.status).toBe(404);
+    });
+
+    it('a ShoppingList created by one user is invisible to another via list, get, delete, and item toggle', async () => {
+      const { agent: agentA } = await createAuthenticatedAgent();
+      const { agent: agentB } = await createAuthenticatedAgent();
+
+      const recipeRes = await agentA.post('/api/recipes').send({
+        name: 'A Recipe',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'egg', displayName: 'Egg', amount: 2, unit: 'egg' }],
+      });
+
+      const createRes = await agentA.post('/api/shopping-lists').send({
+        name: "A's List",
+        sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 2 }],
+      });
+      expect(createRes.status).toBe(201);
+      const listId = createRes.body.id;
+      const itemId = createRes.body.items[0].id;
+
+      const listRes = await agentB.get('/api/shopping-lists');
+      expect(listRes.body.map((l: { id: string }) => l.id)).not.toContain(listId);
+
+      const getRes = await agentB.get(`/api/shopping-lists/${listId}`);
+      expect(getRes.status).toBe(404);
+
+      const deleteRes = await agentB.delete(`/api/shopping-lists/${listId}`);
+      expect(deleteRes.status).toBe(404);
+
+      const patchRes = await agentB
+        .patch(`/api/shopping-lists/${listId}/items/${itemId}`)
+        .send({ checked: true });
+      expect(patchRes.status).toBe(404);
+
+      // Confirm A's list is untouched
+      const confirmRes = await agentA.get(`/api/shopping-lists/${listId}`);
+      expect(confirmRes.status).toBe(200);
+      expect(confirmRes.body.items[0].checked).toBe(false);
+    });
+
+    it("a PantryItem set by one user does not appear in, or affect, another user's pantry/shopping list", async () => {
+      const { agent: agentA } = await createAuthenticatedAgent();
+      const { agent: agentB } = await createAuthenticatedAgent();
+
+      await agentA.put('/api/pantry/flour').send({ displayName: 'Flour', amount: 5, unit: 'cup' });
+
+      const listResB = await agentB.get('/api/pantry');
+      expect(listResB.body).toEqual([]);
+
+      const recipeResB = await agentB.post('/api/recipes').send({
+        name: "B's Pancakes",
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 2, unit: 'cup' }],
+      });
+
+      const previewResB = await agentB
+        .post('/api/shopping-list')
+        .send([{ recipeId: recipeResB.body.id, targetServings: 4 }]);
+
+      // B has no pantry stock of flour, so A's 5 cups must not be subtracted from B's list —
+      // full 2 cups (converted to the base ml unit) must still be present.
+      const flourItem = previewResB.body.shoppingList.find(
+        (i: { ingredientId: string }) => i.ingredientId === 'flour'
+      );
+      expect(flourItem).toBeDefined();
+      expect(flourItem.quantity.unit).toBe('ml');
+      expect(flourItem.quantity.amount).toBeCloseTo(473.176, 3);
+    });
+
+    it("an IngredientCategoryOverride set by one user does not affect another user's shopping list category", async () => {
+      const { agent: agentA } = await createAuthenticatedAgent();
+      const { agent: agentB } = await createAuthenticatedAgent();
+
+      const setRes = await agentA.put('/api/ingredient-categories/mystery-item').send({
+        category: 'Beverages',
+      });
+      expect(setRes.status).toBe(200);
+
+      const recipeResB = await agentB.post('/api/recipes').send({
+        name: "B's Recipe",
+        baseServings: 1,
+        ingredients: [
+          { ingredientId: 'mystery-item', displayName: 'Mystery Item', amount: 1, unit: 'count' },
+        ],
+      });
+
+      const previewResB = await agentB
+        .post('/api/shopping-list')
+        .send([{ recipeId: recipeResB.body.id, targetServings: 1 }]);
+
+      const item = previewResB.body.shoppingList.find(
+        (i: { ingredientId: string }) => i.ingredientId === 'mystery-item'
+      );
+      expect(item.categoryIsOverridden).toBe(false);
+      expect(item.category).not.toBe('Beverages');
     });
   });
 });

@@ -32,6 +32,7 @@ coverage/
 test-results/
 playwright-report/
 *.tsbuildinfo
+apps/web/e2e/.auth/
 
 # Python (skill scripts, e.g. ui-ux-pro-max's search.py)
 __pycache__/

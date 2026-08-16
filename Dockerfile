@@ -32,6 +32,7 @@ RUN npm ci
 # ordering automatically via `tsc -b`).
 COPY packages ./packages
 COPY apps ./apps
+COPY scripts ./scripts
 RUN npm run build
 
 ##### Stage 2: runtime — build output + the builder's already-verified node_modules #####
@@ -59,6 +60,9 @@ COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/apps/web/dist ./apps/web/dist
 COPY --from=builder /app/prisma ./prisma
+# Only the one-time multi-tenancy backfill script — not smokeTestLiveGemini.js, which is a
+# dev-only manual check with no place in a running deployment.
+COPY --from=builder /app/scripts/backfillOwnerUser.js ./scripts/backfillOwnerUser.js
 
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh

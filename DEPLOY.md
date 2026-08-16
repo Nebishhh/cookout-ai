@@ -6,11 +6,9 @@ family members). Everything below is a **manual step a human has to perform** �
 can't sign up for services, redeem credits, or click through cloud dashboards on your
 behalf.
 
-The app has no real multi-user accounts yet — it's gated behind a single shared password
-(`APP_ACCESS_PASSWORD`, HTTP Basic Auth) as a stopgap. Everyone who has the password sees
-and can edit the same shared data (recipes, events, shopping lists). Fine for a trusted
-handful of people; not a substitute for real per-user auth, which is a separate, future
-piece of work.
+The app has real per-user accounts (email + password, cookie sessions) — each account's
+recipes, events, shopping lists, pantry, and category corrections are private to it. The
+earlier single-shared-password stopgap has been retired.
 
 ## 1. Get a VPS (manual)
 
@@ -70,9 +68,43 @@ committed:
 ```bash
 cat > .env <<'EOF'
 GEMINI_API_KEY=your_real_gemini_key
-APP_ACCESS_PASSWORD=choose_a_strong_shared_password
+ALLOWED_ORIGINS=https://your-domain.example.com
 EOF
 ```
+
+`ALLOWED_ORIGINS` must match the real domain you'll visit the app at (from step 2) — it
+drives both CORS and the CSRF Origin check for cookie-authenticated requests; the app
+fails closed (blocks all sign-ins) if this doesn't match what the browser actually sends.
+
+**Upgrading a pre-auth deployment (manual — do this _before_ step 6, not after)**: if this
+VPS was already running CookOut AI before per-user accounts existed, its data has no
+owner, and `userId` is a _required_ column in this version's schema — the normal
+`docker compose up -d --build` will refuse to start against that data (see "Known
+limitation: destructive schema changes" below), and a naive `db push` would just drop the
+column's constraint or fail outright. There's no one-command fix for this transition; it
+needs the same two-step process this project's own `dev.db` went through, run by hand
+against the mounted volume from a machine with this repo checked out and Node installed
+(not through the container, which only ships the _final_ required-column schema):
+
+1. Stop the container but keep the volume: `docker compose stop app`.
+2. Locate the SQLite file backing the `cookout_data` volume (`docker volume inspect
+cookout-ai_cookout_data` for its host path), and temporarily edit your local
+   `prisma/schema.prisma` so the five `userId` fields (`Recipe`, `Event`, `ShoppingList`,
+   `IngredientCategoryOverride`, `PantryItem`) read `String?` instead of `String` (and
+   drop the `@@unique([userId, ingredientId])` compound constraints on the latter two, if
+   present, since a nullable column can't safely be part of one yet).
+3. `DATABASE_URL="file:/path/to/prod.db" npx prisma db push --schema=prisma/schema.prisma`
+   — applies the now-optional columns.
+4. `BOOTSTRAP_OWNER_EMAIL="you@example.com" BOOTSTRAP_OWNER_PASSWORD="choose_a_strong_password" DATABASE_URL="file:/path/to/prod.db" node scripts/backfillOwnerUser.js`
+   — creates the bootstrap owner and reassigns every ownerless row to it.
+5. `git checkout -- prisma/schema.prisma` (revert your temporary edit back to the real,
+   required-column schema), then re-run the same `db push` command from step 3 — now safe,
+   since every row already has a `userId`.
+6. Proceed to step 6 below (`docker compose up -d --build`) as normal; its own `db push`
+   on startup will be a no-op since the schema already matches.
+
+Skip all of this for a brand-new deployment — there's nothing to backfill, and the schema
+push in step 6 handles an empty database without issue.
 
 Edit `Caddyfile` in the repo and replace `you@example.com` (Let's Encrypt expiry notices)
 and `your-domain.example.com` with your real email and domain before the next step.
@@ -87,8 +119,9 @@ docker compose logs -f app     # watch the prisma db push + server startup
 ## 7. Verify
 
 - `curl -i https://your-domain.example.com/api/health` → `200`, no credentials needed.
-- Visit `https://your-domain.example.com/` in a browser → a native Basic Auth prompt,
-  then the app after entering the shared password.
+- Visit `https://your-domain.example.com/` in a browser → the CookOut AI login/signup
+  screen. Sign up a real account (or log in, if you ran the backfill step above) and
+  confirm you land in the app.
 
 ## Updating after a code change
 

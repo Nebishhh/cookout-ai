@@ -258,6 +258,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...options,
     headers,
+    credentials: 'include',
   });
 
   const contentType = response.headers.get('content-type');
@@ -291,6 +292,11 @@ export interface ParseEventDescriptionResponseDto {
   vegetarianCount: number;
   veganCount: number;
   source: 'heuristic' | 'ai';
+}
+
+export interface AuthUserDto {
+  id: string;
+  email: string;
 }
 
 export const api = {
@@ -410,4 +416,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ description }),
     }),
+  signup: (email: string, password: string) =>
+    request<AuthUserDto>('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  login: (email: string, password: string) =>
+    request<AuthUserDto>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+  me: () => request<AuthUserDto>('/api/auth/me'),
 };

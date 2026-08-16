@@ -1,11 +1,14 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { UtensilsCrossed, ShoppingBag, Flame, Calendar, Sun, Moon } from 'lucide-react';
+import { UtensilsCrossed, ShoppingBag, Flame, Calendar, Sun, Moon, LogOut } from 'lucide-react';
 import { useTheme } from '../lib/useTheme';
+import type { AuthUserDto } from '../lib/api';
 
 interface NavigationProps {
   currentTab: 'recipes' | 'shopping-list' | 'event-planner';
   onTabChange: (tab: 'recipes' | 'shopping-list' | 'event-planner') => void;
+  user: AuthUserDto;
+  onLogout: () => void;
 }
 
 const TABS = [
@@ -16,7 +19,12 @@ const TABS = [
 
 const SIGNATURE_TRANSITION = { duration: 0.2, ease: [0.16, 1, 0.3, 1] as const };
 
-export const Navigation: React.FC<NavigationProps> = ({ currentTab, onTabChange }) => {
+export const Navigation: React.FC<NavigationProps> = ({
+  currentTab,
+  onTabChange,
+  user,
+  onLogout,
+}) => {
   const { theme, toggleTheme } = useTheme();
 
   return (
@@ -71,6 +79,20 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onTabChange 
           >
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
+
+          <div className="hidden items-center gap-2 border-l border-stone/60 pl-3 sm:flex">
+            <span className="max-w-[10rem] truncate text-xs text-ink-muted" title={user.email}>
+              {user.email}
+            </span>
+            <button
+              type="button"
+              onClick={onLogout}
+              aria-label="Log out"
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone bg-canvas text-ink-muted transition-colors hover:bg-paper hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
     </header>

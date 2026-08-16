@@ -3,8 +3,11 @@ import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
 import { motion } from 'framer-motion';
-import { api, type RecipeDto } from './lib/api';
+import { Loader2 } from 'lucide-react';
+import { api, type RecipeDto, type AuthUserDto } from './lib/api';
 import { TOGGLE_SHOPPING_LIST_ITEM_MUTATION_KEY } from './lib/queries';
+import { AuthProvider, useAuth } from './lib/AuthContext';
+import { AuthPage } from './components/AuthPage';
 import { Navigation } from './components/Navigation';
 import { RecipeList } from './components/RecipeList';
 import { RecipeForm } from './components/RecipeForm';
@@ -23,8 +26,17 @@ import { PantryPanel } from './components/PantryPanel';
  * persisted to only this one paused mutation, not every mutation ever run, keeping localStorage
  * usage bounded. `gcTime` must be at least the persister's default 24h `maxAge`, or a persisted
  * query could be garbage-collected in memory before it's ever written to storage.
+ *
+ * `shouldDehydrateQuery: () => false` (below, in persistOptions) is load-bearing, not
+ * incidental: without it, the persister's *default* behavior writes every successful query
+ * (recipes, events, shopping lists — a user's actual data) to localStorage too. Since AppShell
+ * fully unmounts on logout and remounts fresh on the next login (see the isLoading/!user
+ * branch below), a fresh QueryClient would otherwise rehydrate the *previous* browser
+ * session's cached data from localStorage — a real cross-user data leak on a shared device,
+ * caught during this feature's manual two-user verification pass, not a hypothetical.
  */
 const ONE_DAY_MS = 1000 * 60 * 60 * 24;
+const QUERY_PERSISTER_KEY = 'cookout-ai-query-cache';
 
 function createPersistedQueryClient(): QueryClient {
   const queryClient = new QueryClient({
@@ -54,12 +66,17 @@ function createPersistedQueryClient(): QueryClient {
   return queryClient;
 }
 
-const persister = createSyncStoragePersister({ storage: window.localStorage });
+const persister = createSyncStoragePersister({
+  storage: window.localStorage,
+  key: QUERY_PERSISTER_KEY,
+});
 
 /**
  * Open Questions / Scope Notes:
  * - Query stale time / cache invalidation strategy is using TanStack Query defaults (5-min staleTime configured for shared queries).
- * - No client-side routing guard or authentication exists (matches API's current no-auth scope).
+ * - AuthProvider gates the whole tree below: <AuthPage/> renders instead of <Navigation/>+<main>
+ *   until a session exists, so every TanStack Query hook in this tree simply never mounts (and
+ *   never fires) pre-login — no `enabled:` flags needed on top of that.
  * - Shopping lists can now be saved standalone (POST /api/shopping-lists) or linked to an event
  *   (PUT /api/events/:eventId/shopping-list) with per-item checked state that persists.
  *   The ephemeral preview route (POST /api/shopping-list) still exists unchanged for "build before deciding to save".
@@ -70,10 +87,23 @@ const persister = createSyncStoragePersister({ storage: window.localStorage });
 
 interface AppProps {
   queryClient?: QueryClient;
+  /** Test seam only — see AuthProvider's `initialUser` doc comment. */
+  initialUser?: AuthUserDto | null;
 }
 
-export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
+const AppShell: React.FC<Omit<AppProps, 'initialUser'>> = ({ queryClient: propQueryClient }) => {
   const [queryClient] = useState(() => propQueryClient || createPersistedQueryClient());
+  const { user, isLoading, logout } = useAuth();
+
+  // Defense in depth on top of `shouldDehydrateQuery: () => false` above: also drops the
+  // in-memory cache and wipes any already-persisted localStorage data (e.g. from before that
+  // fix shipped, or the one legitimately-persisted paused mutation, which shouldn't survive
+  // into a different user's session on a shared device) on every explicit logout.
+  const handleLogout = async () => {
+    await logout();
+    queryClient.clear();
+    window.localStorage.removeItem(QUERY_PERSISTER_KEY);
+  };
 
   const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -132,6 +162,9 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
       persistOptions={{
         persister,
         dehydrateOptions: {
+          // Never persist query results — only the one specific paused mutation below is
+          // meant to survive a reload. See this file's doc comment above `persister`.
+          shouldDehydrateQuery: () => false,
           shouldDehydrateMutation: (mutation) =>
             mutation.state.isPaused &&
             JSON.stringify(mutation.options.mutationKey) ===
@@ -142,63 +175,82 @@ export const App: React.FC<AppProps> = ({ queryClient: propQueryClient }) => {
         void queryClient.resumePausedMutations();
       }}
     >
-      <div className="min-h-screen bg-canvas font-sans text-ink antialiased">
-        <Navigation currentTab={currentTab} onTabChange={handleTabChange} />
+      {isLoading ? (
+        <div className="flex min-h-screen items-center justify-center bg-canvas">
+          <Loader2 className="h-6 w-6 animate-spin text-ink-muted" />
+        </div>
+      ) : !user ? (
+        <AuthPage />
+      ) : (
+        <div className="min-h-screen bg-canvas font-sans text-ink antialiased">
+          <Navigation
+            currentTab={currentTab}
+            onTabChange={handleTabChange}
+            user={user}
+            onLogout={handleLogout}
+          />
 
-        <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-          <motion.div
-            key={currentTab}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-          >
-            {currentTab === 'recipes' ? (
-              <div className="space-y-10">
-                <RecipeForm
-                  recipe={editingRecipe || undefined}
-                  onCancel={editingRecipe ? () => setEditingRecipe(null) : undefined}
-                  onSuccess={() => setEditingRecipe(null)}
-                />
-                <RecipeList
-                  onEditRecipe={(recipe) => setEditingRecipe(recipe)}
-                  onSendToShoppingList={handleSendToShoppingList}
-                />
-              </div>
-            ) : currentTab === 'shopping-list' ? (
-              <div className="space-y-10">
-                <PantryPanel />
-                <SavedShoppingLists
-                  selectedId={selectedShoppingListId}
-                  onSelect={setSelectedShoppingListId}
-                  onDeleted={() => setSelectedShoppingListId(null)}
-                />
-                <ShoppingListBuilder
-                  initialSelectedRecipeIds={preselectedShoppingListIds}
-                  selectedShoppingListId={selectedShoppingListId}
-                  onSaved={setSelectedShoppingListId}
-                  onCloseDetail={() => setSelectedShoppingListId(null)}
-                />
-              </div>
-            ) : (
-              <div className="space-y-10">
-                <EventList
-                  selectedId={selectedEventId}
-                  onSelect={setSelectedEventId}
-                  onDeleted={() => setSelectedEventId(null)}
-                />
-                <EventPlanner
-                  selectedEventId={selectedEventId}
-                  onSaved={setSelectedEventId}
-                  onCloseDetail={() => setSelectedEventId(null)}
-                  onViewShoppingList={handleViewShoppingList}
-                />
-              </div>
-            )}
-          </motion.div>
-        </main>
-      </div>
+          <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+            <motion.div
+              key={currentTab}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            >
+              {currentTab === 'recipes' ? (
+                <div className="space-y-10">
+                  <RecipeForm
+                    recipe={editingRecipe || undefined}
+                    onCancel={editingRecipe ? () => setEditingRecipe(null) : undefined}
+                    onSuccess={() => setEditingRecipe(null)}
+                  />
+                  <RecipeList
+                    onEditRecipe={(recipe) => setEditingRecipe(recipe)}
+                    onSendToShoppingList={handleSendToShoppingList}
+                  />
+                </div>
+              ) : currentTab === 'shopping-list' ? (
+                <div className="space-y-10">
+                  <PantryPanel />
+                  <SavedShoppingLists
+                    selectedId={selectedShoppingListId}
+                    onSelect={setSelectedShoppingListId}
+                    onDeleted={() => setSelectedShoppingListId(null)}
+                  />
+                  <ShoppingListBuilder
+                    initialSelectedRecipeIds={preselectedShoppingListIds}
+                    selectedShoppingListId={selectedShoppingListId}
+                    onSaved={setSelectedShoppingListId}
+                    onCloseDetail={() => setSelectedShoppingListId(null)}
+                  />
+                </div>
+              ) : (
+                <div className="space-y-10">
+                  <EventList
+                    selectedId={selectedEventId}
+                    onSelect={setSelectedEventId}
+                    onDeleted={() => setSelectedEventId(null)}
+                  />
+                  <EventPlanner
+                    selectedEventId={selectedEventId}
+                    onSaved={setSelectedEventId}
+                    onCloseDetail={() => setSelectedEventId(null)}
+                    onViewShoppingList={handleViewShoppingList}
+                  />
+                </div>
+              )}
+            </motion.div>
+          </main>
+        </div>
+      )}
     </PersistQueryClientProvider>
   );
 };
+
+export const App: React.FC<AppProps> = ({ initialUser, ...props }) => (
+  <AuthProvider initialUser={initialUser}>
+    <AppShell {...props} />
+  </AuthProvider>
+);
 
 export default App;

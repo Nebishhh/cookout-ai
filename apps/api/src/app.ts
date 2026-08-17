@@ -65,6 +65,7 @@ import { handleImportImage } from './importImage.js';
 import { errorHandler, NotFoundError } from './middleware/errorHandler.js';
 import { requireAuth } from './middleware/requireAuth.js';
 import { csrfGuard } from './middleware/csrfGuard.js';
+import { signupRateLimit, loginRateLimit } from './middleware/authRateLimit.js';
 import { getAllowedOrigins } from './allowedOrigins.js';
 import {
   signup as createUserAccount,
@@ -82,6 +83,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const app = express();
+
+// Exactly one reverse proxy sits in front of this app in every real deployment topology
+// (Caddy in docker-compose.yml in production, Vite's dev-server proxy in `npm run dev`) —
+// trusting exactly 1 hop makes `req.ip` (used by the rate limiters below) resolve to the
+// real client IP from X-Forwarded-For instead of the proxy's own, without the security
+// footgun of trusting the whole chain (`trust proxy: true`).
+app.set('trust proxy', 1);
 
 // A credentialed cookie session requires CORS to echo a specific allowed origin rather
 // than the previous blanket `*` — `getAllowedOrigins()` is shared with csrfGuard.ts so
@@ -125,44 +133,52 @@ const SESSION_COOKIE_OPTIONS = {
 };
 
 // POST /api/auth/signup — create an account and log in immediately.
-app.post('/api/auth/signup', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { email, password } = validateSignupInput(req.body?.email, req.body?.password);
-    const user = await createUserAccount(email, password);
-    const { rawToken } = await createSession(user.id);
-    res.cookie(SESSION_COOKIE_NAME, rawToken, SESSION_COOKIE_OPTIONS);
-    res.status(201).json(user);
-  } catch (err) {
-    if (err instanceof InvalidCredentialsError) {
-      return res.status(400).json({ error: err.name, message: err.message });
+app.post(
+  '/api/auth/signup',
+  signupRateLimit,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { email, password } = validateSignupInput(req.body?.email, req.body?.password);
+      const user = await createUserAccount(email, password);
+      const { rawToken } = await createSession(user.id);
+      res.cookie(SESSION_COOKIE_NAME, rawToken, SESSION_COOKIE_OPTIONS);
+      res.status(201).json(user);
+    } catch (err) {
+      if (err instanceof InvalidCredentialsError) {
+        return res.status(400).json({ error: err.name, message: err.message });
+      }
+      if (err instanceof EmailAlreadyRegisteredError) {
+        return res.status(409).json({ error: err.name, message: err.message });
+      }
+      next(err);
     }
-    if (err instanceof EmailAlreadyRegisteredError) {
-      return res.status(409).json({ error: err.name, message: err.message });
-    }
-    next(err);
   }
-});
+);
 
 // POST /api/auth/login
-app.post('/api/auth/login', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { email, password } = req.body || {};
-    if (typeof email !== 'string' || typeof password !== 'string') {
-      return res
-        .status(400)
-        .json({ error: 'BadRequest', message: 'Email and password are required.' });
+app.post(
+  '/api/auth/login',
+  loginRateLimit,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { email, password } = req.body || {};
+      if (typeof email !== 'string' || typeof password !== 'string') {
+        return res
+          .status(400)
+          .json({ error: 'BadRequest', message: 'Email and password are required.' });
+      }
+      const user = await verifyUserCredentials(email, password);
+      const { rawToken } = await createSession(user.id);
+      res.cookie(SESSION_COOKIE_NAME, rawToken, SESSION_COOKIE_OPTIONS);
+      res.status(200).json(user);
+    } catch (err) {
+      if (err instanceof InvalidCredentialsError) {
+        return res.status(401).json({ error: err.name, message: err.message });
+      }
+      next(err);
     }
-    const user = await verifyUserCredentials(email, password);
-    const { rawToken } = await createSession(user.id);
-    res.cookie(SESSION_COOKIE_NAME, rawToken, SESSION_COOKIE_OPTIONS);
-    res.status(200).json(user);
-  } catch (err) {
-    if (err instanceof InvalidCredentialsError) {
-      return res.status(401).json({ error: err.name, message: err.message });
-    }
-    next(err);
   }
-});
+);
 
 // POST /api/auth/logout — idempotent; clears the cookie regardless of session validity.
 app.post('/api/auth/logout', async (req: Request, res: Response, next: NextFunction) => {

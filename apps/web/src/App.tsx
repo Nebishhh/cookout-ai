@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, onlineManager } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
 import { motion } from 'framer-motion';
@@ -34,6 +34,19 @@ import { PantryPanel } from './components/PantryPanel';
  * branch below), a fresh QueryClient would otherwise rehydrate the *previous* browser
  * session's cached data from localStorage — a real cross-user data leak on a shared device,
  * caught during this feature's manual two-user verification pass, not a hypothetical.
+ *
+ * Resuming a paused mutation is wired in two places, deliberately, not redundantly:
+ * `PersistQueryClientProvider`'s `onSuccess` below calls `resumePausedMutations()` once, right
+ * after the persisted cache restores at boot — the common case (app was closed while offline,
+ * reopened later once already back online). That call alone left a real gap, found during a
+ * production-stack acceptance test: if the app is still open (or reloaded) while genuinely
+ * offline and connectivity returns *later in the same session*, nothing re-called
+ * `resumePausedMutations()` — TanStack Query does not auto-resume on an online transition by
+ * itself, `onSuccess` only fires once at mount. The `useOnlineResume` effect in `AppShell`
+ * below closes that gap by subscribing to `onlineManager` (the same online/offline tracking
+ * TanStack Query already uses internally, not a parallel `window.addEventListener` system) and
+ * calling the exact same `resumePausedMutations()` on every offline→online transition, not
+ * just at boot. See `apps/web/e2e/offline-resume.spec.ts` for the regression test.
  */
 const ONE_DAY_MS = 1000 * 60 * 60 * 24;
 const QUERY_PERSISTER_KEY = 'cookout-ai-query-cache';
@@ -104,6 +117,18 @@ const AppShell: React.FC<Omit<AppProps, 'initialUser'>> = ({ queryClient: propQu
     queryClient.clear();
     window.localStorage.removeItem(QUERY_PERSISTER_KEY);
   };
+
+  // Closes the gap `onSuccess`'s boot-time-only resume leaves: re-resumes any paused
+  // mutation on every subsequent offline->online transition, not just once at mount. Reuses
+  // the same resumePausedMutations() call and the same onlineManager TanStack Query already
+  // tracks connectivity with — see this file's doc comment above `persister` for the full story.
+  useEffect(() => {
+    return onlineManager.subscribe((isOnline) => {
+      if (isOnline) {
+        void queryClient.resumePausedMutations();
+      }
+    });
+  }, [queryClient]);
 
   const [editingRecipe, setEditingRecipe] = useState<RecipeDto | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);

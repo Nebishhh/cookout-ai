@@ -6,6 +6,7 @@ interface AuthContextValue {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string) => Promise<void>;
+  continueAsGuest: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -58,13 +59,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children, initialUse
     setUser(me);
   }, []);
 
+  const continueAsGuest = useCallback(async () => {
+    const me = await api.continueAsGuest();
+    setUser(me);
+  }, []);
+
   const logout = useCallback(async () => {
     await api.logout();
     setUser(null);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, signup, continueAsGuest, logout }}>
       {children}
     </AuthContext.Provider>
   );

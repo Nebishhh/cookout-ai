@@ -296,7 +296,8 @@ export interface ParseEventDescriptionResponseDto {
 
 export interface AuthUserDto {
   id: string;
-  email: string;
+  email: string | null;
+  isGuest: boolean;
 }
 
 export const api = {
@@ -426,6 +427,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  continueAsGuest: () => request<AuthUserDto>('/api/auth/guest', { method: 'POST' }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   me: () => request<AuthUserDto>('/api/auth/me'),
 };

@@ -1,7 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { createAuthRateLimit } from './authRateLimit.js';
+import { createAuthRateLimit, guestRateLimit } from './authRateLimit.js';
 
 function buildTestApp(max: number) {
   const app = express();
@@ -57,6 +57,29 @@ describe('createAuthRateLimit', () => {
     );
 
     for (let i = 0; i < 5; i++) {
+      const res = await request(app).post('/test');
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it("a standalone limiter with skip: () => false blocks the same way guestRateLimit's underlying config would (10/hour)", async () => {
+    const app = buildTestApp(10);
+
+    for (let i = 0; i < 10; i++) {
+      const res = await request(app).post('/test');
+      expect(res.status).toBe(200);
+    }
+
+    const blocked = await request(app).post('/test');
+    expect(blocked.status).toBe(429);
+  });
+
+  it('the exported guestRateLimit keeps the default no-op-under-NODE_ENV=test contract', async () => {
+    expect(process.env.NODE_ENV).toBe('test');
+    const app = express();
+    app.post('/test', guestRateLimit, (_req, res) => res.status(200).json({ ok: true }));
+
+    for (let i = 0; i < 15; i++) {
       const res = await request(app).post('/test');
       expect(res.status).toBe(200);
     }

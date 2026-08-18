@@ -4,6 +4,7 @@ import { prisma } from './prisma.js';
 
 export const SESSION_COOKIE_NAME = 'cookout_session';
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const GUEST_SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const BCRYPT_COST = 10;
 
 export class InvalidCredentialsError extends Error {
@@ -22,7 +23,8 @@ export class EmailAlreadyRegisteredError extends Error {
 
 export interface AuthUser {
   id: string;
-  email: string;
+  email: string | null;
+  isGuest: boolean;
 }
 
 export function validateSignupInput(
@@ -54,10 +56,11 @@ function hashToken(rawToken: string): string {
 }
 
 export async function createSession(
-  userId: string
+  userId: string,
+  ttlMs: number = SESSION_TTL_MS
 ): Promise<{ rawToken: string; expiresAt: Date }> {
   const rawToken = randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  const expiresAt = new Date(Date.now() + ttlMs);
   await prisma.session.create({
     data: { id: hashToken(rawToken), userId, expiresAt },
   });
@@ -75,15 +78,36 @@ export async function getSessionUser(rawToken: string): Promise<AuthUser | null>
   }
 
   if (session.expiresAt.getTime() <= Date.now()) {
-    await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
+    // A returning-but-too-late guest gets cleaned up immediately here rather than waiting for
+    // guestCleanup.ts's periodic sweep — deleting the User cascades to everything they own.
+    if (session.user.isGuest) {
+      await prisma.user.delete({ where: { id: session.userId } }).catch(() => undefined);
+    } else {
+      await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
+    }
     return null;
   }
 
-  return { id: session.user.id, email: session.user.email };
+  return { id: session.user.id, email: session.user.email, isGuest: session.user.isGuest };
 }
 
-export async function deleteSession(rawToken: string): Promise<void> {
-  await prisma.session.deleteMany({ where: { id: hashToken(rawToken) } });
+// Real users: end just this session, same as before. Guests: delete the User outright — cascade
+// (onDelete: Cascade on every owned table) reclaims 100% of their data in one statement, which is
+// how "end guest session" fulfills the "data is deleted, not just logged out" requirement.
+export async function endSession(rawToken: string): Promise<void> {
+  const hashed = hashToken(rawToken);
+  const session = await prisma.session.findUnique({
+    where: { id: hashed },
+    include: { user: true },
+  });
+  if (!session) {
+    return;
+  }
+  if (session.user.isGuest) {
+    await prisma.user.delete({ where: { id: session.userId } }).catch(() => undefined);
+  } else {
+    await prisma.session.delete({ where: { id: hashed } }).catch(() => undefined);
+  }
 }
 
 export async function signup(email: string, password: string): Promise<AuthUser> {
@@ -93,17 +117,26 @@ export async function signup(email: string, password: string): Promise<AuthUser>
   }
   const passwordHash = await hashPassword(password);
   const user = await prisma.user.create({ data: { email, passwordHash } });
-  return { id: user.id, email: user.email };
+  return { id: user.id, email: user.email, isGuest: false };
 }
 
 export async function login(email: string, password: string): Promise<AuthUser> {
   const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
-  if (!user) {
+  if (!user || !user.passwordHash) {
     throw new InvalidCredentialsError('Invalid email or password.');
   }
   const valid = await verifyPassword(password, user.passwordHash);
   if (!valid) {
     throw new InvalidCredentialsError('Invalid email or password.');
   }
-  return { id: user.id, email: user.email };
+  return { id: user.id, email: user.email, isGuest: false };
+}
+
+// Zero-friction entry point: no email/password, immediately usable, data auto-deleted after
+// GUEST_SESSION_TTL_MS (see getSessionUser's lazy-expiry branch and guestCleanup.ts's periodic
+// sweep) or sooner via POST /api/auth/logout (see endSession's isGuest branch above).
+export async function createGuestUser(): Promise<AuthUser> {
+  const guestExpiresAt = new Date(Date.now() + GUEST_SESSION_TTL_MS);
+  const user = await prisma.user.create({ data: { isGuest: true, guestExpiresAt } });
+  return { id: user.id, email: null, isGuest: true };
 }

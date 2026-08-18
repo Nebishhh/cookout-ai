@@ -2,7 +2,11 @@ import { describe, expect, it, beforeAll, beforeEach } from 'vitest';
 import request from 'supertest';
 import { app } from './app.js';
 import { prisma } from './prisma.js';
-import { createAuthenticatedAgent, type TestAgent } from './__testHelpers__/testAuth.js';
+import {
+  createAuthenticatedAgent,
+  createGuestAgent,
+  type TestAgent,
+} from './__testHelpers__/testAuth.js';
 
 /**
  * Testing Architecture & Database Isolation Note:
@@ -1598,6 +1602,76 @@ describe('CookOut AI API Endpoints', () => {
       const { rawAgent } = await createAuthenticatedAgent();
       const res = await rawAgent.get('/api/recipes');
       expect(res.status).toBe(200);
+    });
+  });
+
+  describe('Guest mode', () => {
+    it('POST /api/auth/guest returns 201 with a guest user and sets the session cookie', async () => {
+      const res = await request(app).post('/api/auth/guest').set('Origin', 'http://localhost:3000');
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({ email: null, isGuest: true });
+      expect(res.body.id).toEqual(expect.any(String));
+      expect(res.headers['set-cookie']).toBeDefined();
+    });
+
+    it('a guest agent can immediately hit a protected route with no prior signup/login', async () => {
+      const { agent: guestAgent } = await createGuestAgent();
+      const res = await guestAgent.get('/api/recipes');
+      expect(res.status).toBe(200);
+    });
+
+    it('an expired guest session is rejected with 401, and cascades to delete the guest User and their data', async () => {
+      const { agent: guestAgent, user } = await createGuestAgent();
+
+      const recipeRes = await guestAgent.post('/api/recipes').send({
+        name: 'Guest Recipe',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' }],
+      });
+      expect(recipeRes.status).toBe(201);
+
+      // Backdate every session belonging to this guest so the next request finds it expired.
+      await prisma.session.updateMany({
+        where: { userId: user.id },
+        data: { expiresAt: new Date(Date.now() - 1000) },
+      });
+
+      const after = await guestAgent.get('/api/recipes');
+      expect(after.status).toBe(401);
+
+      const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+      expect(dbUser).toBeNull();
+      const dbRecipe = await prisma.recipe.findUnique({ where: { id: recipeRes.body.id } });
+      expect(dbRecipe).toBeNull();
+    });
+
+    it('ending a guest session via POST /api/auth/logout deletes the guest User and their data', async () => {
+      const { agent: guestAgent, user } = await createGuestAgent();
+
+      const recipeRes = await guestAgent.post('/api/recipes').send({
+        name: 'Guest Recipe 2',
+        baseServings: 2,
+        ingredients: [{ ingredientId: 'sugar', displayName: 'Sugar', amount: 1, unit: 'cup' }],
+      });
+      expect(recipeRes.status).toBe(201);
+
+      const logoutRes = await guestAgent.post('/api/auth/logout');
+      expect(logoutRes.status).toBe(204);
+
+      const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+      expect(dbUser).toBeNull();
+      const dbRecipe = await prisma.recipe.findUnique({ where: { id: recipeRes.body.id } });
+      expect(dbRecipe).toBeNull();
+    });
+
+    it('a real user logging out only clears the Session, never deletes the User', async () => {
+      const { agent: realAgent, user } = await createAuthenticatedAgent();
+
+      const logoutRes = await realAgent.post('/api/auth/logout');
+      expect(logoutRes.status).toBe(204);
+
+      const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+      expect(dbUser).not.toBeNull();
     });
   });
 

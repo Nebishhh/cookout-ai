@@ -37,6 +37,12 @@ export interface AuthenticatedTestAgent {
   user: { id: string; email: string };
 }
 
+export interface GuestTestAgent {
+  agent: TestAgent;
+  rawAgent: ReturnType<typeof request.agent>;
+  user: { id: string; email: null; isGuest: true };
+}
+
 /** Signs up a fresh, uniquely-emailed user and returns a cookie-authenticated test agent. */
 export async function createAuthenticatedAgent(): Promise<AuthenticatedTestAgent> {
   const raw = request.agent(app);
@@ -57,6 +63,25 @@ export async function createAuthenticatedAgent(): Promise<AuthenticatedTestAgent
     agent: withOrigin(raw),
     rawAgent: raw,
     user: signupRes.body as { id: string; email: string },
+  };
+}
+
+/** Creates a guest session via POST /api/auth/guest — no email/password involved. */
+export async function createGuestAgent(): Promise<GuestTestAgent> {
+  const raw = request.agent(app);
+
+  const guestRes = await raw.post('/api/auth/guest').set('Origin', TEST_ORIGIN).send();
+
+  if (guestRes.status !== 201) {
+    throw new Error(
+      `createGuestAgent: guest creation failed (${guestRes.status}): ${JSON.stringify(guestRes.body)}`
+    );
+  }
+
+  return {
+    agent: withOrigin(raw),
+    rawAgent: raw,
+    user: guestRes.body as { id: string; email: null; isGuest: true },
   };
 }
 

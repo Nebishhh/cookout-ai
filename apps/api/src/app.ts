@@ -65,16 +65,19 @@ import { handleImportImage } from './importImage.js';
 import { errorHandler, NotFoundError } from './middleware/errorHandler.js';
 import { requireAuth } from './middleware/requireAuth.js';
 import { csrfGuard } from './middleware/csrfGuard.js';
-import { signupRateLimit, loginRateLimit } from './middleware/authRateLimit.js';
+import { signupRateLimit, loginRateLimit, guestRateLimit } from './middleware/authRateLimit.js';
 import { getAllowedOrigins } from './allowedOrigins.js';
+import { startGuestCleanupSweep } from './guestCleanup.js';
 import {
   signup as createUserAccount,
   login as verifyUserCredentials,
   validateSignupInput,
   createSession,
-  deleteSession,
+  endSession,
+  createGuestUser,
   SESSION_COOKIE_NAME,
   SESSION_TTL_MS,
+  GUEST_SESSION_TTL_MS,
   InvalidCredentialsError,
   EmailAlreadyRegisteredError,
 } from './auth.js';
@@ -83,6 +86,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const app = express();
+
+// The only scheduled job in this codebase — periodically reclaims guest accounts whose
+// GUEST_SESSION_TTL_MS has passed but who never came back to trigger getSessionUser's lazy
+// cleanup. Skipped under Vitest: an un-guarded interval would dangle past a test run and could
+// race-delete rows mid-test against the shared test.db (see root vitest.config.ts).
+if (process.env.NODE_ENV !== 'test') {
+  startGuestCleanupSweep();
+}
 
 // Exactly one reverse proxy sits in front of this app in every real deployment topology
 // (Caddy in docker-compose.yml in production, Vite's dev-server proxy in `npm run dev`) —
@@ -180,12 +191,35 @@ app.post(
   }
 );
 
-// POST /api/auth/logout — idempotent; clears the cookie regardless of session validity.
+// POST /api/auth/guest — zero-friction entry: no email/password, immediately usable, data
+// auto-deleted after ~24h (GUEST_SESSION_TTL_MS) or sooner via POST /api/auth/logout (see
+// endSession's isGuest branch in auth.ts).
+app.post(
+  '/api/auth/guest',
+  guestRateLimit,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const user = await createGuestUser();
+      const { rawToken } = await createSession(user.id, GUEST_SESSION_TTL_MS);
+      res.cookie(SESSION_COOKIE_NAME, rawToken, {
+        ...SESSION_COOKIE_OPTIONS,
+        maxAge: GUEST_SESSION_TTL_MS,
+      });
+      res.status(201).json(user);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/auth/logout — idempotent; clears the cookie regardless of session validity. For a
+// guest, endSession deletes their User row outright (cascade reclaims everything they own)
+// rather than just clearing the Session, so "log out" doubles as "end guest session."
 app.post('/api/auth/logout', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const rawToken = req.cookies?.[SESSION_COOKIE_NAME];
     if (typeof rawToken === 'string' && rawToken !== '') {
-      await deleteSession(rawToken);
+      await endSession(rawToken);
     }
     res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
     res.status(204).send();

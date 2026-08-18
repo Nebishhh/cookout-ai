@@ -81,13 +81,16 @@ export const Navigation: React.FC<NavigationProps> = ({
           </button>
 
           <div className="hidden items-center gap-2 border-l border-stone/60 pl-3 sm:flex">
-            <span className="max-w-[10rem] truncate text-xs text-ink-muted" title={user.email}>
-              {user.email}
+            <span
+              className="max-w-[10rem] truncate text-xs text-ink-muted"
+              title={user.isGuest ? 'Guest session' : (user.email ?? undefined)}
+            >
+              {user.isGuest ? 'Guest' : user.email}
             </span>
             <button
               type="button"
               onClick={onLogout}
-              aria-label="Log out"
+              aria-label={user.isGuest ? 'End guest session' : 'Log out'}
               className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone bg-canvas text-ink-muted transition-colors hover:bg-paper hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
             >
               <LogOut className="h-4 w-4" />

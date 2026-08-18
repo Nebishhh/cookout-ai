@@ -27,7 +27,7 @@ function recipesGetResponse(url: string, recipes: unknown[]): Response {
  * skips the real `GET /api/auth/me` call, so each test's own fetch mock only needs to answer
  * the feature routes it cares about, not the auth check on top of it.
  */
-const TEST_USER = { id: 'test-user-1', email: 'test@example.com' };
+const TEST_USER = { id: 'test-user-1', email: 'test@example.com', isGuest: false };
 
 describe('Web UI (TanStack Query & App Integration Tests)', () => {
   beforeEach(() => {
@@ -2716,6 +2716,36 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
       // Oatmeal is restored (search cleared -> unfiltered request) and search input is cleared
       expect(await screen.findByText('Oatmeal')).toBeInTheDocument();
       expect(searchInput).toHaveValue('');
+    });
+  });
+
+  describe('Guest mode UI', () => {
+    it('clicking "Continue as guest" on AuthPage posts to /api/auth/guest and renders the app as a guest', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('/api/auth/guest') && init?.method === 'POST') {
+          return {
+            ok: true,
+            status: 201,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ id: 'guest-1', email: null, isGuest: true }),
+          } as Response;
+        }
+        if (urlStr.includes('/api/recipes')) {
+          return recipesGetResponse(urlStr, []);
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App initialUser={null} />);
+
+      const guestButton = await screen.findByRole('button', { name: /continue as guest/i });
+      fireEvent.click(guestButton);
+
+      // AuthPage unmounts and Navigation renders "Guest" instead of an email once the guest
+      // session is established.
+      expect(await screen.findByText('Guest')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /end guest session/i })).toBeInTheDocument();
     });
   });
 });

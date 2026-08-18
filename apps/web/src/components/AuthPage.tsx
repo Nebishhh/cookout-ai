@@ -9,7 +9,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/
 import { Alert, AlertDescription } from './ui/alert';
 
 export const AuthPage: React.FC = () => {
-  const { login, signup } = useAuth();
+  const { login, signup, continueAsGuest } = useAuth();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -26,6 +26,18 @@ export const AuthPage: React.FC = () => {
       } else {
         await signup(email, password);
       }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleGuestContinue = async () => {
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await continueAsGuest();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     } finally {
@@ -95,6 +107,23 @@ export const AuthPage: React.FC = () => {
               ? "Don't have an account? Sign up"
               : 'Already have an account? Log in'}
           </button>
+          <div className="my-4 flex items-center gap-3 text-xs text-ink-muted">
+            <div className="h-px flex-1 bg-clay-border" />
+            or
+            <div className="h-px flex-1 bg-clay-border" />
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            disabled={isSubmitting}
+            onClick={handleGuestContinue}
+          >
+            Continue as guest
+          </Button>
+          <p className="mt-2 text-center text-xs text-ink-muted">
+            No account needed — your data is deleted automatically after about a day.
+          </p>
         </CardContent>
       </Card>
     </div>

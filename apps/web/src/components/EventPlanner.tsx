@@ -37,6 +37,33 @@ import { Checkbox } from './ui/checkbox';
 import { Select } from './ui/select';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
+import { CookSchedulePanel } from './CookSchedulePanel';
+
+/**
+ * `<input type="time">` speaks "HH:MM"; the API speaks wall-clock minutes from midnight (see
+ * the Event domain object's note on why it's not a DateTime). These two bridge that boundary,
+ * with '' / null both meaning "no serve time set, so no cook schedule."
+ */
+function timeInputToMinutes(value: string): number | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) {
+    return null;
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) {
+    return null;
+  }
+  return hours * 60 + minutes;
+}
+
+function minutesToTimeInput(minutes: number | null): string {
+  if (minutes == null) {
+    return '';
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${String(hours).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
 
 export interface EventPlannerProps {
   selectedEventId?: string | null;
@@ -69,6 +96,8 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
   const [guestDescription, setGuestDescription] = useState('');
   const [guestParseNotice, setGuestParseNotice] = useState<string | null>(null);
+  /** "HH:MM" from <input type="time">, or '' for "no schedule requested". */
+  const [serveTime, setServeTime] = useState('');
 
   const planEventMutation = usePlanEvent();
   const eventQuery = useEvent(selectedEventId);
@@ -90,6 +119,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       setSelectedRecipeIds(eventQuery.data.recipeIds);
       setGuestDescription('');
       setGuestParseNotice(null);
+      setServeTime(minutesToTimeInput(eventQuery.data.serveTimeMinutes));
     } else if (!isViewMode) {
       setName('');
       setTotalGuests(10);
@@ -98,6 +128,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       setSelectedRecipeIds([]);
       setGuestDescription('');
       setGuestParseNotice(null);
+      setServeTime('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventQuery.data, selectedEventId]);
@@ -144,6 +175,13 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   };
 
   const guestGroupPayload = { totalGuests, vegetarianCount, veganCount };
+  const serveTimeMinutes = timeInputToMinutes(serveTime);
+  // Shared by every plan/save/update call so the cook schedule is requested consistently.
+  const planPayload = {
+    recipeIds: selectedRecipeIds,
+    guestGroup: guestGroupPayload,
+    serveTimeMinutes,
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,24 +191,31 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
     if (isViewMode && selectedEventId) {
       updateEventMutation.mutate({
         id: selectedEventId,
-        data: { name: name.trim(), guestGroup: guestGroupPayload, recipeIds: selectedRecipeIds },
+        data: {
+          name: name.trim(),
+          guestGroup: guestGroupPayload,
+          recipeIds: selectedRecipeIds,
+          serveTimeMinutes,
+        },
       });
       return;
     }
 
     if (selectedRecipeIds.length === 0) return;
 
-    planEventMutation.mutate({
-      recipeIds: selectedRecipeIds,
-      guestGroup: guestGroupPayload,
-    });
+    planEventMutation.mutate(planPayload);
   };
 
   const handleSaveEvent = () => {
     if (!name.trim()) return;
 
     createEventMutation.mutate(
-      { name: name.trim(), guestGroup: guestGroupPayload, recipeIds: selectedRecipeIds },
+      {
+        name: name.trim(),
+        guestGroup: guestGroupPayload,
+        recipeIds: selectedRecipeIds,
+        serveTimeMinutes,
+      },
       {
         onSuccess: (created) => {
           if (onSaved) onSaved(created.id);
@@ -215,10 +260,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       {
         onSuccess: () => {
           if (!isViewMode) {
-            planEventMutation.mutate({
-              recipeIds: selectedRecipeIds,
-              guestGroup: guestGroupPayload,
-            });
+            planEventMutation.mutate(planPayload);
           }
         },
       }
@@ -229,7 +271,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
     clearCategoryMutation.mutate(ingredientId, {
       onSuccess: () => {
         if (!isViewMode) {
-          planEventMutation.mutate({ recipeIds: selectedRecipeIds, guestGroup: guestGroupPayload });
+          planEventMutation.mutate(planPayload);
         }
       },
     });
@@ -353,6 +395,23 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                 placeholder="e.g. Thanksgiving 2026"
                 className="mt-1 h-9 bg-canvas border-stone"
               />
+            </div>
+
+            {/* Serve time — drives the backward cook schedule. Optional: leave blank for none. */}
+            <div>
+              <Label htmlFor="input-serve-time" className="text-xs text-ink-muted">
+                Serve Time (optional)
+              </Label>
+              <Input
+                id="input-serve-time"
+                type="time"
+                value={serveTime}
+                onChange={(e) => setServeTime(e.target.value)}
+                className="mt-1 h-9 w-40 bg-canvas border-stone"
+              />
+              <p className="mt-1 text-xs text-ink-muted">
+                Set a time and we&apos;ll work backwards to tell you when to start each dish.
+              </p>
             </div>
 
             {/* Natural-Language Guest-Breakdown Quick Fill */}
@@ -652,6 +711,11 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
               Vegans: {resultData.guestGroup.veganCount}
             </span>
           </div>
+
+          {/* 0. Cook Schedule — renders only when a serve time is set (schedule is null
+              otherwise). Works identically in preview and view mode, since `resultData` is the
+              shared shape for both. */}
+          <CookSchedulePanel schedule={resultData.schedule} />
 
           {/* 1. Included Recipes */}
           <Card className="border-olive/30 bg-paper">

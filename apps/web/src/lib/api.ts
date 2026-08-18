@@ -145,11 +145,38 @@ export interface ExcludedRecipePlanDto {
   reason: string;
 }
 
+export interface ScheduledStepDto {
+  stepIndex: number;
+  instruction: string;
+  /** null means the step states no duration — not that it's instant. */
+  durationMinutes: number | null;
+  startTimeMinutes: number;
+}
+
+export interface ScheduledRecipeDto {
+  recipeId: string;
+  recipeName: string;
+  totalMinutes: number;
+  /** Wall-clock minutes from midnight; negative means the previous day. */
+  startTimeMinutes: number;
+  hasUnstatedDurations: boolean;
+  steps: ScheduledStepDto[];
+}
+
+export interface CookScheduleDto {
+  serveTimeMinutes: number;
+  earliestStartMinutes: number;
+  /** Already sorted by startTimeMinutes ascending by the server. */
+  recipes: ScheduledRecipeDto[];
+}
+
 export interface EventPlanResponseDto {
   guestGroup: GuestGroupDto;
   includedRecipes: IncludedRecipePlanDto[];
   excludedRecipes: ExcludedRecipePlanDto[];
   shoppingList: ShoppingListItemDto[];
+  /** null when the event has no serve time set, so no schedule was requested. */
+  schedule: CookScheduleDto | null;
 }
 
 export interface PlanEventInput {
@@ -159,6 +186,7 @@ export interface PlanEventInput {
     vegetarianCount?: number;
     veganCount?: number;
   };
+  serveTimeMinutes?: number | null;
 }
 
 export interface CreateEventInput {
@@ -169,6 +197,7 @@ export interface CreateEventInput {
     veganCount?: number;
   };
   recipeIds: string[];
+  serveTimeMinutes?: number | null;
 }
 
 export interface EventSummaryDto {
@@ -176,6 +205,7 @@ export interface EventSummaryDto {
   name: string;
   guestGroup: GuestGroupDto;
   recipeIds: string[];
+  serveTimeMinutes: number | null;
   shoppingListId: string | null;
 }
 
@@ -183,6 +213,7 @@ export interface EventDetailDto extends EventSummaryDto {
   includedRecipes: IncludedRecipePlanDto[];
   excludedRecipes: ExcludedRecipePlanDto[];
   shoppingList: ShoppingListItemDto[];
+  schedule: CookScheduleDto | null;
   droppedRecipeIds: string[];
 }
 

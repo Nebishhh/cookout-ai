@@ -44,8 +44,11 @@ describe('RecipeStep Construction & Validation', () => {
   });
 
   it('rejects a duration that is not a StepDuration instance', () => {
-    // Structurally identical to StepDuration (no private members), so this only fails at
-    // runtime via the constructor's instanceof check, not at compile time.
+    // Since StepDuration gained toMinutes(), a bare {amount, unit} object is no longer
+    // structurally compatible, so this is now caught at compile time too — the constructor's
+    // runtime instanceof check (what this test actually exercises) still backstops callers
+    // coming from untyped JSON.
+    // @ts-expect-error testing invalid input type
     expect(() => new RecipeStep('Bake.', { amount: 25, unit: 'minutes' })).toThrow(
       InvalidRecipeError
     );
@@ -104,6 +107,26 @@ describe('StepDuration Construction & Validation', () => {
 
   it('is immutable (frozen)', () => {
     expect(Object.isFrozen(new StepDuration(5, 'minutes'))).toBe(true);
+  });
+
+  describe('toMinutes()', () => {
+    it('returns minutes unchanged', () => {
+      expect(new StepDuration(25, 'minutes').toMinutes()).toBe(25);
+    });
+
+    it('converts hours to minutes', () => {
+      expect(new StepDuration(2, 'hours').toMinutes()).toBe(120);
+    });
+
+    it('converts fractional hours', () => {
+      expect(new StepDuration(0.25, 'hours').toMinutes()).toBe(15);
+      expect(new StepDuration(1.5, 'hours').toMinutes()).toBe(90);
+    });
+
+    it('handles zero in either unit', () => {
+      expect(new StepDuration(0, 'minutes').toMinutes()).toBe(0);
+      expect(new StepDuration(0, 'hours').toMinutes()).toBe(0);
+    });
   });
 });
 

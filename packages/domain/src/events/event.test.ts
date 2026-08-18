@@ -110,4 +110,36 @@ describe('Event Construction & Validation', () => {
     recipeIds.push('r3');
     expect(event.recipeIds).toEqual(['r1', 'r2']);
   });
+
+  describe('serveTimeMinutes', () => {
+    const buildWith = (serveTimeMinutes?: number | null) =>
+      new Event({
+        id: 'event-1',
+        name: 'Cookout',
+        guestGroup: validGuestGroup(),
+        recipeIds: ['r1'],
+        serveTimeMinutes,
+      });
+
+    it('defaults to null when omitted (no cook schedule requested)', () => {
+      expect(buildWith().serveTimeMinutes).toBeNull();
+    });
+
+    it('accepts an explicit null', () => {
+      expect(buildWith(null).serveTimeMinutes).toBeNull();
+    });
+
+    it('accepts a wall-clock minute offset', () => {
+      expect(buildWith(18 * 60).serveTimeMinutes).toBe(1080); // 6pm
+    });
+
+    it('accepts the boundaries (midnight and 23:59)', () => {
+      expect(buildWith(0).serveTimeMinutes).toBe(0);
+      expect(buildWith(1439).serveTimeMinutes).toBe(1439);
+    });
+
+    it.each([-1, 1440, 12.5, NaN])('rejects out-of-range or non-integer value: %s', (bad) => {
+      expect(() => buildWith(bad)).toThrow(InvalidEventError);
+    });
+  });
 });

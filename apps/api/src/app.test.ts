@@ -1037,6 +1037,190 @@ describe('CookOut AI API Endpoints', () => {
     });
   });
 
+  describe('Backward cook scheduling', () => {
+    const validGuestGroup = { totalGuests: 4, vegetarianCount: 0, veganCount: 0 };
+    const SIX_PM = 18 * 60;
+
+    /** Creates a recipe whose steps carry stated durations totalling `minutes`. */
+    async function createTimedRecipe(name: string, stepMinutes: number[]) {
+      const res = await agent.post('/api/recipes').send({
+        name,
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' }],
+        steps: stepMinutes.map((m, i) => ({
+          instruction: `${name} step ${i + 1}`,
+          durationAmount: m,
+          durationUnit: 'minutes',
+        })),
+      });
+      expect(res.status).toBe(201);
+      return res.body;
+    }
+
+    it('POST /api/events/plan returns a backward schedule when given a serve time', async () => {
+      const ribs = await createTimedRecipe('Ribs', [30, 150]);
+
+      const res = await agent.post('/api/events/plan').send({
+        guestGroup: validGuestGroup,
+        recipeIds: [ribs.id],
+        serveTimeMinutes: SIX_PM,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.schedule).not.toBeNull();
+      expect(res.body.schedule.serveTimeMinutes).toBe(SIX_PM);
+      expect(res.body.schedule.recipes).toHaveLength(1);
+      expect(res.body.schedule.recipes[0]).toMatchObject({
+        recipeName: 'Ribs',
+        totalMinutes: 180,
+        startTimeMinutes: SIX_PM - 180,
+        hasUnstatedDurations: false,
+      });
+      expect(res.body.schedule.earliestStartMinutes).toBe(SIX_PM - 180);
+    });
+
+    it('POST /api/events/plan returns schedule: null when no serve time is given', async () => {
+      const ribs = await createTimedRecipe('Ribs', [30]);
+
+      const res = await agent
+        .post('/api/events/plan')
+        .send({ guestGroup: validGuestGroup, recipeIds: [ribs.id] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.schedule).toBeNull();
+    });
+
+    it('orders scheduled dishes by start time ascending, longest-cooking first', async () => {
+      const salad = await createTimedRecipe('Salad', [20]);
+      const ribs = await createTimedRecipe('Ribs', [180]);
+      const bread = await createTimedRecipe('Cornbread', [25]);
+
+      const res = await agent.post('/api/events/plan').send({
+        guestGroup: validGuestGroup,
+        recipeIds: [salad.id, ribs.id, bread.id],
+        serveTimeMinutes: SIX_PM,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.schedule.recipes.map((r: { recipeName: string }) => r.recipeName)).toEqual([
+        'Ribs',
+        'Cornbread',
+        'Salad',
+      ]);
+    });
+
+    it('flags a dish whose steps have no stated durations as an estimate', async () => {
+      const vague = await agent.post('/api/recipes').send({
+        name: 'Vague Stew',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'onion', displayName: 'Onion', amount: 1, unit: 'onion' }],
+        steps: [{ instruction: 'Simmer until done.' }, { instruction: 'Season to taste.' }],
+      });
+
+      const res = await agent.post('/api/events/plan').send({
+        guestGroup: validGuestGroup,
+        recipeIds: [vague.body.id],
+        serveTimeMinutes: SIX_PM,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.schedule.recipes[0]).toMatchObject({
+        totalMinutes: 0,
+        hasUnstatedDurations: true,
+      });
+    });
+
+    it('schedules only included recipes, never excluded ones', async () => {
+      // An untagged (omnivore-only) dish is excluded when every guest is vegan, so it must not
+      // get a start time — nobody is cooking it.
+      const meat = await agent.post('/api/recipes').send({
+        name: 'Beef Ribs',
+        baseServings: 4,
+        dietaryTags: [],
+        ingredients: [{ ingredientId: 'beef', displayName: 'Beef', amount: 1, unit: 'kg' }],
+        steps: [{ instruction: 'Smoke it.', durationAmount: 120, durationUnit: 'minutes' }],
+      });
+      const salad = await agent.post('/api/recipes').send({
+        name: 'Vegan Salad',
+        baseServings: 4,
+        dietaryTags: ['Vegetarian', 'Vegan'],
+        ingredients: [{ ingredientId: 'kale', displayName: 'Kale', amount: 2, unit: 'cup' }],
+        steps: [{ instruction: 'Toss.', durationAmount: 10, durationUnit: 'minutes' }],
+      });
+
+      // Vegans are modeled as a subset of vegetarians, so an all-vegan party is 4/4.
+      const res = await agent.post('/api/events/plan').send({
+        guestGroup: { totalGuests: 4, vegetarianCount: 4, veganCount: 4 },
+        recipeIds: [meat.body.id, salad.body.id],
+        serveTimeMinutes: SIX_PM,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.excludedRecipes.length).toBeGreaterThan(0);
+      const scheduledNames = res.body.schedule.recipes.map(
+        (r: { recipeName: string }) => r.recipeName
+      );
+      expect(scheduledNames).toEqual(['Vegan Salad']);
+    });
+
+    it('round-trips serveTimeMinutes through save, read, and update', async () => {
+      const ribs = await createTimedRecipe('Ribs', [60]);
+
+      const createRes = await agent.post('/api/events').send({
+        name: 'Timed Cookout',
+        guestGroup: validGuestGroup,
+        recipeIds: [ribs.id],
+        serveTimeMinutes: SIX_PM,
+      });
+      expect(createRes.status).toBe(201);
+      expect(createRes.body.serveTimeMinutes).toBe(SIX_PM);
+      expect(createRes.body.schedule.recipes[0].startTimeMinutes).toBe(SIX_PM - 60);
+
+      const getRes = await agent.get(`/api/events/${createRes.body.id}`);
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.serveTimeMinutes).toBe(SIX_PM);
+      expect(getRes.body.schedule.recipes[0].startTimeMinutes).toBe(SIX_PM - 60);
+
+      const updateRes = await agent.put(`/api/events/${createRes.body.id}`).send({
+        name: 'Timed Cookout',
+        guestGroup: validGuestGroup,
+        recipeIds: [ribs.id],
+        serveTimeMinutes: 12 * 60,
+      });
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.serveTimeMinutes).toBe(12 * 60);
+      expect(updateRes.body.schedule.recipes[0].startTimeMinutes).toBe(12 * 60 - 60);
+    });
+
+    it('persists a null serveTimeMinutes and returns no schedule for it', async () => {
+      const createRes = await agent.post('/api/events').send({
+        name: 'Untimed Cookout',
+        guestGroup: validGuestGroup,
+        recipeIds: [],
+      });
+
+      expect(createRes.status).toBe(201);
+      expect(createRes.body.serveTimeMinutes).toBeNull();
+      expect(createRes.body.schedule).toBeNull();
+
+      const getRes = await agent.get(`/api/events/${createRes.body.id}`);
+      expect(getRes.body.serveTimeMinutes).toBeNull();
+      expect(getRes.body.schedule).toBeNull();
+    });
+
+    it('rejects an out-of-range serveTimeMinutes with 400', async () => {
+      const res = await agent.post('/api/events').send({
+        name: 'Bad Time',
+        guestGroup: validGuestGroup,
+        recipeIds: [],
+        serveTimeMinutes: 1440,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidEventError');
+    });
+  });
+
   describe('ShoppingList CRUD', () => {
     it('POST /api/shopping-lists creates a standalone persisted list (eventId null) with checked defaulting to false', async () => {
       const recipeRes = await agent.post('/api/recipes').send({

@@ -90,17 +90,22 @@ model RecipeStep {
 // beyond order, which a JSON array already preserves, so a join table adds nothing.
 // "Recompute live" also means Event tolerates ids that no longer resolve to a Recipe
 // (filtered out at read time) rather than depending on DB referential integrity.
+// serveTimeMinutes is wall-clock minutes from midnight (0..1439), NOT a DateTime — "serve at
+// 6pm" is a wall-clock intent, not an instant, so storing it this way keeps timezone conversion
+// out of every read. NULL means the host hasn't asked for a cook schedule. See the domain
+// Event's own note and events/cookSchedule.ts.
 model Event {
-  id              String        @id @default(uuid())
-  userId          String
-  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name            String
-  totalGuests     Int
-  vegetarianCount Int           @default(0)
-  veganCount      Int           @default(0)
-  recipeIdsJson   String        @default("[]")
-  createdAt       DateTime      @default(now())
-  shoppingList    ShoppingList?
+  id               String        @id @default(uuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String
+  totalGuests      Int
+  vegetarianCount  Int           @default(0)
+  veganCount       Int           @default(0)
+  recipeIdsJson    String        @default("[]")
+  serveTimeMinutes Int?
+  createdAt        DateTime      @default(now())
+  shoppingList     ShoppingList?
 
   @@index([userId])
 }

@@ -10,6 +10,8 @@ This glossary defines key domain terminology used across the CookOut AI codebase
 
 A planned gathering (e.g., BBQ, block party, family reunion) associated with a target guest headcount, adult/child proportion breakdown, menu selections, and prep schedule.
 
+The prep schedule is the **Cook Schedule** (`computeCookSchedule()`, `packages/domain/src/events/cookSchedule.ts`): given the Event's `serveTimeMinutes`, it works backwards through each included recipe's step durations to produce a start time per dish, sorted earliest-first. Oven/equipment conflict detection is explicitly _not_ part of it — see `docs/ideas/cook-scheduling.md`.
+
 #### Recipe
 
 A structured set of ingredients, base serving size, instructions, preparation time, and cooking tags.

@@ -1275,6 +1275,8 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
             vegetarianCount: 3,
             veganCount: 1,
           },
+          // No serve time entered, so no cook schedule is requested.
+          serveTimeMinutes: null,
         });
       });
 
@@ -1691,6 +1693,170 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
           'Plan recipes and consolidated shopping lists tailored to guest counts and dietary restrictions.'
         )
       ).toBeInTheDocument();
+    });
+
+    it('sends the entered serve time and renders the returned backward cook schedule', async () => {
+      const mockRecipes = [
+        {
+          id: 'r-ribs',
+          name: 'Ribs',
+          baseServings: 4,
+          dietaryTags: [],
+          ingredients: [
+            {
+              ingredientId: 'pork',
+              displayName: 'Pork Ribs',
+              amount: 2,
+              unit: 'kg',
+              category: 'Meat',
+            },
+          ],
+          steps: [],
+        },
+      ];
+
+      let capturedBody: unknown = null;
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('/api/events/plan')) {
+          capturedBody = JSON.parse(String(init?.body));
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              guestGroup: {
+                totalGuests: 4,
+                vegetarianCount: 0,
+                veganCount: 0,
+                omnivoreCount: 4,
+              },
+              includedRecipes: [
+                {
+                  recipeId: 'r-ribs',
+                  recipeName: 'Ribs',
+                  eligibleServings: 4,
+                  scaledIngredients: [],
+                },
+              ],
+              excludedRecipes: [],
+              shoppingList: [],
+              schedule: {
+                serveTimeMinutes: 1080, // 6:00 PM
+                earliestStartMinutes: 900, // 3:00 PM
+                recipes: [
+                  {
+                    recipeId: 'r-ribs',
+                    recipeName: 'Ribs',
+                    totalMinutes: 180,
+                    startTimeMinutes: 900,
+                    hasUnstatedDurations: true,
+                    steps: [],
+                  },
+                ],
+              },
+            }),
+          } as Response;
+        }
+        if (urlStr.includes('/api/recipes')) {
+          return recipesGetResponse(urlStr, mockRecipes);
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App initialUser={TEST_USER} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+      expect(await screen.findByText('Ribs')).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(/serve time/i), { target: { value: '18:00' } });
+      fireEvent.change(screen.getByLabelText(/total guests/i), { target: { value: '4' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe ribs/i }));
+      fireEvent.click(screen.getByRole('button', { name: /plan event shopping list/i }));
+
+      // The "HH:MM" input is converted to wall-clock minutes from midnight for the API.
+      await waitFor(() => {
+        expect(capturedBody).toMatchObject({ serveTimeMinutes: 1080 });
+      });
+
+      // Schedule panel renders the computed start time, not the serve time.
+      expect(await screen.findByText('Cook Schedule')).toBeInTheDocument();
+      expect(screen.getByText('3:00 PM')).toBeInTheDocument();
+      // A dish with unstated step durations is flagged rather than presented as fact — the
+      // per-dish badge (identified by its explanatory tooltip) plus the panel-level callout.
+      expect(
+        screen.getByTitle(
+          "Some steps don't state how long they take, so this dish's total is a lower bound."
+        )
+      ).toHaveTextContent('estimate');
+      expect(screen.getByText(/may take longer than shown/i)).toBeInTheDocument();
+    });
+
+    it('renders no cook schedule panel when the plan response has schedule: null', async () => {
+      const mockRecipes = [
+        {
+          id: 'r-ribs',
+          name: 'Ribs',
+          baseServings: 4,
+          dietaryTags: [],
+          ingredients: [
+            {
+              ingredientId: 'pork',
+              displayName: 'Pork Ribs',
+              amount: 2,
+              unit: 'kg',
+              category: 'Meat',
+            },
+          ],
+          steps: [],
+        },
+      ];
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('/api/events/plan')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              guestGroup: {
+                totalGuests: 4,
+                vegetarianCount: 0,
+                veganCount: 0,
+                omnivoreCount: 4,
+              },
+              includedRecipes: [
+                {
+                  recipeId: 'r-ribs',
+                  recipeName: 'Ribs',
+                  eligibleServings: 4,
+                  scaledIngredients: [],
+                },
+              ],
+              excludedRecipes: [],
+              shoppingList: [],
+              schedule: null,
+            }),
+          } as Response;
+        }
+        if (urlStr.includes('/api/recipes')) {
+          return recipesGetResponse(urlStr, mockRecipes);
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App initialUser={TEST_USER} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /event planner/i }));
+      expect(await screen.findByText('Ribs')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /select recipe ribs/i }));
+      fireEvent.click(screen.getByRole('button', { name: /plan event shopping list/i }));
+
+      expect(await screen.findByText('Included Recipes')).toBeInTheDocument();
+      expect(screen.queryByText('Cook Schedule')).not.toBeInTheDocument();
     });
   });
 

@@ -5,9 +5,16 @@ export type DurationUnit = 'minutes' | 'hours';
 const VALID_DURATION_UNITS: readonly DurationUnit[] = ['minutes', 'hours'];
 
 /**
- * How long a single recipe step takes (e.g. "bake for 25 minutes"). Deliberately minimal —
- * captured/displayed only, never summed or converted across a recipe the way ingredient
- * Quantity is, so no convertTo()/scale() methods exist here.
+ * How long a single recipe step takes (e.g. "bake for 25 minutes").
+ *
+ * Open Question / Scope Notes:
+ * - `toMinutes()` normalizes to a single comparable unit so step durations can be summed
+ *   across a recipe by computeCookSchedule() (see events/cookSchedule.ts). This reverses an
+ *   earlier scope note here that said durations are "captured/displayed only, never summed or
+ *   converted" — backward cook scheduling made that summing a real requirement.
+ * - Still deliberately NO scale() — unlike ingredient Quantity, a duration does not scale with
+ *   serving count. Doubling a recipe doesn't double its bake time, and pretending otherwise
+ *   would produce confidently wrong schedules.
  */
 export class StepDuration {
   readonly amount: number;
@@ -30,5 +37,10 @@ export class StepDuration {
     this.unit = unit as DurationUnit;
 
     Object.freeze(this);
+  }
+
+  /** Normalized to minutes, the single unit cook scheduling compares and sums in. */
+  toMinutes(): number {
+    return this.unit === 'hours' ? this.amount * 60 : this.amount;
   }
 }

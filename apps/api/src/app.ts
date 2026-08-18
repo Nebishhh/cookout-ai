@@ -32,6 +32,7 @@ import {
   toDomainEvent,
   toEventSummaryJSON,
   serializeEventPlan,
+  buildCookSchedule,
   type CreateEventInput,
 } from './eventMapper.js';
 import {
@@ -1029,7 +1030,8 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
     // 5. Serialize EventPlan to JSON output
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     const pantryStock = await getPantryStockMap(req.user!.id);
-    res.status(200).json(serializeEventPlan(eventPlan, categoryOverrides, pantryStock));
+    const schedule = buildCookSchedule(eventPlan, recipes, req.body?.serveTimeMinutes);
+    res.status(200).json(serializeEventPlan(eventPlan, categoryOverrides, pantryStock, schedule));
   } catch (err) {
     next(err);
   }
@@ -1057,6 +1059,7 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
         vegetarianCount: domainEvent.guestGroup.vegetarianCount,
         veganCount: domainEvent.guestGroup.veganCount,
         recipeIdsJson: JSON.stringify(domainEvent.recipeIds),
+        serveTimeMinutes: domainEvent.serveTimeMinutes,
       },
     });
 
@@ -1077,9 +1080,11 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     const pantryStock = await getPantryStockMap(req.user!.id);
 
+    const schedule = buildCookSchedule(eventPlan, recipes, reconstructedEvent.serveTimeMinutes);
+
     res.status(201).json({
       ...toEventSummaryJSON(reconstructedEvent),
-      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock),
+      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock, schedule),
       droppedRecipeIds: [],
     });
   } catch (err) {
@@ -1137,9 +1142,11 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     const pantryStock = await getPantryStockMap(req.user!.id);
 
+    const schedule = buildCookSchedule(eventPlan, recipes, domainEvent.serveTimeMinutes);
+
     res.json({
       ...toEventSummaryJSON(domainEvent, prismaEvent.shoppingList?.id ?? null),
-      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock),
+      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock, schedule),
       droppedRecipeIds,
     });
   } catch (err) {
@@ -1167,6 +1174,7 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
         vegetarianCount: domainEvent.guestGroup.vegetarianCount,
         veganCount: domainEvent.guestGroup.veganCount,
         recipeIdsJson: JSON.stringify(domainEvent.recipeIds),
+        serveTimeMinutes: domainEvent.serveTimeMinutes,
       },
       include: { shoppingList: { select: { id: true } } },
     });
@@ -1191,9 +1199,11 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     const pantryStock = await getPantryStockMap(req.user!.id);
 
+    const schedule = buildCookSchedule(eventPlan, recipes, reconstructedEvent.serveTimeMinutes);
+
     res.json({
       ...toEventSummaryJSON(reconstructedEvent, updatedPrismaEvent.shoppingList?.id ?? null),
-      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock),
+      ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock, schedule),
       droppedRecipeIds,
     });
   } catch (err) {

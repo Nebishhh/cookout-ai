@@ -22,7 +22,7 @@ Single-workspace / single-file runs:
 npx vitest run src/app.test.ts --dir apps/api  # one API test file
 npm --workspace=apps/api run test              # one workspace's Vitest suite
 npm --workspace=apps/web run dev -- --host     # web dev server bound for LAN/mobile testing
-node scripts/smokeTestLiveGemini.js            # manual live Gemini API schema-drift check (not in CI, costs real API calls)
+npx tsx --env-file=apps/api/.env scripts/smokeTestLiveGemini.ts   # manual live Gemini schema-drift check (not in CI, costs real API calls)
 ```
 
 Prisma (`prisma/schema.prisma` is the single schema for both `dev.db` and test DBs):

@@ -54,7 +54,7 @@ cookout-ai/
 │   ├── schema.prisma        # SQLite database schema (Recipe & IngredientLine models)
 │   └── dev.db               # Local SQLite database
 ├── scripts/
-│   └── smokeTestLiveGemini.js # Standalone script for live Gemini schema verification
+│   └── smokeTestLiveGemini.ts # Standalone script for live Gemini schema verification
 ├── .env.example             # Template for local environment variables
 ├── vitest.config.ts         # Vitest root test configuration
 └── package.json             # Root workspace configuration (npm workspaces)
@@ -168,7 +168,7 @@ Playwright E2E tests automatically spin up dedicated web and API servers with `U
 To manually check live Gemini API extraction against fixture schemas to detect schema drift over time (outside CI and automated tests):
 
 ```bash
-node scripts/smokeTestLiveGemini.js
+npx tsx --env-file=apps/api/.env scripts/smokeTestLiveGemini.ts
 ```
 
 ---

@@ -1,195 +1,116 @@
 # CookOut AI
 
-> Full-stack TypeScript monorepo empowering hosts to plan outdoor gatherings, cookouts, and family events with intelligent recipe scaling, unit-aware grocery list consolidation, dietary-tag-aware event planning, and AI-assisted recipe import.
+**Plan one meal for everyone at the table.**
 
----
+CookOut AI is a full-stack event-planning app for hosts feeding groups with mixed dietary needs. Tell it how many guests are omnivore, vegetarian, or vegan; choose the dishes; and it calculates how many servings each recipe must provide before producing one scaled, consolidated shopping list.
 
-## Features
+Most recipe apps can filter by dietary tags. CookOut uses them as inputs to the serving calculation.
 
-- **Dietary-Aware Event Planner**: Define a guest group by dietary breakdown (**Total Guests**, **Vegetarian Count**, **Vegan Count**, and derived **Omnivore Count**), and CookOut computes exactly how many guests each candidate recipe can actually feed — an untagged recipe only counts toward omnivores, a vegetarian recipe covers everyone but vegans, a vegan recipe covers the whole group — then scales and consolidates accordingly. This eligible-servings computation across a mixed-dietary guest list is the part of CookOut most recipe/meal-planning apps don't do at all; they support dietary tags as filters, not as a calculation.
-  - **Natural-Language Quick Fill**: Type a description like "dinner for 12, 3 vegetarian, 1 vegan" and the guest-breakdown fields fill in automatically. A deterministic regex parser handles common phrasing for free and instantly, with a Gemini AI fallback only for descriptions it can't confidently parse (e.g. word-numbers like "twenty five guests") — keeping the common case fast and free while still covering more flexible phrasing.
-- **Recipe Management & Scaling**: Create, edit, delete, and view recipes with custom serving counts. Automatically scale ingredient quantities up or down while keeping measurement units consistent.
-- **Consolidated Shopping List Builder**: Select multiple recipes, set target serving counts for each, and generate a unified ingredient shopping list that merges duplicate items and converts compatible units (e.g., combining `tsp`, `tbsp`, `cup`, or `g` and `kg`).
-- **AI-Powered Recipe Import (Google Gemini AI)**:
-  - **Text Import**: Paste raw, unformatted recipe text to parse into structured recipe drafts.
-  - **URL Import**: Import recipes from webpage URLs with built-in SSRF (Server-Side Request Forgery) protection and fallback HTML scraping via Cheerio.
-  - **Image Upload**: Upload recipe cards, handwritten notes, or cookbook photos (JPEG, PNG, WebP up to 8MB) with streaming Busboy parsing and magic-byte header sniffing.
-  - **Camera Capture**: Fast-path camera capture on mobile devices utilizing native `capture="environment"` attribute controls.
-  - **Zero Auto-Persistence**: AI-imported recipes pre-fill form fields for human review and require explicit submission before saving to the database.
+> Planning dinner for 12 with 8 omnivores, 3 vegetarians, and 1 vegan? An untagged dish is scaled for 8, a vegetarian dish for 11, and a vegan dish for all 12—automatically.
 
----
+## What it does
 
-## Monorepo Architecture
+- **Plans for mixed-dietary groups.** Enter a guest breakdown manually or write “dinner for 12, 3 vegetarian, 1 vegan.” CookOut determines the eligible serving count for every dish.
+- **Scales recipes without losing unit meaning.** Quantities are calculated by a deterministic domain engine, with compatible units consolidated and countable groceries rounded to practical purchase amounts.
+- **Builds one useful shopping list.** Merge ingredients across recipes, group them by grocery aisle, subtract pantry stock, correct categories, save the list, and check items off—even through a temporary loss of connectivity.
+- **Imports recipes for review.** Gemini can extract a draft from pasted text, a URL, an uploaded image, or a mobile camera capture. Imported recipes are never saved until the user reviews and submits them.
+- **Schedules the cooking.** Add step durations and a serving time to work backward to each dish’s start time. Incomplete timing data is clearly marked as an estimate.
+- **Keeps plans and data private.** Recipes, events, pantry items, and shopping lists are scoped to individual accounts. A self-deleting guest mode lets someone try the app without creating one.
 
-```
-cookout-ai/
-├── apps/
-│   ├── api/                 # Express.js REST API & Gemini AI integration
-│   │   ├── src/
-│   │   │   ├── __fixtures__/ # Recorded Gemini API response fixtures for E2E testing
-│   │   │   ├── app.ts        # Express application, route definitions (incl. import-text/import-url handlers)
-│   │   │   ├── geminiClient.ts # Gemini API client & fixture interception logic
-│   │   │   ├── aiRecipeExtraction.ts # Shared AI-response shape-guard + bounded retry orchestration
-│   │   │   ├── imageValidator.ts # Busboy streaming & magic byte sniffer
-│   │   │   ├── importImage.ts # Multipart image import endpoint handler (separate from app.ts)
-│   │   │   ├── recipeMapper.ts# Domain <-> Prisma model converters
-│   │   │   └── ssrfGuard.ts   # SSRF protection validator for URL fetching
-│   │   └── package.json
-│   └── web/                 # React 18 SPA (Vite + Tailwind CSS + TanStack Query)
-│       ├── e2e/             # Playwright E2E end-to-end test specs
-│       ├── src/
-│       │   ├── components/  # React UI components (RecipeForm, RecipeList, EventPlanner, ShoppingListBuilder)
-│       │   ├── lib/         # API client & TanStack Query hooks
-│       │   └── App.tsx      # Main application layout & tab navigation
-│       └── package.json
-├── packages/
-│   └── domain/              # Pure TypeScript business domain engine (zero framework dependencies)
-│       ├── src/
-│       │   ├── events/      # GuestGroup & EventPlan domain models
-│       │   ├── recipes/     # Recipe, IngredientLine & scaling logic
-│       │   ├── shopping/    # consolidateShoppingList aggregation math
-│       │   └── units/       # Quantity & unit conversion math
-│       └── package.json
-├── prisma/
-│   ├── schema.prisma        # SQLite database schema (Recipe & IngredientLine models)
-│   └── dev.db               # Local SQLite database
-├── scripts/
-│   └── smokeTestLiveGemini.ts # Standalone script for live Gemini schema verification
-├── .env.example             # Template for local environment variables
-├── vitest.config.ts         # Vitest root test configuration
-└── package.json             # Root workspace configuration (npm workspaces)
+## Why it is different
+
+CookOut keeps judgment and arithmetic separate:
+
+- Gemini turns unstructured recipe sources into editable drafts.
+- The domain package—not an AI model—handles serving eligibility, scaling, unit conversion, pantry subtraction, practical rounding, and cook scheduling.
+- Imported data always passes through validation and human review before persistence.
+
+That boundary keeps the convenient parts flexible and the important math deterministic and testable.
+
+## Architecture
+
+```text
+packages/domain  ->  apps/api  ->  apps/web
+pure TypeScript      Express       React
+business rules       Prisma        TanStack Query
+zero runtime deps    Gemini        Tailwind CSS
 ```
 
----
+The npm-workspaces monorepo has three deliberately separated layers:
 
-## Technology Stack
+- **`packages/domain`** contains immutable value objects and all business rules. It has no framework or runtime dependencies.
+- **`apps/api`** exposes the domain through an Express REST API, persists data with Prisma and SQLite, and contains the Gemini integration.
+- **`apps/web`** is a responsive React application using TanStack Query and accessible Radix-based UI primitives.
 
-| Layer                 | Technologies & Key Libraries                                                                                                  |
-| :-------------------- | :---------------------------------------------------------------------------------------------------------------------------- |
-| **Frontend**          | React 18, Vite 5, TypeScript, Tailwind CSS, TanStack Query (`@tanstack/react-query`), Radix UI Primitives, Lucide React Icons |
-| **Backend**           | Node.js, Express 4, `@google/genai` (Gemini 3.6 Flash), Busboy (streaming file validation), Cheerio (HTML parsing), Supertest |
-| **Database**          | Prisma 6 ORM, SQLite                                                                                                          |
-| **Domain Package**    | Pure TypeScript (Domain-Driven Design, 0 external dependencies)                                                               |
-| **Testing**           | Vitest 3 (Unit & Integration), Playwright (E2E)                                                                               |
-| **Tooling & Quality** | TypeScript 5 (Strict), ESLint 9 (Flat Config), Prettier, Husky, lint-staged                                                   |
+AI sits at the edge of the system. It never performs recipe scaling, dietary eligibility, unit conversion, or scheduling arithmetic.
 
----
+## Engineering highlights
 
-## Setup & Installation
+- Per-user email/password authentication with hashed credentials and database-backed cookie sessions
+- Layered authorization, CSRF origin checks, CORS allowlisting, and rate limits on authentication and AI routes
+- SSRF protection for recipe URL imports, including private-network and redirect checks
+- Streaming image-size enforcement and magic-byte validation for uploads
+- Persisted offline recovery for shopping-list checkbox mutations
+- Deterministic Gemini fixtures for end-to-end tests, guarded from production use
+- Strict TypeScript across all workspaces
+- Unit, integration, and browser coverage across the domain, API, authentication boundaries, offline recovery, and primary user journeys
 
-### 1. Prerequisites
+For the exhaustive implementation snapshot and current test breakdown, see [`PROJECT_STATE.md`](./PROJECT_STATE.md).
 
-- **Node.js**: v18.0.0 or higher
-- **npm**: v9.0.0 or higher
+## Run locally
 
-### 2. Install Dependencies
+### Prerequisites
 
-Clone the repository and install all monorepo workspace dependencies:
+- Node.js 18 or newer
+- npm 9 or newer
+- A Gemini API key if you want to use live AI import
+
+### Setup
 
 ```bash
 git clone https://github.com/Nebishhh/cookout-ai.git
 cd cookout-ai
 npm install
-```
-
-### 3. Environment Variables Setup
-
-Copy `.env.example` to create local `.env` configuration files:
-
-```bash
-# Copy root environment file
-cp .env.example .env
-
-# Copy API environment file
 cp .env.example apps/api/.env
-```
-
-Edit `apps/api/.env` to supply your Google Gemini API key:
-
-```env
-DATABASE_URL="file:./dev.db"
-PORT=3001
-GEMINI_API_KEY=your_actual_gemini_api_key_here
-```
-
-### 4. Database Setup
-
-Initialize and sync the local SQLite database schema:
-
-```bash
 npx prisma db push --schema=prisma/schema.prisma
-```
-
-### 5. Running the Application locally
-
-Start both the API backend server (port 3001) and web frontend dev server (port 3000) concurrently:
-
-```bash
 npm run dev
 ```
 
-Open your browser to `http://localhost:3000` to access CookOut AI.
+Then open [http://localhost:3000](http://localhost:3000). Create an account or choose **Continue as guest**.
 
-To allow testing on mobile devices connected to your local network, start the web dev server with host binding:
+To enable live recipe import, set your key in `apps/api/.env`:
 
-```bash
-npm --workspace=apps/web run dev -- --host
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
----
+The web app runs on port `3000`; the API runs on port `3001`. See [`.env.example`](./.env.example) for optional model, origin, and deployment settings.
 
-## Testing
+## Quality checks
 
-### Unit & Integration Tests (Vitest)
+Run all commands from the repository root:
 
-Run the Vitest unit and integration test suites across `domain`, `api`, and `web` (see `PROJECT_STATE.md` §9 for the current passing-test count and coverage breakdown):
+| Command                | Purpose                                                                  |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `npm test`             | Run the Vitest unit and integration suite                                |
+| `npm run test:e2e`     | Run Playwright against isolated web/API servers and a dedicated database |
+| `npm run typecheck`    | Type-check every workspace                                               |
+| `npm run lint`         | Run ESLint across the repository                                         |
+| `npm run format:check` | Check formatting with Prettier                                           |
+| `npm run build`        | Build all workspaces                                                     |
 
-```bash
-npm test
-```
-
-### End-to-End Tests (Playwright)
-
-Run the Playwright E2E test suite covering full-stack recipe lifecycle, event planning math, and AI import flows:
-
-```bash
-npx playwright test --config=apps/web/playwright.config.ts
-```
-
-#### Deterministic Gemini Interception in E2E (`USE_GEMINI_FIXTURES=true`)
-
-Playwright E2E tests automatically spin up dedicated web and API servers with `USE_GEMINI_FIXTURES=true` and an isolated SQLite test database (`prisma/e2e.db`).
-
-- **No Live API Costs or Rate Limits**: Intercepts outbound calls to Gemini AI and returns recorded, deterministic JSON fixtures for text, URL, image, camera, and error cases.
-- **Production Guard Security**: `geminiClient.ts` includes a production guard (`checkProductionGuard()`) that throws a runtime `Error` if `USE_GEMINI_FIXTURES=true` when `NODE_ENV=production`, ensuring fixture data can never be served in production deployments.
-
-#### Manual Live Gemini API Smoke Test
-
-To manually check live Gemini API extraction against fixture schemas to detect schema drift over time (outside CI and automated tests):
+End-to-end tests use recorded Gemini fixtures, so they are deterministic and incur no API cost. To exercise the real production import path manually:
 
 ```bash
 npx tsx --env-file=apps/api/.env scripts/smokeTestLiveGemini.ts
 ```
 
----
+This live smoke test consumes Gemini quota and is intentionally excluded from CI.
 
-## Development Commands
+## Deployment
 
-All workspace commands can be run from the root directory:
+The repository includes a Docker/Caddy deployment path. See [`DEPLOY.md`](./DEPLOY.md) for environment configuration, trusted-origin setup, database persistence, and upgrade notes.
 
-| Command                | Action                                                     |
-| :--------------------- | :--------------------------------------------------------- |
-| `npm run dev`          | Start development servers for web and api concurrently     |
-| `npm run build`        | Build all workspace packages and applications (`tsc -b`)   |
-| `npm run typecheck`    | Run strict TypeScript compiler check across all workspaces |
-| `npm run lint`         | Run ESLint across the codebase                             |
-| `npm run lint:fix`     | Automatically fix ESLint warnings and errors               |
-| `npm test`             | Run Vitest unit & integration test suites                  |
-| `npm run format`       | Format code with Prettier                                  |
-| `npm run format:check` | Check code formatting with Prettier                        |
+## Project status
 
----
-
-## License
-
-MIT
+CookOut AI is a pre-launch project built to explore reliable event-planning workflows and clean full-stack architecture. The application is functional and extensively tested, but it is not yet operated as a public consumer service.

@@ -1,5 +1,6 @@
 import dns from 'dns';
 import net from 'net';
+import ipaddr from 'ipaddr.js';
 
 /**
  * Open Questions / Scope Notes for SSRF Protection:
@@ -26,76 +27,44 @@ export class FetchError extends Error {
 }
 
 /**
- * Validates if an IP address (IPv4 or IPv6) belongs to a private, loopback, link-local, or cloud metadata range.
+ * Ranges ipaddr.js classifies as 'unicast' that must still be blocked. Every exception to the
+ * "public unicast only" policy lives here, each with the reason it's needed.
  */
-export function isPrivateIp(ipStr: string): boolean {
-  // Normalize IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:10.0.0.1)
-  let ip = ipStr.trim();
-  if (ip.toLowerCase().startsWith('::ffff:')) {
-    const parts = ip.split(':');
-    const possibleIpv4 = parts[parts.length - 1];
-    if (net.isIPv4(possibleIpv4)) {
-      ip = possibleIpv4;
-    }
+const EXTRA_BLOCKED_RANGES: Array<{ cidr: [ipaddr.IPv6, number]; reason: string }> = [
+  {
+    // e.g. ::7f00:1 embeds 127.0.0.1. ipaddr.js reports the whole deprecated range as 'unicast',
+    // but some network stacks route these to the embedded IPv4 host.
+    cidr: ipaddr.IPv6.parseCIDR('::/96'),
+    reason: 'IPv4-compatible IPv6 (deprecated, RFC 4291 §2.5.5.1)',
+  },
+];
+
+/**
+ * True unless the address is public unicast. Applied identically to IP literals in a URL
+ * (after Node's URL parser has normalized them) and to every address DNS returns.
+ * IPv4-mapped IPv6 (::ffff:a.b.c.d, in any notation) is judged as the IPv4 address it carries.
+ * Anything Node doesn't accept as a strict IPv4/IPv6 literal is blocked — ipaddr.js alone would
+ * also accept legacy forms like "1.2.3" or "0x7f.1".
+ */
+export function isBlockedIp(ipStr: string): boolean {
+  const ip = ipStr.trim();
+  if (net.isIP(ip) === 0) {
+    return true;
   }
 
-  const version = net.isIP(ip);
-  if (version === 4) {
-    const octets = ip.split('.').map(Number);
-    if (octets.length !== 4 || octets.some((o) => isNaN(o) || o < 0 || o > 255)) {
-      return true; // Treat malformed IP as unsafe
-    }
-
-    // 0.0.0.0/8
-    if (octets[0] === 0) return true;
-
-    // 127.0.0.0/8 (Loopback)
-    if (octets[0] === 127) return true;
-
-    // 10.0.0.0/8 (Private)
-    if (octets[0] === 10) return true;
-
-    // 172.16.0.0/12 (Private: 172.16.0.0 - 172.31.255.255)
-    if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) return true;
-
-    // 192.168.0.0/16 (Private)
-    if (octets[0] === 192 && octets[1] === 168) return true;
-
-    // 169.254.0.0/16 (Link-local / Cloud metadata, e.g. 169.254.169.254)
-    if (octets[0] === 169 && octets[1] === 254) return true;
-
-    return false;
+  let address = ipaddr.parse(ip);
+  if (address instanceof ipaddr.IPv6 && address.isIPv4MappedAddress()) {
+    address = address.toIPv4Address();
   }
 
-  if (version === 6) {
-    const lower = ip.toLowerCase();
-
-    // Loopback ::1 or ::
-    if (
-      lower === '::1' ||
-      lower === '::' ||
-      lower === '0:0:0:0:0:0:0:1' ||
-      lower === '0:0:0:0:0:0:0:0'
-    ) {
+  if (address instanceof ipaddr.IPv6) {
+    const ipv6 = address;
+    if (EXTRA_BLOCKED_RANGES.some(({ cidr }) => ipv6.match(cidr))) {
       return true;
     }
-
-    // Unique local fe80::/10 or fc00::/7
-    if (
-      lower.startsWith('fe8') ||
-      lower.startsWith('fe9') ||
-      lower.startsWith('fea') ||
-      lower.startsWith('feb') ||
-      lower.startsWith('fc') ||
-      lower.startsWith('fd')
-    ) {
-      return true;
-    }
-
-    return false;
   }
 
-  return true; // Unknown/invalid IP format treated as unsafe
+  return address.range() !== 'unicast';
 }
 
 /**
@@ -126,7 +95,7 @@ export async function validateUrlAndResolveIp(urlStr: string): Promise<URL> {
 
   // If hostname is already a literal IP address
   if (net.isIP(hostname)) {
-    if (isPrivateIp(hostname)) {
+    if (isBlockedIp(hostname)) {
       throw new SsrfValidationError(`Access to private IP address "${hostname}" is forbidden.`);
     }
     return parsedUrl;
@@ -141,7 +110,7 @@ export async function validateUrlAndResolveIp(urlStr: string): Promise<URL> {
 
     for (const entry of addresses) {
       const ip = typeof entry === 'string' ? entry : entry.address;
-      if (isPrivateIp(ip)) {
+      if (isBlockedIp(ip)) {
         throw new SsrfValidationError(`Access to private IP address "${ip}" is forbidden.`);
       }
     }

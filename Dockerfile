@@ -52,6 +52,11 @@ RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists
 # both stages share the same Debian base) AND the `prisma` CLI, which the entrypoint
 # needs for `prisma db push` at every container start.
 COPY --from=builder /app/node_modules ./node_modules
+# npm nests a dependency under a workspace's own node_modules when its version conflicts with
+# the hoisted one (e.g. apps/api's ipaddr.js 2.x vs. express's 1.x at the root). Node resolves
+# the nested copy first, so without these the workspace silently loads the root's version.
+# --parents keeps each folder at its own workspace path; the globs cover future workspaces too.
+COPY --from=builder --parents /app/./apps/*/node_modules /app/./packages/*/node_modules ./
 
 # Workspace manifests + build output only — no src/, tests, or .tsbuildinfo files.
 COPY --from=builder /app/package.json ./package.json
@@ -64,6 +69,11 @@ COPY --from=builder /app/prisma ./prisma
 # Only the one-time multi-tenancy backfill script — not smokeTestLiveGemini.js, which is a
 # dev-only manual check with no place in a running deployment.
 COPY --from=builder /app/scripts/backfillOwnerUser.js ./scripts/backfillOwnerUser.js
+
+# Fail the build if any production dependency in the assembled runtime tree resolves outside
+# its declared range — e.g. a workspace's nested node_modules left behind, so it silently
+# falls back to the root's incompatible version.
+RUN npm ls --omit=dev --all > /dev/null
 
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh

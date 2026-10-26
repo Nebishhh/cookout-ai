@@ -30,6 +30,7 @@ const RECIPE_HTML = '<html><body><h1>Pancakes</h1></body></html>';
 interface TestServer {
   port: number;
   connections: number;
+  openSockets: number;
   requests: string[];
   sni: (string | false)[];
   hosts: (string | undefined)[];
@@ -42,7 +43,14 @@ async function startServer(
   handler?: http.RequestListener,
   options: { port?: number; tls?: boolean } = {}
 ): Promise<TestServer> {
-  const state: TestServer = { port: 0, connections: 0, requests: [], sni: [], hosts: [] };
+  const state: TestServer = {
+    port: 0,
+    connections: 0,
+    openSockets: 0,
+    requests: [],
+    sni: [],
+    hosts: [],
+  };
   const listener: http.RequestListener = (req, res) => {
     state.requests.push(req.url ?? '');
     state.hosts.push(req.headers.host);
@@ -53,7 +61,11 @@ async function startServer(
   const server = options.tls
     ? https.createServer({ cert: TLS_CERT, key: TLS_KEY }, listener)
     : http.createServer(listener);
-  server.on('connection', () => state.connections++);
+  server.on('connection', (socket) => {
+    state.connections++;
+    state.openSockets++;
+    socket.on('close', () => state.openSockets--);
+  });
   server.on('secureConnection', (socket) => state.sni.push(socket.servername));
   server.on('tlsClientError', () => {});
   await new Promise<void>((resolve) => server.listen(options.port ?? 0, host, resolve));
@@ -300,5 +312,85 @@ describe('SSRF connect-time protection (DNS rebinding)', () => {
       createRecipeFetcher(blockOnly127002)(`http://public.test:${publicHost.port}/`)
     ).rejects.toBeInstanceOf(SsrfValidationError);
     expect(internal.connections).toBe(0);
+  });
+});
+
+describe('SSRF fetch timeout', () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(
+      openServers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          })
+      )
+    );
+  });
+
+  const waitFor = async (condition: () => boolean, ms = 1000) => {
+    const deadline = Date.now() + ms;
+    while (!condition() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+
+  it('aborts a body that keeps dripping past the deadline, and leaves no open sockets', async () => {
+    const drips: NodeJS.Timeout[] = [];
+    const dripping = await startServer('127.0.0.1', (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.write('<p>');
+      // 30 chunks, 100ms apart: the body takes ~3s, far past the 400ms deadline below.
+      let sent = 0;
+      const timer = setInterval(() => {
+        res.write('drip ');
+        if (++sent === 30) {
+          clearInterval(timer);
+          res.end('</p>');
+        }
+      }, 100);
+      drips.push(timer);
+      res.on('close', () => clearInterval(timer));
+    });
+    stubDns({
+      validator: { 'drip.test': ['127.0.0.1'] },
+      connect: { 'drip.test': ['127.0.0.1'] },
+    });
+
+    const started = Date.now();
+    const attempt = createRecipeFetcher(blockOnly127002, { timeoutMs: 400 })(
+      `http://drip.test:${dripping.port}/`
+    );
+
+    await expect(attempt).rejects.toThrow(/timed out/);
+    expect(Date.now() - started).toBeLessThan(1500);
+    await waitFor(() => dripping.openSockets === 0);
+    expect(dripping.openSockets).toBe(0);
+    drips.forEach(clearInterval);
+  });
+
+  it('counts the deadline across redirect hops, not per hop', async () => {
+    // Each hop answers after 250ms: every single hop beats the 600ms deadline, the chain doesn't.
+    const slow = await startServer('127.0.0.1', (req, res) => {
+      setTimeout(() => {
+        if (req.url === '/final') {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          return res.end(RECIPE_HTML);
+        }
+        res.writeHead(302, { Location: req.url === '/r1' ? '/r2' : '/final' });
+        res.end();
+      }, 250);
+    });
+    stubDns({
+      validator: { 'slow.test': ['127.0.0.1'] },
+      connect: { 'slow.test': ['127.0.0.1'] },
+    });
+
+    await expect(
+      createRecipeFetcher(blockOnly127002, { timeoutMs: 600 })(`http://slow.test:${slow.port}/r1`)
+    ).rejects.toThrow(/timed out/);
+    await waitFor(() => slow.openSockets === 0);
+    expect(slow.openSockets).toBe(0);
   });
 });

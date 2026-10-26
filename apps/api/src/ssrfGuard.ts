@@ -229,9 +229,10 @@ export function createGuardedAgent(
  * for a public host. Application code must use fetchRecipeHtml, which fixes the policy to
  * isBlockedIp.
  *
- * Fetches HTML from a target URL with manual redirect re-validation, a per-hop timeout,
- * Content-Type validation, and a 2MB decompressed streaming size limit. Every connection goes
- * through a request-scoped guarded Agent; there is no unguarded fallback.
+ * Fetches HTML from a target URL with manual redirect re-validation, one timeout covering the
+ * whole fetch (every hop, headers, and the full body read), Content-Type validation, and a 2MB
+ * decompressed streaming size limit. Every connection goes through a request-scoped guarded
+ * Agent; there is no unguarded fallback.
  */
 export function createRecipeFetcher(
   isBlocked: (ip: string) => boolean,
@@ -239,37 +240,48 @@ export function createRecipeFetcher(
 ) {
   return async function fetchHtml(initialUrl: string): Promise<string> {
     const agent = createGuardedAgent(isBlocked);
+    // One deadline for the whole call. Aborting it fails whichever fetch or body read is in
+    // progress, and destroying the Agent below closes every socket it opened.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetchWithAgent(initialUrl, agent);
+      return await fetchWithAgent(initialUrl, agent, controller.signal);
     } finally {
+      clearTimeout(timer);
       await agent.destroy();
     }
   };
 
-  async function fetchWithAgent(initialUrl: string, agent: Agent): Promise<string> {
+  function timedOut(): FetchError {
+    return new FetchError(`Fetch request timed out after ${timeoutMs / 1000} seconds.`, 502);
+  }
+
+  async function fetchWithAgent(
+    initialUrl: string,
+    agent: Agent,
+    signal: AbortSignal
+  ): Promise<string> {
     let currentUrlStr = initialUrl;
     let hop = 0;
 
     while (hop <= MAX_REDIRECTS) {
+      if (signal.aborted) {
+        throw timedOut();
+      }
       // Perform full SSRF validation (protocol, hostname, DNS IP) on current hop
       const validatedUrl = await validateUrl(currentUrlStr, isBlocked);
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
         const response = await fetch(validatedUrl.href, {
           method: 'GET',
           redirect: 'manual',
           dispatcher: agent,
-          signal: controller.signal,
+          signal,
           headers: {
             'User-Agent': 'CookOutAI-Recipe-Import/1.0',
             Accept: 'text/html,application/xhtml+xml',
           },
         });
-
-        clearTimeout(timer);
 
         // Handle 3xx Redirects manually
         if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -337,7 +349,6 @@ export function createRecipeFetcher(
         const combined = Buffer.concat(chunks);
         return combined.toString('utf8');
       } catch (err: unknown) {
-        clearTimeout(timer);
         if (err instanceof SsrfValidationError || err instanceof FetchError) {
           throw err;
         }
@@ -346,8 +357,9 @@ export function createRecipeFetcher(
         if (err instanceof Error && err.cause instanceof SsrfValidationError) {
           throw err.cause;
         }
-        if (err instanceof Error && err.name === 'AbortError') {
-          throw new FetchError(`Fetch request timed out after ${timeoutMs / 1000} seconds.`, 502);
+        // Covers an abort surfacing from fetch() itself or mid-way through the body read.
+        if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+          throw timedOut();
         }
         const msg = err instanceof Error ? err.message : String(err);
         throw new FetchError(`Failed to fetch recipe webpage: ${msg}`, 502);

@@ -22,10 +22,10 @@ prisma/dev.db
 prisma/test.db
 prisma/e2e.db
 
-# Secrets — never in the build context
-.env
-.env.local
-.env.*.local
+# Secrets — never in the build context. Docker matches these patterns from the context root
+# only, so a bare `.env` would miss apps/api/.env; `**/` covers every directory.
+**/.env*
+!**/.env.example
 
 .git
 .github

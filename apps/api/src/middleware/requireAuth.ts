@@ -17,7 +17,15 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: 'Unauthorized', message: 'Login required.' });
   }
 
-  const user = await getSessionUser(rawToken);
+  // Express 4 doesn't catch rejected promises from async middleware, so a failed session
+  // lookup (e.g. SQLite busy) must be handed to the error handler explicitly — otherwise it
+  // escapes as an unhandled rejection and takes the whole process down.
+  let user: AuthUser | null;
+  try {
+    user = await getSessionUser(rawToken);
+  } catch (err) {
+    return next(err);
+  }
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized', message: 'Session expired or invalid.' });
   }

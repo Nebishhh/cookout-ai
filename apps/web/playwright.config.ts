@@ -21,7 +21,7 @@ export default defineConfig({
   globalSetup: path.resolve(__dirname, 'e2e/globalSetup.ts'),
   use: {
     baseURL: 'http://localhost:3010',
-    trace: 'on-first-retry',
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     storageState: storageStatePath,
     // Real browser requests already carry a correct Origin; this only matters for specs that
@@ -37,6 +37,8 @@ export default defineConfig({
       // apps/api/.env (which doesn't exist on a CI runner) and gets all its config from `env` below.
       command: `npx prisma db push --schema="${schemaPath}" --accept-data-loss && npm run start:e2e --workspace=apps/api`,
       url: 'http://localhost:3011/api/health',
+      // Covers slow Prisma CLI starts on a loaded Windows machine.
+      timeout: 180_000,
       reuseExistingServer: false,
       cwd: rootDir,
       env: {

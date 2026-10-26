@@ -2014,5 +2014,53 @@ describe('CookOut AI API Endpoints', () => {
       expect(item.categoryIsOverridden).toBe(false);
       expect(item.category).not.toBe('Beverages');
     });
+
+    async function createRecipeAsBoth() {
+      const { agent: agentA } = await createAuthenticatedAgent();
+      const { agent: agentB } = await createAuthenticatedAgent();
+      const recipe = {
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'rice', displayName: 'Rice', amount: 500, unit: 'g' }],
+      };
+      const recipeA = await agentA.post('/api/recipes').send({ ...recipe, name: "A's Recipe" });
+      const recipeB = await agentB.post('/api/recipes').send({ ...recipe, name: "B's Recipe" });
+      expect(recipeA.status).toBe(201);
+      expect(recipeB.status).toBe(201);
+      return { agentB, foreignId: recipeA.body.id, ownId: recipeB.body.id };
+    }
+
+    it("POST /api/events does not store another user's recipe ID and reports it in droppedRecipeIds", async () => {
+      const { agentB, foreignId, ownId } = await createRecipeAsBoth();
+
+      const createRes = await agentB
+        .post('/api/events')
+        .send({ name: "B's Party", guestGroup: validGuestGroup, recipeIds: [ownId, foreignId] });
+
+      expect(createRes.status).toBe(201);
+      expect(createRes.body.recipeIds).toEqual([ownId]);
+      expect(createRes.body.droppedRecipeIds).toEqual([foreignId]);
+
+      const stored = await prisma.event.findUnique({ where: { id: createRes.body.id } });
+      expect(JSON.parse(stored!.recipeIdsJson)).toEqual([ownId]);
+    });
+
+    it("PUT /api/events/:id does not store another user's recipe ID and reports it in droppedRecipeIds", async () => {
+      const { agentB, foreignId, ownId } = await createRecipeAsBoth();
+      const createRes = await agentB
+        .post('/api/events')
+        .send({ name: "B's Party", guestGroup: validGuestGroup, recipeIds: [ownId] });
+      expect(createRes.status).toBe(201);
+
+      const putRes = await agentB
+        .put(`/api/events/${createRes.body.id}`)
+        .send({ name: "B's Party", guestGroup: validGuestGroup, recipeIds: [ownId, foreignId] });
+
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.recipeIds).toEqual([ownId]);
+      expect(putRes.body.droppedRecipeIds).toEqual([foreignId]);
+
+      const stored = await prisma.event.findUnique({ where: { id: createRes.body.id } });
+      expect(JSON.parse(stored!.recipeIdsJson)).toEqual([ownId]);
+    });
   });
 });

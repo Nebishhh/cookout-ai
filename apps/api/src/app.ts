@@ -1043,12 +1043,41 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
  *   the plan fresh via planEventShoppingList() on every read — never cached.
  * - A recipeId that no longer resolves to a Recipe is silently dropped from the recomputed
  *   plan (tracked as droppedRecipeIds in the response) rather than 404ing the whole event.
+ * - On create/update, only recipeIds the caller owns are persisted; any other ID (another
+ *   user's recipe, or one that doesn't exist) is reported in droppedRecipeIds, never stored.
  */
+
+async function resolveOwnedRecipes(recipeIds: readonly string[], userId: string) {
+  const recipes = [];
+  const ownedRecipeIds: string[] = [];
+  const droppedRecipeIds: string[] = [];
+  for (const id of recipeIds) {
+    const prismaRecipe = await prisma.recipe.findFirst({
+      where: { id, userId },
+      include: { ingredients: true, steps: true },
+    });
+    if (prismaRecipe) {
+      recipes.push(toDomainRecipe(prismaRecipe));
+      ownedRecipeIds.push(id);
+    } else {
+      droppedRecipeIds.push(id);
+    }
+  }
+  return { recipes, ownedRecipeIds, droppedRecipeIds };
+}
 
 // POST /api/events
 app.post('/api/events', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const domainEvent = validateAndCreateDomainEvent(req.body as CreateEventInput);
+    const requestedEvent = validateAndCreateDomainEvent(req.body as CreateEventInput);
+    const { recipes, ownedRecipeIds, droppedRecipeIds } = await resolveOwnedRecipes(
+      requestedEvent.recipeIds,
+      req.user!.id
+    );
+    const domainEvent = validateAndCreateDomainEvent(
+      { ...(req.body as CreateEventInput), recipeIds: ownedRecipeIds },
+      requestedEvent.id
+    );
 
     const createdPrismaEvent = await prisma.event.create({
       data: {
@@ -1065,17 +1094,6 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
 
     const reconstructedEvent = toDomainEvent(createdPrismaEvent);
 
-    const recipes = [];
-    for (const id of reconstructedEvent.recipeIds) {
-      const prismaRecipe = await prisma.recipe.findFirst({
-        where: { id, userId: req.user!.id },
-        include: { ingredients: true, steps: true },
-      });
-      if (prismaRecipe) {
-        recipes.push(toDomainRecipe(prismaRecipe));
-      }
-    }
-
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     const pantryStock = await getPantryStockMap(req.user!.id);
@@ -1085,7 +1103,7 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
     res.status(201).json({
       ...toEventSummaryJSON(reconstructedEvent),
       ...serializeEventPlan(eventPlan, categoryOverrides, pantryStock, schedule),
-      droppedRecipeIds: [],
+      droppedRecipeIds,
     });
   } catch (err) {
     next(err);
@@ -1164,7 +1182,15 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
       throw new NotFoundError(`Event with id "${id}" not found.`);
     }
 
-    const domainEvent = validateAndCreateDomainEvent(req.body as CreateEventInput, id);
+    const requestedEvent = validateAndCreateDomainEvent(req.body as CreateEventInput, id);
+    const { recipes, ownedRecipeIds, droppedRecipeIds } = await resolveOwnedRecipes(
+      requestedEvent.recipeIds,
+      req.user!.id
+    );
+    const domainEvent = validateAndCreateDomainEvent(
+      { ...(req.body as CreateEventInput), recipeIds: ownedRecipeIds },
+      id
+    );
 
     const updatedPrismaEvent = await prisma.event.update({
       where: { id },
@@ -1180,20 +1206,6 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     });
 
     const reconstructedEvent = toDomainEvent(updatedPrismaEvent);
-
-    const recipes = [];
-    const droppedRecipeIds: string[] = [];
-    for (const recipeId of reconstructedEvent.recipeIds) {
-      const prismaRecipe = await prisma.recipe.findFirst({
-        where: { id: recipeId, userId: req.user!.id },
-        include: { ingredients: true, steps: true },
-      });
-      if (prismaRecipe) {
-        recipes.push(toDomainRecipe(prismaRecipe));
-      } else {
-        droppedRecipeIds.push(recipeId);
-      }
-    }
 
     const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);

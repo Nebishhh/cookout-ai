@@ -122,15 +122,27 @@ test.describe('Event Planner E2E Tests', () => {
 
   test('displays 400 error banner when submitting an invalid guest group (e.g. vegans > vegetarians)', async ({
     page,
+    request,
   }) => {
+    // "Plan Event" stays disabled until a recipe is selected, so this test seeds its own recipe
+    // rather than relying on one left behind by an earlier test.
+    const recipeName = `Guest Group Validation Recipe ${Date.now()}`;
+    const recipeRes = await request.post('http://localhost:3011/api/recipes', {
+      data: {
+        name: recipeName,
+        baseServings: 4,
+        dietaryTags: [],
+        ingredients: [{ ingredientId: 'rice', displayName: 'Rice', amount: 500, unit: 'g' }],
+      },
+    });
+    expect(recipeRes.status()).toBe(201);
+
     await page.goto('/');
     await page.locator('#nav-tab-event-planner').click();
 
-    // Select at least 1 recipe so "Plan Event" button is enabled
-    const firstCheckbox = page.getByRole('checkbox', { name: /select recipe/i }).first();
-    if (await firstCheckbox.isVisible()) {
-      await firstCheckbox.click();
-    }
+    // click() auto-waits for the recipe list to load; the old `if (isVisible())` guard didn't
+    // wait, so on a slow run it skipped the selection and the button never enabled.
+    await page.getByRole('checkbox', { name: `Select recipe ${recipeName}` }).click();
 
     // Invalid guest group: Total=10, Vegetarians=2, Vegans=5 (violates veganCount <= vegetarianCount)
     await page.locator('#input-total-guests').fill('10');

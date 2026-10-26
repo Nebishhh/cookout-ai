@@ -1,9 +1,20 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import dns from 'dns';
+import { fetch as undiciFetch } from 'undici';
 import { prisma } from './prisma.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
 import * as geminiModule from './geminiClient.js';
 import { createAuthenticatedAgent, type TestAgent } from './__testHelpers__/testAuth.js';
+
+// ssrfGuard fetches with undici's own fetch (through a guarded, request-scoped Agent), so these
+// route-level tests stub that function rather than globalThis.fetch. Agent and buildConnector
+// stay real. Connect-time protection itself is covered against real local servers in
+// ssrfGuard.rebinding.test.ts.
+vi.mock('undici', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('undici')>()),
+  fetch: vi.fn(),
+}));
+const mockedFetch = vi.mocked(undiciFetch);
 
 vi.mock('./geminiClient.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./geminiClient.js')>()),
@@ -16,6 +27,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
 
   beforeEach(async () => {
     vi.restoreAllMocks();
+    mockedFetch.mockReset();
     process.env.GEMINI_API_KEY = 'test-gemini-api-key';
     await prisma.ingredientLine.deleteMany();
     await prisma.recipe.deleteMany();
@@ -206,7 +218,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         return [{ address: '93.184.216.34', family: 4 }] as unknown as dns.LookupAddress;
       });
 
-      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      mockedFetch.mockImplementation(async (url) => {
         if (url.toString().includes('public-redirector.com')) {
           return {
             status: 302,
@@ -231,7 +243,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         { address: '93.184.216.34', family: 4 },
       ] as unknown as dns.LookupAddress);
 
-      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      mockedFetch.mockImplementation(async (url) => {
         const str = url.toString();
         const count = parseInt(str.split('hop=')[1] || '0', 10);
         return {
@@ -255,7 +267,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         { address: '93.184.216.34', family: 4 },
       ] as unknown as dns.LookupAddress);
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'application/pdf' }),
@@ -278,7 +290,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
 
       const oversizedBuffer = Buffer.alloc(2.1 * 1024 * 1024, 'a');
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
@@ -300,7 +312,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         { address: '93.184.216.34', family: 4 },
       ] as unknown as dns.LookupAddress);
 
-      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Connection refused'));
+      mockedFetch.mockRejectedValue(new Error('Connection refused'));
 
       const res = await agent
         .post('/api/recipes/import-url')
@@ -328,7 +340,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         </html>
       `;
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html' }),
@@ -365,7 +377,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         </html>
       `;
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html' }),
@@ -416,7 +428,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         </html>
       `;
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
@@ -471,7 +483,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       const validHtml =
         '<html><head><script type="application/ld+json">{"@type":"Recipe","name":"Soup","recipeIngredient":["pinch of pepper"]}</script></head></html>';
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html' }),
@@ -512,7 +524,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       const validHtml =
         '<html><head><script type="application/ld+json">{"@type":"Recipe","name":"Soup","recipeIngredient":["1 cup broth"]}</script></head></html>';
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html' }),
@@ -541,7 +553,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
 
       const validHtml = '<html><body><p>Just a blog post about kitchen gadgets.</p></body></html>';
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html' }),
@@ -585,7 +597,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
         </html>
       `;
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
@@ -633,7 +645,7 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       const validHtml =
         '<html><head><script type="application/ld+json">{"@type":"Recipe","name":"Soup","recipeIngredient":["1 cup broth"]}</script></head></html>';
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      mockedFetch.mockResolvedValue({
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'text/html' }),

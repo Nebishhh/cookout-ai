@@ -1,11 +1,12 @@
 import dns from 'dns';
 import net from 'net';
 import ipaddr from 'ipaddr.js';
+import { Agent, buildConnector, fetch } from 'undici';
 
 /**
  * Open Questions / Scope Notes for SSRF Protection:
- * - Basic SSRF protection implemented here (protocol whitelist, literal hostname check, DNS resolution IP check, manual redirect re-validation, 2MB size limit, 10s timeout).
- * - This protection is suitable for a personal-use app; public/multi-tenant deployments would require network-level egress proxies and DNS pinning.
+ * - SSRF protection implemented here: protocol whitelist, literal hostname check, DNS resolution IP check, connect-time IP check on every socket (DNS rebinding), manual redirect re-validation, 2MB size limit, 10s timeout.
+ * - A network-level egress proxy would still be a stronger boundary for a public/multi-tenant deployment.
  * - Sending a custom User-Agent ("CookOutAI-Recipe-Import/1.0") helps with some sites, but sites using advanced bot detection beyond header inspection may still block requests.
  */
 
@@ -74,6 +75,10 @@ export function isBlockedIp(ipStr: string): boolean {
  * 3. Resolves DNS hostnames and verifies all returned IPs are non-private
  */
 export async function validateUrlAndResolveIp(urlStr: string): Promise<URL> {
+  return validateUrl(urlStr, isBlockedIp);
+}
+
+async function validateUrl(urlStr: string, isBlocked: (ip: string) => boolean): Promise<URL> {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(urlStr);
@@ -95,7 +100,7 @@ export async function validateUrlAndResolveIp(urlStr: string): Promise<URL> {
 
   // If hostname is already a literal IP address
   if (net.isIP(hostname)) {
-    if (isBlockedIp(hostname)) {
+    if (isBlocked(hostname)) {
       throw new SsrfValidationError(`Access to private IP address "${hostname}" is forbidden.`);
     }
     return parsedUrl;
@@ -110,7 +115,7 @@ export async function validateUrlAndResolveIp(urlStr: string): Promise<URL> {
 
     for (const entry of addresses) {
       const ip = typeof entry === 'string' ? entry : entry.address;
-      if (isBlockedIp(ip)) {
+      if (isBlocked(ip)) {
         throw new SsrfValidationError(`Access to private IP address "${ip}" is forbidden.`);
       }
     }
@@ -133,111 +138,224 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2MB decompressed size limit
 const FETCH_TIMEOUT_MS = 10000; // 10s fetch timeout
 
 /**
- * Fetches HTML from a target URL with manual redirect re-validation, 10s timeout,
- * Content-Type validation, and 2MB decompressed streaming size limit.
+ * An undici Agent that re-checks the address every socket actually connects to, closing the
+ * window between validateUrl's own DNS lookup and the connection's lookup (DNS rebinding):
+ * - lookup: resolves with every address family and refuses the connection, before any TCP
+ *   connect, if any answer is blocked (one bad answer rejects the whole set);
+ * - post-connect: checks the connected address and destroys the socket before a request is
+ *   written — the backstop for paths that skip lookup, e.g. IP-literal hosts.
+ * TLS verification is untouched; tlsOptions exists only so tests can trust a test CA.
+ *
+ * Exported for tests only (ssrfGuard.rebinding.test.ts). Application code must call
+ * fetchRecipeHtml, which builds a fresh one of these per request with the real policy.
  */
-export async function fetchRecipeHtml(initialUrl: string): Promise<string> {
-  let currentUrlStr = initialUrl;
-  let hop = 0;
+export function createGuardedAgent(
+  isBlocked: (ip: string) => boolean,
+  tlsOptions: { ca?: string | Buffer } = {}
+): Agent {
+  // Hostnames whose every resolved address this Agent's own lookup has checked and allowed.
+  const approvedHostnames = new Set<string>();
 
-  while (hop <= MAX_REDIRECTS) {
-    // Perform full SSRF validation (protocol, hostname, DNS IP) on current hop
-    const validatedUrl = await validateUrlAndResolveIp(currentUrlStr);
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    try {
-      const response = await fetch(validatedUrl.href, {
-        method: 'GET',
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'CookOutAI-Recipe-Import/1.0',
-          Accept: 'text/html,application/xhtml+xml',
-        },
-      });
-
-      clearTimeout(timer);
-
-      // Handle 3xx Redirects manually
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-        if (hop >= MAX_REDIRECTS) {
-          throw new FetchError(`Exceeded maximum redirect limit of ${MAX_REDIRECTS} hops.`, 502);
-        }
-
-        const location = response.headers.get('location');
-        if (!location) {
-          throw new FetchError('Redirect response missing Location header.', 502);
-        }
-
-        currentUrlStr = new URL(location, validatedUrl.href).href;
-        hop++;
-        continue;
+  const lookup: net.LookupFunction = (hostname, options, callback) => {
+    dns.lookup(hostname, { ...options, all: true }, (err, result) => {
+      if (err) {
+        return callback(err, '');
       }
-
-      if (!response.ok) {
-        throw new FetchError(
-          `HTTP ${response.status} from target URL: ${response.statusText}`,
-          502
+      const addresses = result as unknown as dns.LookupAddress[];
+      if (addresses.length === 0) {
+        return callback(new SsrfValidationError(`Could not resolve hostname "${hostname}".`), '');
+      }
+      const blocked = addresses.find(({ address }) => isBlocked(address));
+      if (blocked) {
+        return callback(
+          new SsrfValidationError(
+            `Access to private IP address "${blocked.address}" is forbidden.`
+          ),
+          ''
         );
       }
-
-      const contentType = (response.headers.get('content-type') || '').toLowerCase();
-      if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
-        throw new FetchError(
-          `Invalid Content-Type "${contentType}". Only text/html and application/xhtml+xml are supported.`,
-          502
-        );
+      approvedHostnames.add(hostname);
+      if (options.all) {
+        return callback(null, addresses);
       }
+      return callback(null, addresses[0].address, addresses[0].family);
+    });
+  };
 
-      // Stream response body and enforce 2MB decompressed size limit incrementally
-      if (!response.body) {
-        const text = await response.text();
-        if (Buffer.byteLength(text, 'utf8') > MAX_BODY_BYTES) {
-          throw new FetchError('Decompressed response size exceeds 2MB limit.', 502);
-        }
-        return text;
-      }
-
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let totalBytes = 0;
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            totalBytes += value.byteLength;
-            if (totalBytes > MAX_BODY_BYTES) {
-              await reader.cancel();
-              throw new FetchError('Decompressed response size exceeds 2MB limit.', 502);
-            }
-            chunks.push(value);
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
-
-      const combined = Buffer.concat(chunks);
-      return combined.toString('utf8');
-    } catch (err: unknown) {
-      clearTimeout(timer);
-      if (err instanceof SsrfValidationError || err instanceof FetchError) {
-        throw err;
-      }
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new FetchError(
-          `Fetch request timed out after ${FETCH_TIMEOUT_MS / 1000} seconds.`,
-          502
-        );
-      }
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new FetchError(`Failed to fetch recipe webpage: ${msg}`, 502);
+  // Node 22.14 reports an empty socket.remoteAddress for hostname connections once
+  // setNoDelay/setKeepAlive ran before connect — which undici always does (22.23.4 is fine).
+  // So when the socket can't say where it connected: an IP-literal host is judged by the literal
+  // itself, and a hostname is only allowed if this Agent's lookup approved every address it
+  // could have connected to. Anything else is refused.
+  function isConnectionAllowed(hostname: string, remoteAddress: string | undefined): boolean {
+    if (remoteAddress) {
+      return !isBlocked(remoteAddress);
     }
+    const host = hostname.replace(/^\[|\]$/g, '');
+    if (net.isIP(host)) {
+      return !isBlocked(host);
+    }
+    return approvedHostnames.has(host);
   }
 
-  throw new FetchError(`Exceeded maximum redirect limit of ${MAX_REDIRECTS} hops.`, 502);
+  const connector = buildConnector({ ...tlsOptions, lookup });
+
+  return new Agent({
+    connect(options, callback) {
+      connector(options, (...args) => {
+        if (args[0]) {
+          return callback(args[0], null);
+        }
+        const socket = args[1];
+        const remoteAddress = socket.remoteAddress;
+        if (!isConnectionAllowed(options.hostname, remoteAddress)) {
+          socket.destroy();
+          return callback(
+            new SsrfValidationError(
+              `Access to private IP address "${remoteAddress || options.hostname}" is forbidden.`
+            ),
+            null
+          );
+        }
+        return callback(null, socket);
+      });
+    },
+  });
 }
+
+/**
+ * Builds the fetcher behind fetchRecipeHtml for a given IP policy. Exported for tests only
+ * (ssrfGuard.rebinding.test.ts), which need a policy under which a local server can stand in
+ * for a public host. Application code must use fetchRecipeHtml, which fixes the policy to
+ * isBlockedIp.
+ *
+ * Fetches HTML from a target URL with manual redirect re-validation, a per-hop timeout,
+ * Content-Type validation, and a 2MB decompressed streaming size limit. Every connection goes
+ * through a request-scoped guarded Agent; there is no unguarded fallback.
+ */
+export function createRecipeFetcher(
+  isBlocked: (ip: string) => boolean,
+  { timeoutMs = FETCH_TIMEOUT_MS }: { timeoutMs?: number } = {}
+) {
+  return async function fetchHtml(initialUrl: string): Promise<string> {
+    const agent = createGuardedAgent(isBlocked);
+    try {
+      return await fetchWithAgent(initialUrl, agent);
+    } finally {
+      await agent.destroy();
+    }
+  };
+
+  async function fetchWithAgent(initialUrl: string, agent: Agent): Promise<string> {
+    let currentUrlStr = initialUrl;
+    let hop = 0;
+
+    while (hop <= MAX_REDIRECTS) {
+      // Perform full SSRF validation (protocol, hostname, DNS IP) on current hop
+      const validatedUrl = await validateUrl(currentUrlStr, isBlocked);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(validatedUrl.href, {
+          method: 'GET',
+          redirect: 'manual',
+          dispatcher: agent,
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'CookOutAI-Recipe-Import/1.0',
+            Accept: 'text/html,application/xhtml+xml',
+          },
+        });
+
+        clearTimeout(timer);
+
+        // Handle 3xx Redirects manually
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          if (hop >= MAX_REDIRECTS) {
+            throw new FetchError(`Exceeded maximum redirect limit of ${MAX_REDIRECTS} hops.`, 502);
+          }
+
+          const location = response.headers.get('location');
+          if (!location) {
+            throw new FetchError('Redirect response missing Location header.', 502);
+          }
+
+          // Release the unread redirect body so the connection isn't held for the rest of the chain.
+          await response.body?.cancel();
+          currentUrlStr = new URL(location, validatedUrl.href).href;
+          hop++;
+          continue;
+        }
+
+        if (!response.ok) {
+          throw new FetchError(
+            `HTTP ${response.status} from target URL: ${response.statusText}`,
+            502
+          );
+        }
+
+        const contentType = (response.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+          throw new FetchError(
+            `Invalid Content-Type "${contentType}". Only text/html and application/xhtml+xml are supported.`,
+            502
+          );
+        }
+
+        // Stream response body and enforce 2MB decompressed size limit incrementally
+        if (!response.body) {
+          const text = await response.text();
+          if (Buffer.byteLength(text, 'utf8') > MAX_BODY_BYTES) {
+            throw new FetchError('Decompressed response size exceeds 2MB limit.', 502);
+          }
+          return text;
+        }
+
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              totalBytes += value.byteLength;
+              if (totalBytes > MAX_BODY_BYTES) {
+                await reader.cancel();
+                throw new FetchError('Decompressed response size exceeds 2MB limit.', 502);
+              }
+              chunks.push(value);
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+
+        const combined = Buffer.concat(chunks);
+        return combined.toString('utf8');
+      } catch (err: unknown) {
+        clearTimeout(timer);
+        if (err instanceof SsrfValidationError || err instanceof FetchError) {
+          throw err;
+        }
+        // undici reports a connection refused by the guarded Agent as TypeError("fetch failed")
+        // with the SsrfValidationError as its cause.
+        if (err instanceof Error && err.cause instanceof SsrfValidationError) {
+          throw err.cause;
+        }
+        if (err instanceof Error && err.name === 'AbortError') {
+          throw new FetchError(`Fetch request timed out after ${timeoutMs / 1000} seconds.`, 502);
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new FetchError(`Failed to fetch recipe webpage: ${msg}`, 502);
+      }
+    }
+
+    throw new FetchError(`Exceeded maximum redirect limit of ${MAX_REDIRECTS} hops.`, 502);
+  }
+}
+
+export const fetchRecipeHtml = createRecipeFetcher(isBlockedIp);

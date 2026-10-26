@@ -33,7 +33,9 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `npx prisma db push --schema="${schemaPath}" --accept-data-loss && npm run dev --workspace=apps/api`,
+      // start:e2e, not dev: no --env-file, so the run is hermetic — it never reads a developer's
+      // apps/api/.env (which doesn't exist on a CI runner) and gets all its config from `env` below.
+      command: `npx prisma db push --schema="${schemaPath}" --accept-data-loss && npm run start:e2e --workspace=apps/api`,
       url: 'http://localhost:3011/api/health',
       reuseExistingServer: false,
       cwd: rootDir,

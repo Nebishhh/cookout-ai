@@ -13,6 +13,7 @@ export default defineConfig({
     // run them serially — parallel workers racing inserts/deletes against the same
     // file produces cross-file test pollution (see PROJECT_STATE.md §9).
     fileParallelism: false,
+    globalSetup: path.resolve(__dirname, 'vitest.globalSetup.ts'),
     env: {
       DATABASE_URL: `file:${path.resolve(__dirname, '../../prisma/test.db')}`,
     },

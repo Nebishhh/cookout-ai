@@ -5,8 +5,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
-    "dev": "tsx watch --env-file=.env src/index.ts",
-    "start:e2e": "tsx src/index.ts",
+    "dev": "tsx watch --env-file=.env --conditions=@cookout-ai/source src/index.ts",
+    "start:e2e": "tsx --conditions=@cookout-ai/source src/index.ts",
     "build": "tsc -b",
     "start": "node dist/index.js",
     "typecheck": "tsc -b --noEmit",

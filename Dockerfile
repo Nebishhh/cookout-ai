@@ -1,22 +1,23 @@
 # syntax=docker/dockerfile:1
 
 ##### Stage 1: builder — full workspace install (incl. devDependencies) + build #####
-FROM node:20-bookworm-slim AS builder
+FROM node:22.23.4-bookworm-slim AS builder
 WORKDIR /app
 
 # apps/web's devDependency @playwright/test would otherwise try to download a Chromium
 # binary during `npm ci`; nothing in this image ever launches a browser.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
-# @prisma/client's postinstall (`prisma generate`, triggered by `npm ci` below) probes
+# The root package.json's postinstall (`prisma generate`, triggered by `npm ci` below) probes
 # the OS's OpenSSL version to pick which query engine binary to generate. Without
 # OpenSSL installed here, it silently guesses wrong (debian-openssl-1.1.x) and the
 # mismatch only surfaces as a runtime crash later — install it before `npm ci` runs.
 RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 # Manifests + Prisma schema first, so the slow `npm ci` layer is cached across
-# source-only changes. @prisma/client's postinstall generate step needs
-# prisma/schema.prisma present.
+# source-only changes. The root postinstall's generate step needs prisma/schema.prisma
+# present. (@prisma/client's own postinstall can't do it: it fails to resolve the prisma
+# 6.19.3 CLI and silently leaves an uninitialized client stub.)
 COPY package.json package-lock.json tsconfig.json tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
@@ -36,7 +37,7 @@ COPY scripts ./scripts
 RUN npm run build
 
 ##### Stage 2: runtime — build output + the builder's already-verified node_modules #####
-FROM node:20-bookworm-slim AS runtime
+FROM node:22.23.4-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3001

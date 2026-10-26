@@ -1,3 +1,8 @@
+# Every text file is stored and checked out with LF, regardless of a contributor's
+# core.autocrlf setting — Prettier enforces endOfLine: lf, so a CRLF checkout (Git for
+# Windows' default) would otherwise fail format:check on every file.
+* text=auto eol=lf
+
 # Shell scripts must stay LF — a CRLF shebang line breaks execution inside Linux
 # containers (Docker COPY copies whatever's on disk verbatim, git config aside).
 *.sh text eol=lf

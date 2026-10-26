@@ -1,4 +1,5 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.20
+# Pinned: the runtime stage's COPY --parents needs Dockerfile frontend 1.20+.
 
 ##### Stage 1: builder — full workspace install (incl. devDependencies) + build #####
 FROM node:22.23.4-bookworm-slim AS builder

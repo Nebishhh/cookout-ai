@@ -856,15 +856,50 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
  *   configured at all — a real, testable property of this design, not just an optimization.
  * - No bounded-retry orchestrator on the AI-fallback path — see geminiClient.ts's doc comment
  *   on parseGuestGroupWithGemini for why that's deliberate, not missing.
+ * - Rate-limited on the AI-fallback path only, sharing recipeImportRateLimit's per-user bucket
+ *   with the recipe-import routes; heuristic-resolved requests don't spend from it.
  * - ZERO database persistence — returns a draft {totalGuests, vegetarianCount, veganCount} for
  *   the client to review and apply to local form state, same convention as every other AI
  *   import route.
  */
 const MAX_GUEST_DESCRIPTION_LENGTH = 500;
 
+type GuestGroupCandidate = { totalGuests: number; vegetarianCount?: number; veganCount?: number };
+
+/** Shared tail of both paths: domain-validate the candidate, then return the draft. */
+function respondWithGuestGroup(
+  res: Response,
+  candidate: GuestGroupCandidate,
+  source: 'heuristic' | 'ai'
+) {
+  let guestGroup: GuestGroup;
+  try {
+    guestGroup = new GuestGroup(candidate);
+  } catch (err) {
+    if (err instanceof DomainError) {
+      return res.status(422).json({
+        error: err.name,
+        message: err.message,
+      });
+    }
+    throw err;
+  }
+
+  return res.status(200).json({
+    totalGuests: guestGroup.totalGuests,
+    vegetarianCount: guestGroup.vegetarianCount,
+    veganCount: guestGroup.veganCount,
+    source,
+  });
+}
+
+// Three handlers so only the Gemini path is rate-limited: the heuristic answers for free and
+// never spends from the per-user AI bucket; anything it can't resolve falls through next() to
+// recipeImportRateLimit (shared with the recipe-import routes — same costed action, one Gemini
+// call) and only then to the AI fallback.
 app.post(
   '/api/events/parse-description',
-  async (req: Request, res: Response, next: NextFunction) => {
+  (req: Request, res: Response, next: NextFunction) => {
     try {
       const { description } = req.body || {};
       if (typeof description !== 'string' || description.trim() === '') {
@@ -881,97 +916,75 @@ app.post(
       }
 
       const heuristicResult = parseGuestGroupText(description);
-
-      let candidate: { totalGuests: number; vegetarianCount?: number; veganCount?: number };
-      let source: 'heuristic' | 'ai';
-
       if (heuristicResult) {
-        candidate = heuristicResult;
-        source = 'heuristic';
-      } else {
-        if (
-          process.env.USE_GEMINI_FIXTURES !== 'true' &&
-          (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '')
-        ) {
-          return res.status(500).json({
-            error: 'ServerConfigurationError',
-            message:
-              'Server is not configured for AI event-description parsing: GEMINI_API_KEY is missing.',
-          });
-        }
+        return respondWithGuestGroup(res, heuristicResult, 'heuristic');
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  },
+  recipeImportRateLimit,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Already validated by the first handler.
+      const { description } = req.body as { description: string };
 
-        let rawAiResponse: string;
-        try {
-          rawAiResponse = await parseGuestGroupWithGeminiTimeout(description);
-        } catch (err) {
-          if (isGeminiRateLimitError(err)) {
-            return res
-              .status(429)
-              .json({ error: 'RateLimited', message: GEMINI_RATE_LIMIT_MESSAGE });
-          }
-          const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
-          return res.status(502).json({
-            error: 'BadGateway',
-            message: `Upstream AI service error: ${errorMessage}`,
-          });
-        }
-
-        let parsedCandidate: unknown;
-        try {
-          const sanitizedResponse = rawAiResponse
-            .replace(/^```json\s*/i, '')
-            .replace(/^```\s*/i, '')
-            .replace(/\s*```$/i, '')
-            .trim();
-          parsedCandidate = JSON.parse(sanitizedResponse);
-        } catch {
-          return res.status(502).json({
-            error: 'BadGateway',
-            message: 'Upstream AI service returned invalid JSON response.',
-          });
-        }
-
-        if (
-          parsedCandidate &&
-          typeof parsedCandidate === 'object' &&
-          'error' in parsedCandidate &&
-          (parsedCandidate as { error: string }).error === 'AmbiguousGuestCount'
-        ) {
-          return res.status(502).json({
-            error: 'ExtractionError',
-            message:
-              (parsedCandidate as { message?: string }).message ||
-              'The provided description does not clearly state a total guest count.',
-          });
-        }
-
-        candidate = parsedCandidate as {
-          totalGuests: number;
-          vegetarianCount?: number;
-          veganCount?: number;
-        };
-        source = 'ai';
+      if (
+        process.env.USE_GEMINI_FIXTURES !== 'true' &&
+        (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '')
+      ) {
+        return res.status(500).json({
+          error: 'ServerConfigurationError',
+          message:
+            'Server is not configured for AI event-description parsing: GEMINI_API_KEY is missing.',
+        });
       }
 
-      let guestGroup: GuestGroup;
+      let rawAiResponse: string;
       try {
-        guestGroup = new GuestGroup(candidate);
+        rawAiResponse = await parseGuestGroupWithGeminiTimeout(description);
       } catch (err) {
-        if (err instanceof DomainError) {
-          return res.status(422).json({
-            error: err.name,
-            message: err.message,
-          });
+        if (isGeminiRateLimitError(err)) {
+          return res.status(429).json({ error: 'RateLimited', message: GEMINI_RATE_LIMIT_MESSAGE });
         }
-        throw err;
+        const errorMessage = err instanceof Error ? err.message : 'Failed to call Gemini API.';
+        return res.status(502).json({
+          error: 'BadGateway',
+          message: `Upstream AI service error: ${errorMessage}`,
+        });
       }
 
-      return res.status(200).json({
-        totalGuests: guestGroup.totalGuests,
-        vegetarianCount: guestGroup.vegetarianCount,
-        veganCount: guestGroup.veganCount,
-        source,
-      });
+      let parsedCandidate: unknown;
+      try {
+        const sanitizedResponse = rawAiResponse
+          .replace(/^```json\s*/i, '')
+          .replace(/^```\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .trim();
+        parsedCandidate = JSON.parse(sanitizedResponse);
+      } catch {
+        return res.status(502).json({
+          error: 'BadGateway',
+          message: 'Upstream AI service returned invalid JSON response.',
+        });
+      }
+
+      if (
+        parsedCandidate &&
+        typeof parsedCandidate === 'object' &&
+        'error' in parsedCandidate &&
+        (parsedCandidate as { error: string }).error === 'AmbiguousGuestCount'
+      ) {
+        return res.status(502).json({
+          error: 'ExtractionError',
+          message:
+            (parsedCandidate as { message?: string }).message ||
+            'The provided description does not clearly state a total guest count.',
+        });
+      }
+
+      return respondWithGuestGroup(res, parsedCandidate as GuestGroupCandidate, 'ai');
     } catch (err) {
       next(err);
     }

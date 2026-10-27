@@ -17,6 +17,7 @@ import {
   InvalidGuestGroupError,
   InvalidShoppingListError,
   DomainError,
+  MAX_RECIPES_PER_EVENT,
 } from '@cookout-ai/domain';
 import { prisma } from './prisma.js';
 import type { Prisma } from '@prisma/client';
@@ -994,7 +995,9 @@ app.post(
 /**
  * Open Question / Scope Notes for Event Planning:
  * - This route remains a stateless preview; see POST /api/events for persistence.
- * - No pagination or limit on recipeIds array size — acceptable for v1 scope, note as a future concern for large collections.
+ * - recipeIds are deduplicated and capped at MAX_RECIPES_PER_EVENT (400 over the cap), the
+ *   same limit as saved events; ownership is checked with one query. Unlike saving an event,
+ *   an ID the caller doesn't own is a 404 here, not silently dropped.
  */
 
 // POST /api/events/plan
@@ -1013,28 +1016,22 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
       throw new InvalidRecipeError('recipeIds must be a non-empty array of recipe ID strings.');
     }
 
-    // 3. Fetch each recipe in recipeIds from DB via Prisma
-    const recipes = [];
     for (const id of recipeIds) {
       if (typeof id !== 'string' || id.trim().length === 0) {
         throw new InvalidRecipeError(`Invalid recipeId in array: ${id}`);
       }
+    }
+    const uniqueRecipeIds = [...new Set<string>(recipeIds)];
+    if (uniqueRecipeIds.length > MAX_RECIPES_PER_EVENT) {
+      throw new InvalidRecipeError(
+        `An event can include at most ${MAX_RECIPES_PER_EVENT} recipes (got ${uniqueRecipeIds.length}).`
+      );
+    }
 
-      const prismaRecipe = await prisma.recipe.findFirst({
-        where: { id, userId: req.user!.id },
-        include: {
-          ingredients: true,
-          steps: true,
-        },
-      });
-
-      if (!prismaRecipe) {
-        throw new NotFoundError(`Recipe with id "${id}" not found.`);
-      }
-
-      // Reconstruct domain Recipe reusing toDomainRecipe() mapper
-      const domainRecipe = toDomainRecipe(prismaRecipe);
-      recipes.push(domainRecipe);
+    // 3. Fetch the caller's recipes in one query; any ID they don't own is a 404
+    const { recipes, droppedRecipeIds } = await resolveOwnedRecipes(uniqueRecipeIds, req.user!.id);
+    if (droppedRecipeIds.length > 0) {
+      throw new NotFoundError(`Recipe with id "${droppedRecipeIds[0]}" not found.`);
     }
 
     // 4. Call planEventShoppingList() from @cookout-ai/domain
@@ -1060,8 +1057,9 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
  *   user's recipe, or one that doesn't exist) is reported in droppedRecipeIds, never stored.
  */
 
-// recipeIds come from a validated domain Event: already deduplicated and capped at
-// MAX_RECIPES_PER_EVENT, so one IN query covers them. Results keep the requested order.
+// Callers pass deduplicated IDs (a domain Event's recipeIds, or /plan's checked request), so
+// one IN query covers them; requests are capped at MAX_RECIPES_PER_EVENT, though events
+// stored before the cap can hold more. Results keep the requested order.
 async function resolveOwnedRecipes(recipeIds: readonly string[], userId: string) {
   const ownedRows = await prisma.recipe.findMany({
     where: { id: { in: [...recipeIds] }, userId },
@@ -1160,19 +1158,10 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
 
     const domainEvent = toDomainEvent(prismaEvent);
 
-    const recipes = [];
-    const droppedRecipeIds: string[] = [];
-    for (const recipeId of domainEvent.recipeIds) {
-      const prismaRecipe = await prisma.recipe.findFirst({
-        where: { id: recipeId, userId: req.user!.id },
-        include: { ingredients: true, steps: true },
-      });
-      if (prismaRecipe) {
-        recipes.push(toDomainRecipe(prismaRecipe));
-      } else {
-        droppedRecipeIds.push(recipeId);
-      }
-    }
+    const { recipes, droppedRecipeIds } = await resolveOwnedRecipes(
+      domainEvent.recipeIds,
+      req.user!.id
+    );
 
     const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);

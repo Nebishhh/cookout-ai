@@ -4,6 +4,7 @@ import http from 'http';
 import https from 'https';
 import net from 'net';
 import path from 'path';
+import zlib from 'zlib';
 import type { AddressInfo } from 'net';
 import { fileURLToPath } from 'url';
 import { Agent, fetch as undiciFetch, getGlobalDispatcher } from 'undici';
@@ -411,5 +412,56 @@ describe('SSRF fetch timeout', () => {
     ).rejects.toThrow(/timed out/);
     await waitFor(() => slow.openSockets === 0);
     expect(slow.openSockets).toBe(0);
+  });
+});
+
+describe('SSRF fetch response size limit (compressed responses)', () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(
+      openServers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          })
+      )
+    );
+  });
+
+  // Serves `decompressedBytes` of HTML as a gzip body; the wire size is tiny either way.
+  async function startGzipServer(decompressedBytes: number) {
+    const html = Buffer.alloc(decompressedBytes, 'a');
+    const gzipped = zlib.gzipSync(html);
+    const server = await startServer('127.0.0.1', (_req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'text/html',
+        'Content-Encoding': 'gzip',
+        'Content-Length': gzipped.length,
+      });
+      res.end(gzipped);
+    });
+    stubDns({
+      validator: { 'gzip.test': ['127.0.0.1'] },
+      connect: { 'gzip.test': ['127.0.0.1'] },
+    });
+    return { server, wireBytes: gzipped.length };
+  }
+
+  it('rejects a small gzip body that decompresses past 2MB (the limit counts decompressed bytes)', async () => {
+    const { server, wireBytes } = await startGzipServer(3 * 1024 * 1024);
+    expect(wireBytes).toBeLessThan(64 * 1024);
+
+    await expect(
+      createRecipeFetcher(blockOnly127002)(`http://gzip.test:${server.port}/`)
+    ).rejects.toThrow('Decompressed response size exceeds 2MB limit.');
+  });
+
+  it('returns a gzip body under the limit fully decompressed', async () => {
+    const { server } = await startGzipServer(1024 * 1024);
+
+    const html = await createRecipeFetcher(blockOnly127002)(`http://gzip.test:${server.port}/`);
+
+    expect(html).toHaveLength(1024 * 1024);
   });
 });

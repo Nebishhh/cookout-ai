@@ -283,7 +283,52 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       expect(res.body.message).toContain('Invalid Content-Type "application/pdf"');
     });
 
-    it('returns 502 when decompressed response size exceeds 2MB limit (incremental streaming check)', async () => {
+    it('returns 502 when a streamed response passes 2MB, stopping the read part-way (incremental streaming check)', async () => {
+      vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
+        { address: '93.184.216.34', family: 4 },
+      ] as unknown as dns.LookupAddress);
+
+      // A pull-based body that could deliver 3MB in 64KB chunks. Counting pulls shows the reader
+      // stopped soon after the 2MB mark instead of buffering the whole response first.
+      const CHUNK_BYTES = 64 * 1024;
+      const TOTAL_CHUNKS = 48;
+      let chunksPulled = 0;
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (chunksPulled === TOTAL_CHUNKS) return controller.close();
+            chunksPulled++;
+            controller.enqueue(new Uint8Array(CHUNK_BYTES).fill(0x61));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        },
+        { highWaterMark: 0 }
+      );
+
+      mockedFetch.mockResolvedValue(
+        new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        }) as unknown as Awaited<ReturnType<typeof undiciFetch>>
+      );
+
+      const res = await agent
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/huge-recipe.html' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe('FetchError');
+      expect(res.body.message).toContain('Decompressed response size exceeds 2MB limit');
+      const chunksAtLimit = (2 * 1024 * 1024) / CHUNK_BYTES; // 32
+      expect(chunksPulled).toBeGreaterThan(chunksAtLimit);
+      expect(chunksPulled).toBeLessThanOrEqual(chunksAtLimit + 2);
+      expect(cancelled).toBe(true);
+    });
+
+    it('returns 502 when a response with no body stream is over 2MB (non-streaming fallback)', async () => {
       vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
         { address: '93.184.216.34', family: 4 },
       ] as unknown as dns.LookupAddress);

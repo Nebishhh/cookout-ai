@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Event, GuestGroup, InvalidEventError } from '../index.js';
+import { Event, GuestGroup, InvalidEventError, MAX_RECIPES_PER_EVENT } from '../index.js';
 
 describe('Event Construction & Validation', () => {
   const validGuestGroup = () => new GuestGroup({ totalGuests: 10, vegetarianCount: 2 });
@@ -109,6 +109,29 @@ describe('Event Construction & Validation', () => {
 
     recipeIds.push('r3');
     expect(event.recipeIds).toEqual(['r1', 'r2']);
+  });
+
+  it('collapses duplicate recipeIds, keeping first-seen order', () => {
+    const event = new Event({
+      id: 'event-1',
+      name: 'Party',
+      guestGroup: validGuestGroup(),
+      recipeIds: ['r2', 'r1', 'r2', 'r3', 'r1'],
+    });
+
+    expect(event.recipeIds).toEqual(['r2', 'r1', 'r3']);
+  });
+
+  it('does not cap recipeIds itself, so events stored before MAX_RECIPES_PER_EVENT still load', () => {
+    const recipeIds = Array.from({ length: MAX_RECIPES_PER_EVENT + 1 }, (_, i) => `r${i}`);
+    const event = new Event({
+      id: 'event-1',
+      name: 'Party',
+      guestGroup: validGuestGroup(),
+      recipeIds,
+    });
+
+    expect(event.recipeIds).toHaveLength(MAX_RECIPES_PER_EVENT + 1);
   });
 
   describe('serveTimeMinutes', () => {

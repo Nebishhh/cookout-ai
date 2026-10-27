@@ -2,6 +2,14 @@ import { InvalidEventError } from '../errors.js';
 import { GuestGroup } from './guestGroup.js';
 import { MINUTES_PER_DAY } from './cookSchedule.js';
 
+/**
+ * Most distinct recipes one event may reference. The planner picks recipes with one checkbox
+ * per recipe the host owns, and real menus are well under this; the cap exists to bound the
+ * work a single create/update request can ask for. Enforced where events are created or
+ * updated, not in the Event constructor, so events stored before the cap still load.
+ */
+export const MAX_RECIPES_PER_EVENT = 50;
+
 export interface EventInput {
   id: string;
   name: string;
@@ -80,7 +88,8 @@ export class Event {
     this.id = input.id;
     this.name = input.name;
     this.guestGroup = input.guestGroup;
-    this.recipeIds = Object.freeze([...input.recipeIds]);
+    // An event references each recipe at most once; duplicates collapse, first-seen order kept.
+    this.recipeIds = Object.freeze([...new Set(input.recipeIds)]);
     this.serveTimeMinutes = serveTimeMinutes;
 
     Object.freeze(this);

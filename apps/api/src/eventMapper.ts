@@ -3,6 +3,7 @@ import {
   GuestGroup,
   InvalidEventError,
   InvalidGuestGroupError,
+  MAX_RECIPES_PER_EVENT,
   subtractPantryStock,
   applyPracticalRounding,
   computeCookSchedule,
@@ -49,13 +50,22 @@ export function validateAndCreateDomainEvent(input: CreateEventInput, overrideId
   const eventId = overrideId || crypto.randomUUID();
   const guestGroup = new GuestGroup(input.guestGroup);
 
-  return new Event({
+  const event = new Event({
     id: eventId,
     name: input.name,
     guestGroup,
     recipeIds: input.recipeIds,
     serveTimeMinutes: input.serveTimeMinutes,
   });
+
+  // Counted after Event has deduplicated the IDs, so repeats of one recipe don't count twice.
+  if (event.recipeIds.length > MAX_RECIPES_PER_EVENT) {
+    throw new InvalidEventError(
+      `An event can include at most ${MAX_RECIPES_PER_EVENT} recipes (got ${event.recipeIds.length}).`
+    );
+  }
+
+  return event;
 }
 
 /**

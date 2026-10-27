@@ -1060,15 +1060,20 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
  *   user's recipe, or one that doesn't exist) is reported in droppedRecipeIds, never stored.
  */
 
+// recipeIds come from a validated domain Event: already deduplicated and capped at
+// MAX_RECIPES_PER_EVENT, so one IN query covers them. Results keep the requested order.
 async function resolveOwnedRecipes(recipeIds: readonly string[], userId: string) {
+  const ownedRows = await prisma.recipe.findMany({
+    where: { id: { in: [...recipeIds] }, userId },
+    include: { ingredients: true, steps: true },
+  });
+  const ownedById = new Map(ownedRows.map((row) => [row.id, row]));
+
   const recipes = [];
   const ownedRecipeIds: string[] = [];
   const droppedRecipeIds: string[] = [];
   for (const id of recipeIds) {
-    const prismaRecipe = await prisma.recipe.findFirst({
-      where: { id, userId },
-      include: { ingredients: true, steps: true },
-    });
+    const prismaRecipe = ownedById.get(id);
     if (prismaRecipe) {
       recipes.push(toDomainRecipe(prismaRecipe));
       ownedRecipeIds.push(id);

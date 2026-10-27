@@ -21,7 +21,7 @@ vi.mock('./middleware/aiImportRateLimit.js', async (importOriginal) => {
     recipeImportRateLimit: actual.createAiImportRateLimit({
       windowMs: 60_000,
       max: AI_LIMIT,
-      message: 'Too many recipe imports. Please try again later.',
+      message: 'Too many AI requests. Please try again later.',
       skip: () => false,
     }),
   };

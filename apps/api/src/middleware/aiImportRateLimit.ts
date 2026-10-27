@@ -35,11 +35,11 @@ export function createAiImportRateLimit({ windowMs, max, message, skip }: AiImpo
   });
 }
 
-// A single shared bucket across import-text/import-url/import-image (not one limiter per route)
-// — they're the same underlying action (an AI recipe import, each costing one Gemini call) just
-// different input modes, so a per-route limit would let someone bypass it by switching modes.
+// A single shared bucket across import-text/import-url/import-image and the AI fallback of
+// /api/events/parse-description (not one limiter per route) — each request is the same costed
+// action (one Gemini call), so a per-route limit would let someone bypass it by switching routes.
 export const recipeImportRateLimit = createAiImportRateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 30,
-  message: 'Too many recipe imports. Please try again later.',
+  message: 'Too many AI requests. Please try again later.',
 });

@@ -370,6 +370,25 @@ describe('SSRF fetch timeout', () => {
     drips.forEach(clearInterval);
   });
 
+  it("covers the validator's DNS lookup: a lookup that never resolves still times out on time", async () => {
+    vi.spyOn(dns.promises, 'lookup').mockImplementation(
+      (() => new Promise(() => {})) as unknown as typeof dns.promises.lookup
+    );
+
+    const started = Date.now();
+    const attempt = createRecipeFetcher(blockOnly127002, { timeoutMs: 300 })(
+      'http://never-resolves.test/'
+    );
+    // Without the fix the attempt never settles; race a guard so the test fails cleanly
+    // instead of hanging until Vitest's own timeout.
+    const guard = new Promise<string>((resolve) =>
+      setTimeout(() => resolve('still pending'), 3000)
+    );
+
+    await expect(Promise.race([attempt, guard])).rejects.toThrow(/timed out/);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
   it('counts the deadline across redirect hops, not per hop', async () => {
     // Each hop answers after 250ms: every single hop beats the 600ms deadline, the chain doesn't.
     const slow = await startServer('127.0.0.1', (req, res) => {

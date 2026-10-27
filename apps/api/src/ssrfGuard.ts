@@ -78,7 +78,34 @@ export async function validateUrlAndResolveIp(urlStr: string): Promise<URL> {
   return validateUrl(urlStr, isBlockedIp);
 }
 
-async function validateUrl(urlStr: string, isBlocked: (ip: string) => boolean): Promise<URL> {
+/**
+ * Settles with `promise`, or rejects with the signal's abort reason as soon as `signal` aborts.
+ * The underlying work isn't cancelled (Node can't cancel an in-flight getaddrinfo lookup); the
+ * caller just stops waiting for it.
+ */
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      }
+    );
+  });
+}
+
+async function validateUrl(
+  urlStr: string,
+  isBlocked: (ip: string) => boolean,
+  signal?: AbortSignal
+): Promise<URL> {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(urlStr);
@@ -108,7 +135,8 @@ async function validateUrl(urlStr: string, isBlocked: (ip: string) => boolean): 
 
   // Perform DNS resolution to check all resolved IPs
   try {
-    const addresses = await dns.promises.lookup(hostname, { all: true });
+    const lookup = dns.promises.lookup(hostname, { all: true });
+    const addresses = signal ? await raceAbort(lookup, signal) : await lookup;
     if (!addresses || addresses.length === 0) {
       throw new SsrfValidationError(`Could not resolve hostname "${hostname}".`);
     }
@@ -124,6 +152,10 @@ async function validateUrl(urlStr: string, isBlocked: (ip: string) => boolean): 
       err instanceof SsrfValidationError ||
       (err && typeof err === 'object' && 'name' in err && err.name === 'SsrfValidationError')
     ) {
+      throw err;
+    }
+    // The caller's deadline, not a DNS failure: let it surface as the caller's timeout.
+    if (signal?.aborted) {
       throw err;
     }
     const message = err instanceof Error ? err.message : String(err);
@@ -268,8 +300,17 @@ export function createRecipeFetcher(
       if (signal.aborted) {
         throw timedOut();
       }
-      // Perform full SSRF validation (protocol, hostname, DNS IP) on current hop
-      const validatedUrl = await validateUrl(currentUrlStr, isBlocked);
+      // Perform full SSRF validation (protocol, hostname, DNS IP) on current hop. Its DNS lookup
+      // is raced against the same deadline as the fetch, so a hanging resolver can't outlive it.
+      let validatedUrl: URL;
+      try {
+        validatedUrl = await validateUrl(currentUrlStr, isBlocked, signal);
+      } catch (err: unknown) {
+        if (signal.aborted) {
+          throw timedOut();
+        }
+        throw err;
+      }
 
       try {
         const response = await fetch(validatedUrl.href, {

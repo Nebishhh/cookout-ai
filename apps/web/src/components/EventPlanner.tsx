@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Sparkles,
 } from 'lucide-react';
+import { MAX_RECIPES_PER_EVENT } from '@cookout-ai/domain';
 import {
   useRecipes,
   usePlanEvent,
@@ -136,10 +137,15 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventQuery.data, selectedEventId]);
 
+  // Events saved before the cap existed can load with more than MAX_RECIPES_PER_EVENT selected;
+  // unchecking always works, and the server's 400 still covers a save that's left over it.
+  const atRecipeLimit = selectedRecipeIds.length >= MAX_RECIPES_PER_EVENT;
+  const recipesOverLimit = selectedRecipeIds.length - MAX_RECIPES_PER_EVENT;
+
   const toggleRecipeSelection = (recipeId: string) => {
     if (selectedRecipeIds.includes(recipeId)) {
       setSelectedRecipeIds((prev) => prev.filter((id) => id !== recipeId));
-    } else {
+    } else if (!atRecipeLimit) {
       setSelectedRecipeIds((prev) => [...prev, recipeId]);
     }
   };
@@ -511,9 +517,23 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
 
             {/* Recipe Multi-Select Grid */}
             <div>
-              <Label className="text-xs font-semibold text-ink-muted block mb-3">
-                Select Candidate Recipes
-              </Label>
+              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <Label className="text-xs font-semibold text-ink-muted block">
+                  Select Candidate Recipes
+                </Label>
+                <span
+                  aria-live="polite"
+                  className={`text-xs ${atRecipeLimit ? 'font-semibold text-clay-hover' : 'text-ink-muted'}`}
+                >
+                  {selectedRecipeIds.length} of {MAX_RECIPES_PER_EVENT} recipes selected
+                </span>
+              </div>
+              {recipesOverLimit > 0 && (
+                <p className="mb-3 text-xs font-semibold text-clay-hover">
+                  An event can include at most {MAX_RECIPES_PER_EVENT} recipes. Uncheck{' '}
+                  {recipesOverLimit} recipe{recipesOverLimit === 1 ? '' : 's'} before saving.
+                </p>
+              )}
 
               {loadingRecipes ? (
                 <div className="flex items-center justify-center py-8 text-ink-muted">
@@ -528,6 +548,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {recipes.map((recipe) => {
                     const isSelected = selectedRecipeIds.includes(recipe.id);
+                    const isDisabled = !isSelected && atRecipeLimit;
                     const checkboxId = `recipe-select-${recipe.id}`;
 
                     return (
@@ -536,20 +557,25 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                         className={`flex items-start justify-between rounded-xl border p-4 transition-all ${
                           isSelected
                             ? 'border-clay bg-clay-light/30 shadow-warm-md'
-                            : 'border-stone bg-paper hover:border-stone-dark'
+                            : isDisabled
+                              ? 'border-stone bg-paper opacity-60'
+                              : 'border-stone bg-paper hover:border-stone-dark'
                         }`}
                       >
                         <div className="flex items-start space-x-3">
                           <Checkbox
                             id={checkboxId}
                             checked={isSelected}
+                            disabled={isDisabled}
                             onChange={() => toggleRecipeSelection(recipe.id)}
                             aria-label={`Select recipe ${recipe.name}`}
-                            className="mt-1"
+                            className="mt-1 disabled:cursor-not-allowed"
                           />
                           <Label
                             htmlFor={checkboxId}
-                            className="cursor-pointer text-left font-normal normal-case tracking-normal"
+                            className={`text-left font-normal normal-case tracking-normal ${
+                              isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'
+                            }`}
                           >
                             <span className="font-serif text-sm font-semibold text-ink block">
                               {recipe.name}

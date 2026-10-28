@@ -116,7 +116,10 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       setTotalGuests(eventQuery.data.guestGroup.totalGuests);
       setVegetarianCount(eventQuery.data.guestGroup.vegetarianCount);
       setVeganCount(eventQuery.data.guestGroup.veganCount);
-      setSelectedRecipeIds(eventQuery.data.recipeIds);
+      // IDs of recipes deleted since the event was saved have no checkbox to uncheck, so they
+      // leave the selection here; the next save then sends only recipes that still exist.
+      const deletedIds = new Set(eventQuery.data.droppedRecipeIds);
+      setSelectedRecipeIds(eventQuery.data.recipeIds.filter((id) => !deletedIds.has(id)));
       setGuestDescription('');
       setGuestParseNotice(null);
       setServeTime(minutesToTimeInput(eventQuery.data.serveTimeMinutes));
@@ -349,9 +352,9 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
           <AlertTriangle className="h-5 w-5 text-clay-hover" />
           <AlertDescription className="text-sm">
             <span className="font-semibold">
-              {droppedRecipeIds.length} recipe{droppedRecipeIds.length === 1 ? '' : 's'} from this
-              event's original plan no longer exist{droppedRecipeIds.length === 1 ? 's' : ''} and{' '}
-              {droppedRecipeIds.length === 1 ? 'was' : 'were'} skipped.
+              {droppedRecipeIds.length} recipe{droppedRecipeIds.length === 1 ? '' : 's'} in this
+              event {droppedRecipeIds.length === 1 ? 'was' : 'were'} deleted and will be removed
+              when you save.
             </span>
           </AlertDescription>
         </Alert>

@@ -1,5 +1,7 @@
 # CookOut AI
 
+[![CI](https://github.com/Nebishhh/cookout-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Nebishhh/cookout-ai/actions/workflows/ci.yml)
+
 **Plan one meal for everyone at the table.**
 
 CookOut AI is a full-stack event-planning app for hosts feeding groups with mixed dietary needs. Tell it how many guests are omnivore, vegetarian, or vegan; choose the dishes; and it calculates how many servings each recipe must provide before producing one scaled, consolidated shopping list.
@@ -48,7 +50,7 @@ AI sits at the edge of the system. It never performs recipe scaling, dietary eli
 
 - Per-user email/password authentication with hashed credentials and database-backed cookie sessions
 - Layered authorization, CSRF origin checks, CORS allowlisting, and rate limits on authentication and AI routes
-- SSRF protection for recipe URL imports, including private-network and redirect checks
+- SSRF protection for recipe URL imports: private and reserved address blocking, re-validation of every redirect hop, a connect-time IP check against DNS rebinding, and a 10-second deadline and 2 MB body cap
 - Streaming image-size enforcement and magic-byte validation for uploads
 - Persisted offline recovery for shopping-list checkbox mutations
 - Deterministic Gemini fixtures for end-to-end tests, guarded from production use
@@ -61,7 +63,7 @@ For the exhaustive implementation snapshot and current test breakdown, see [`PRO
 
 ### Prerequisites
 
-- Node.js 18 or newer
+- Node.js 22.13 or newer (CI and Docker use 22.23.4)
 - npm 9 or newer
 - A Gemini API key if you want to use live AI import
 
@@ -72,6 +74,21 @@ git clone https://github.com/Nebishhh/cookout-ai.git
 cd cookout-ai
 npm install
 cp .env.example apps/api/.env
+```
+
+Next, use any editor to create a file named `.env` in the repository root containing this single line:
+
+```env
+DATABASE_URL="file:./dev.db"
+```
+
+On macOS, Linux, or Git Bash you can instead run `echo 'DATABASE_URL="file:./dev.db"' > .env`. Don't use `echo` in Windows PowerShell 5.1: it writes the file as UTF-16, which Prisma can't read.
+
+`apps/api/.env` configures the API. The one-line root `.env` is only for the Prisma CLI, which never reads `apps/api/.env`. Both point at `prisma/dev.db`, because Prisma resolves relative SQLite paths from the schema's directory.
+
+Then create the database and start the app:
+
+```bash
 npx prisma db push --schema=prisma/schema.prisma
 npm run dev
 ```

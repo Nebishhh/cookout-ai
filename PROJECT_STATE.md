@@ -69,9 +69,10 @@
 
 ```
 cookout-ai/
-├── .github/workflows/ci.yml        # GitHub Actions CI: verify (format, lint, typecheck, vitest, build), docker (image build), e2e — see §9
+├── .github/workflows/ci.yml        # GitHub Actions CI: verify (format, lint, typecheck, skills:check, vitest, build), docker (image build), e2e — see §9
 ├── CLAUDE.md                       # Guidance for Claude Code when working in this repo
-├── .claude/skills/                 # Project skills (vendored + installed via `npx skills add`)
+├── .agents/skills/                 # Project skills: the source of truth, read by Codex/Antigravity (vendored via `npx skills add`, tracked in skills-lock.json). Edit skills here
+├── .claude/skills/                 # Generated from .agents/skills by scripts/syncSkills.mjs, read by Claude Code. Never edit directly; CI skills:check fails if it diverges
 ├── apps/
 │   ├── api/                        # Express HTTP API application workspace
 │   │   ├── src/

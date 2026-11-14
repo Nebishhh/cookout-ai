@@ -377,7 +377,7 @@ There is no AI-related export from the domain package — Gemini integration liv
 
 `.github/workflows/ci.yml` runs three independent jobs on every push to `master` and every PR against it:
 
-- **Build & Verify Monorepo** (`verify`): Node `22.23.4`, `npm ci`, then `format:check`, `lint`, `typecheck`, the Vitest suite (`npm run test`), and `npm run build`.
+- **Build & Verify Monorepo** (`verify`): Node `22.23.4`, `npm ci`, then `format:check`, `lint`, `typecheck`, `skills:check` (`.claude/skills` must mirror `.agents/skills`, and `skills-lock.json` must match the skill directories), the Vitest suite (`npm run test`), and `npm run build`.
 - **Docker Image Build** (`docker`): builds the production `Dockerfile` with Buildx (GHA layer cache) and never pushes it. Its value is the build itself, including the runtime stage's `npm ls` guard below.
 - **Playwright E2E Tests** (`e2e`): Node `22.23.4`, `npm ci`, installs Chromium, runs `npm run test:e2e`, and uploads `apps/web/test-results` as an artifact only when the job fails.
 

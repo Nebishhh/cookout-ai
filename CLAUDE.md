@@ -53,6 +53,8 @@ Three-workspace monorepo with a strict dependency direction: `packages/domain` â
 
 ## Agent skills
 
+Edit skills only in `.agents/skills`, then run `node scripts/syncSkills.mjs --write`: `.claude/skills` is generated from it, and CI (`npm run skills:check`) fails if the two diverge.
+
 ### Issue tracker
 
 GitHub Issues on `github.com/Nebishhh/cookout-ai`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.

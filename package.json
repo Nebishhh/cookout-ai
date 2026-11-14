@@ -17,6 +17,7 @@
     "test:e2e": "node -e \"const fs=require('fs'); if(fs.existsSync('prisma/e2e.db')) fs.unlinkSync('prisma/e2e.db');\" && playwright test --config=apps/web/playwright.config.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "skills:check": "node scripts/syncSkills.mjs --check",
     "prepare": "husky",
     "postinstall": "prisma generate --schema=prisma/schema.prisma"
   },

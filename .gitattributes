@@ -6,3 +6,7 @@
 # Shell scripts must stay LF — a CRLF shebang line breaks execution inside Linux
 # containers (Docker COPY copies whatever's on disk verbatim, git config aside).
 *.sh text eol=lf
+
+# .claude/skills is generated from .agents/skills by scripts/syncSkills.mjs (CI runs
+# skills:check). Collapse it in GitHub diffs so each skill edit is reviewed once, in .agents.
+.claude/skills/** linguist-generated=true

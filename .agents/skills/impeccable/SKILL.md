@@ -10,6 +10,8 @@ Core principles:
 - Dream big and bold. Distinct, beautiful, outstanding and highly inspiring work.
 - Verify in bounded passes, not a loop: screenshots, defect scans, micro-edits, and rebuilds alike. Build fully, inspect once with a batched round (desktop and mobile together), fix everything it shows in one batch, confirm with at most one more round, and stop polishing.
 
+**Precedence.** `frontend-design` owns aesthetic direction — palette, typefaces, layout concept, the signature element. Where its restraint guidance conflicts with "go all out" above, `frontend-design` wins on *what* to design; this skill governs *how completely* to execute it. "Go all out" means finish the work, not add decoration.
+
 ## How to design
 
 - **The brief wins.** Honor pinned aesthetics, eras, materials, fonts, and palettes even when they conflict with a saturated-pattern warning.

@@ -55,6 +55,8 @@ Three-workspace monorepo with a strict dependency direction: `packages/domain` â
 
 Edit skills only in `.agents/skills`, then run `node scripts/syncSkills.mjs --write`: `.claude/skills` is generated from it, and CI (`npm run skills:check`) fails if the two diverge.
 
+Skills listed in `skills-lock.json` are vendored copies of an upstream source. Before editing one, make it local in the same change: remove its entry from `skills-lock.json` and add its name to `LOCAL_SKILLS` in `scripts/syncSkills.mjs`. Never edit a skill that still has a lock entry.
+
 ### Issue tracker
 
 GitHub Issues on `github.com/Nebishhh/cookout-ai`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.

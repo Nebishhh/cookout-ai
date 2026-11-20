@@ -7,6 +7,8 @@ description: Review UI code for Vercel Web Interface Guidelines compliance inclu
 
 Review UI files for compliance against Vercel's Web Interface Guidelines.
 
+**Precedence.** This checklist owns the measurable thresholds below: micro-interaction duration, easing, and tap-target size. Where another design skill gives a different number, use the one here. `frontend-design` still owns aesthetic direction, and `impeccable` owns how completely a design is executed.
+
 ## Rules
 
 ### Accessibility

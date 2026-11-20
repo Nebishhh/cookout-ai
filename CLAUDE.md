@@ -31,7 +31,7 @@ Prisma (`prisma/schema.prisma` is the single schema for both `dev.db` and test D
 DATABASE_URL="file:./dev.db" npx prisma db push --schema=prisma/schema.prisma
 ```
 
-The Prisma CLI reads `DATABASE_URL` from the shell, a root `.env`, or `prisma/.env`, never from `apps/api/.env`. Neither a root `.env` nor `prisma/.env` is committed (`.gitignore` covers both), so **supply `DATABASE_URL` yourself** — inline as above, or `export DATABASE_URL="file:./dev.db"` first (PowerShell: `$env:DATABASE_URL="file:./dev.db"`, since it has no inline env-var prefix). Without it the CLI fails with `P1012 Environment variable not found: DATABASE_URL`. A relative SQLite URL resolves from `prisma/` (the schema's directory), not the working directory, so `file:./dev.db` is `prisma/dev.db` for both the CLI and the API's Prisma client.
+The Prisma CLI reads `DATABASE_URL` from the shell, a root `.env`, or `prisma/.env`, never from `apps/api/.env`. Neither a root `.env` nor `prisma/.env` is committed (`.gitignore` covers both), so **supply `DATABASE_URL` yourself** — inline as above, or `export DATABASE_URL="file:./dev.db"` first (PowerShell: `$env:DATABASE_URL="file:./dev.db"`, since it has no inline env-var prefix). Without it the CLI fails with `P1012 Environment variable not found: DATABASE_URL`. A relative SQLite URL resolves from `prisma/` (the schema's directory), not the working directory, so `file:./dev.db` is `prisma/dev.db` for both the CLI and the API's Prisma client. The API itself has no fallback either: `apps/api/src/prisma.ts` throws at startup if `DATABASE_URL` is unset (`npm run dev` gets it from `apps/api/.env`).
 
 ### Vitest cross-workspace test isolation
 

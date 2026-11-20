@@ -52,6 +52,11 @@ function renderPlanner(props: React.ComponentProps<typeof EventPlanner> = {}) {
   );
 }
 
+/** `n` from a checkbox labelled "Select recipe Recipe <n>". */
+function recipeNumber(box: HTMLElement) {
+  return Number(box.getAttribute('aria-label')?.match(/(\d+)$/)?.[1]);
+}
+
 function recipeCheckbox(n: number) {
   return screen.getByLabelText(`Select recipe Recipe ${n}`) as HTMLInputElement;
 }
@@ -134,25 +139,35 @@ async function renderEventWithSelected(selected: number) {
 }
 
 describe('EventPlanner: 50-recipe limit', () => {
-  // The only test that clicks its way up to the limit; the rest start from a loaded event. Each of
-  // the 50 clicks re-renders the whole 51-card grid, which runs past the 5s default on a busy machine.
+  // The only test that clicks its way up to the limit; the rest start from a loaded event. It looks
+  // the 51 checkboxes up once and clicks the saved references: a getByLabelText per click rescans
+  // every label in the document after each re-render, which made this test take 8-26s depending on
+  // machine load. React keys the cards by recipe id, so the same nodes survive every re-render; the
+  // isConnected check below fails loudly if a future change starts remounting them. The 9s budget
+  // is about 3x its isolated time (2.8-3.0s).
   it('lets exactly 50 recipes be selected by clicking and planned', async () => {
     const sent = mockPlannerApi(makeRecipes(51));
     renderPlanner();
     await screen.findByLabelText('Select recipe Recipe 1');
 
-    expect(screen.getByText('0 of 50 recipes selected')).toBeInTheDocument();
-    checkRecipes(1, 50);
+    const boxes = (
+      screen.getAllByLabelText(/^Select recipe Recipe \d+$/) as HTMLInputElement[]
+    ).sort((a, b) => recipeNumber(a) - recipeNumber(b));
+    expect(boxes.map(recipeNumber)).toEqual(Array.from({ length: 51 }, (_, i) => i + 1));
 
-    expect(checkedCount()).toBe(50);
+    expect(screen.getByText('0 of 50 recipes selected')).toBeInTheDocument();
+    for (const box of boxes.slice(0, 50)) fireEvent.click(box);
+
+    expect(boxes.every((box) => box.isConnected)).toBe(true);
+    expect(boxes.filter((box) => box.checked)).toHaveLength(50);
     expect(screen.getByText('50 of 50 recipes selected')).toBeInTheDocument();
-    expect(recipeCheckbox(51)).toBeDisabled();
+    expect(boxes[50]).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: /plan event shopping list/i }));
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toHaveLength(50);
     expect(screen.queryByText(/^Error:/)).not.toBeInTheDocument();
-  }, 20_000);
+  }, 9_000);
 
   it('disables the 51st recipe once 50 are selected, but never the selected ones', async () => {
     await renderEventWithSelected(50);

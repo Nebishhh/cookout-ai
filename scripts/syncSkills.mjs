@@ -37,7 +37,6 @@ const LOCAL_SKILLS = new Set([
   'cookout-competitive-intelligence',
   'frontend-design',
   'impeccable',
-  'ln-54-codebase-auditor',
   'web-interface-guidelines',
 ]);
 

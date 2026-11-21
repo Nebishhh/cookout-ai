@@ -29,8 +29,22 @@ export default defineConfig({
     // browser — sets no Origin header on its own, and csrfGuard requires one on every
     // state-changing request. Same trusted origin used by globalSetup.ts's own signup call.
     extraHTTPHeaders: { Origin: 'http://localhost:3010' },
-    ...devices['Desktop Chrome'],
   },
+  // Every spec runs on desktop Chrome except mobile-nav.spec.ts, which runs only at phone width.
+  // The phone project uses Chromium (Pixel 7 profile, sized to a 390px-wide iPhone screen)
+  // because CI installs only Chromium; the iPhone device presets need WebKit.
+  projects: [
+    {
+      name: 'desktop',
+      use: { ...devices['Desktop Chrome'] },
+      testIgnore: /mobile-nav\.spec\.ts/,
+    },
+    {
+      name: 'phone',
+      use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
+      testMatch: /mobile-nav\.spec\.ts/,
+    },
+  ],
   webServer: [
     {
       // start:e2e, not dev: no --env-file, so the run is hermetic — it never reads a developer's

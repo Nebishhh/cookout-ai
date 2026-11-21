@@ -4,8 +4,15 @@
  *   not an AI call — consistent with the "deterministic domain, AI at the edge" rule. It will
  *   misclassify ingredients whose name doesn't contain one of the known keywords (falls back
  *   to `Other`) or whose keyword is genuinely ambiguous (e.g. "pepper" could be a vegetable or
- *   a spice) — rule order below resolves ties by checking more specific categories first.
- * - No manual per-recipe override exists yet; a user cannot correct a wrong categorization.
+ *   a spice).
+ * - Keywords match whole words, never substrings: "egg" must not match "eggplant", "ham" must
+ *   not match "graham", "oil" must not match "foil". Plurals match ("eggs", "tomatoes",
+ *   "berries"), and compound words that belong in an aisle are listed as keywords of their own
+ *   ("buttermilk", "strawberry", "walnut").
+ * - The match with the most words wins ("ice cream" beats "cream", "baking soda" beats "soda");
+ *   between equally long matches, rule order below decides.
+ * - Users can correct a category per ingredient through manual overrides, applied outside this
+ *   function.
  * - Not persisted anywhere — always recomputed from `ingredientId`/`displayName`, so improving
  *   the ruleset retroactively improves grouping for every existing recipe/list with no migration.
  */
@@ -36,9 +43,10 @@ export const GROCERY_CATEGORY_ORDER: readonly GroceryCategory[] = [
   GroceryCategory.Other,
 ];
 
-// Checked in this order — more specific/less ambiguous categories first, so e.g. "chicken broth"
-// lands in Meat before Pantry Staples, and "bell pepper" lands in Produce before "pepper" could
-// otherwise pull it toward Spices.
+// Rule order breaks ties between equally long matches — more specific/less ambiguous categories
+// first, so e.g. "chicken broth" lands in Meat before Pantry Staples, and "lemon juice" in Produce
+// before Beverages. A multi-word keyword ("bell pepper") beats a single word ("pepper")
+// regardless of order.
 const KEYWORD_RULES: ReadonlyArray<readonly [GroceryCategory, readonly string[]]> = [
   [
     GroceryCategory.Seafood,
@@ -66,16 +74,46 @@ const KEYWORD_RULES: ReadonlyArray<readonly [GroceryCategory, readonly string[]]
       'sausage',
       'turkey',
       'lamb',
+      'goat',
       'steak',
       'ham',
       'ground meat',
       'veal',
     ],
   ],
-  [GroceryCategory.Dairy, ['milk', 'cheese', 'butter', 'cream', 'yogurt', 'yoghurt', 'egg']],
+  [
+    GroceryCategory.Dairy,
+    [
+      'milk',
+      'buttermilk',
+      'cheese',
+      'ricotta',
+      'mozzarella',
+      'parmesan',
+      'cheddar',
+      'feta',
+      'goat cheese',
+      'butter',
+      'cream',
+      'yogurt',
+      'yoghurt',
+      'egg',
+    ],
+  ],
   [
     GroceryCategory.Bakery,
-    ['bread', 'bun', 'roll', 'tortilla', 'bagel', 'pita', 'baguette', 'croissant'],
+    [
+      'bread',
+      'flatbread',
+      'cornbread',
+      'bun',
+      'roll',
+      'tortilla',
+      'bagel',
+      'pita',
+      'baguette',
+      'croissant',
+    ],
   ],
   [
     GroceryCategory.Produce,
@@ -88,8 +126,10 @@ const KEYWORD_RULES: ReadonlyArray<readonly [GroceryCategory, readonly string[]]
       'carrot',
       'potato',
       'apple',
+      'pineapple',
       'banana',
       'lemon',
+      'lemongrass',
       'lime',
       'avocado',
       'cucumber',
@@ -104,15 +144,23 @@ const KEYWORD_RULES: ReadonlyArray<readonly [GroceryCategory, readonly string[]]
       'jalapeno',
       'kale',
       'zucchini',
+      'eggplant',
       'ginger',
       'scallion',
       'shallot',
       'cabbage',
       'corn',
       'squash',
+      'watercress',
       'berry',
+      'strawberry',
+      'blueberry',
+      'raspberry',
+      'blackberry',
       'grape',
+      'grapefruit',
       'melon',
+      'watermelon',
       'peach',
       'pear',
       'mint',
@@ -121,24 +169,32 @@ const KEYWORD_RULES: ReadonlyArray<readonly [GroceryCategory, readonly string[]]
   [GroceryCategory.Frozen, ['frozen', 'ice cream']],
   [
     GroceryCategory.Beverages,
-    ['juice', 'soda', 'sparkling water', 'wine', 'beer', 'coffee', 'tea'],
+    ['juice', 'soda', 'sparkling water', 'wine', 'champagne', 'beer', 'coffee', 'tea'],
   ],
   [
     GroceryCategory.SpicesAndCondiments,
     [
       'salt',
       'pepper',
+      'peppercorn',
       'spice',
       'cumin',
       'paprika',
       'oregano',
       'cinnamon',
       'nutmeg',
+      'garlic powder',
+      'onion powder',
+      'cream of tartar',
       'sauce',
       'ketchup',
       'mustard',
       'mayo',
+      'mayonnaise',
       'vinegar',
+      'wine vinegar',
+      'cider vinegar',
+      'champagne vinegar',
       'oil',
       'honey',
       'syrup',
@@ -156,12 +212,26 @@ const KEYWORD_RULES: ReadonlyArray<readonly [GroceryCategory, readonly string[]]
       'bean',
       'lentil',
       'oat',
+      'barley',
+      'cornstarch',
+      'cornmeal',
       'cereal',
+      'cornflake',
+      'applesauce',
+      'cracker',
+      'graham cracker',
       'canned',
       'stock',
       'broth',
       'chocolate',
       'nut',
+      'peanut',
+      'walnut',
+      'almond',
+      'pecan',
+      'cashew',
+      'hazelnut',
+      'peanut butter',
       'breadcrumb',
       'yeast',
       'baking powder',
@@ -171,19 +241,56 @@ const KEYWORD_RULES: ReadonlyArray<readonly [GroceryCategory, readonly string[]]
   ],
 ];
 
+/** Lowercase words with accents stripped ("Jalapeños" → "jalapenos"); anything else separates. */
+function toWords(text: string): string[] {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter(Boolean);
+}
+
+/** True when `word` is `keyword` or a regular plural of it (s, es, y → ies). */
+function wordMatches(word: string, keyword: string): boolean {
+  return (
+    word === keyword ||
+    word === `${keyword}s` ||
+    word === `${keyword}es` ||
+    (keyword.endsWith('y') && word === `${keyword.slice(0, -1)}ies`)
+  );
+}
+
+/** True when the keyword's words appear consecutively in `words`. */
+function phraseMatches(words: readonly string[], keywordWords: readonly string[]): boolean {
+  for (let start = 0; start + keywordWords.length <= words.length; start++) {
+    if (keywordWords.every((keyword, i) => wordMatches(words[start + i], keyword))) return true;
+  }
+  return false;
+}
+
+const COMPILED_RULES = KEYWORD_RULES.map(
+  ([category, keywords]) => [category, keywords.map((keyword) => keyword.split(' '))] as const
+);
+
 /**
  * Deterministically buckets an ingredient into a grocery-aisle-style category for shopping-list
  * grouping. Pure function of the ingredient's own identity/label — never stored, always
  * recomputed at read/serialization time.
  */
 export function categorizeIngredient(ingredientId: string, displayName: string): GroceryCategory {
-  const haystack = `${ingredientId} ${displayName}`.toLowerCase();
+  const words = toWords(`${ingredientId} ${displayName}`);
 
-  for (const [category, keywords] of KEYWORD_RULES) {
-    if (keywords.some((keyword) => haystack.includes(keyword))) {
-      return category;
+  let best = GroceryCategory.Other;
+  let bestLength = 0;
+  for (const [category, keywords] of COMPILED_RULES) {
+    for (const keywordWords of keywords) {
+      // Strictly longer only, so an earlier rule keeps an equally long match.
+      if (keywordWords.length > bestLength && phraseMatches(words, keywordWords)) {
+        best = category;
+        bestLength = keywordWords.length;
+      }
     }
   }
-
-  return GroceryCategory.Other;
+  return best;
 }

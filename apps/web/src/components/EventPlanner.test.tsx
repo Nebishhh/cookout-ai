@@ -322,3 +322,68 @@ describe('EventPlanner: events that reference deleted recipes', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('EventPlanner: guest breakdown validation', () => {
+  async function renderWithOneRecipeChecked() {
+    const sent = mockPlannerApi(makeRecipes(1));
+    renderPlanner();
+    fireEvent.click(await screen.findByLabelText('Select recipe Recipe 1'));
+    return sent;
+  }
+
+  function setGuests(total: number, vegetarian: number, vegan: number) {
+    fireEvent.change(screen.getByLabelText('Total Guests'), { target: { value: String(total) } });
+    fireEvent.change(screen.getByLabelText('Vegetarian guests (including vegan)'), {
+      target: { value: String(vegetarian) },
+    });
+    fireEvent.change(screen.getByLabelText('Vegan guests'), { target: { value: String(vegan) } });
+  }
+
+  const planButton = () => screen.getByRole('button', { name: /plan event shopping list/i });
+
+  it('explains "more vegetarians than guests" under the vegetarian field and blocks planning', async () => {
+    const sent = await renderWithOneRecipeChecked();
+    setGuests(4, 6, 0);
+
+    const vegetarian = screen.getByLabelText('Vegetarian guests (including vegan)');
+    expect(vegetarian).toHaveAttribute('aria-invalid', 'true');
+    expect(vegetarian).toHaveAccessibleDescription(
+      "Vegetarian guests can't be more than the 4 total guests."
+    );
+    expect(planButton()).toBeDisabled();
+
+    fireEvent.submit(planButton().closest('form')!);
+    expect(sent).toHaveLength(0);
+    expect(screen.queryByText(/vegetarianCount|totalGuests/)).not.toBeInTheDocument();
+  });
+
+  it('explains "more vegans than vegetarians" under the vegan field', async () => {
+    await renderWithOneRecipeChecked();
+    setGuests(10, 2, 3);
+
+    const vegan = screen.getByLabelText('Vegan guests');
+    expect(vegan).toHaveAttribute('aria-invalid', 'true');
+    expect(vegan).toHaveAccessibleDescription(
+      "Vegan guests count as vegetarian too, so there can't be more than the 2 vegetarian guests."
+    );
+    expect(screen.getByLabelText('Vegetarian guests (including vegan)')).not.toHaveAttribute(
+      'aria-invalid'
+    );
+    expect(planButton()).toBeDisabled();
+  });
+
+  it('clears the message and allows planning once the numbers are fixed', async () => {
+    const sent = await renderWithOneRecipeChecked();
+    setGuests(4, 6, 0);
+    expect(planButton()).toBeDisabled();
+
+    setGuests(8, 6, 0);
+    const vegetarian = screen.getByLabelText('Vegetarian guests (including vegan)');
+    expect(vegetarian).not.toHaveAttribute('aria-invalid');
+    expect(screen.queryByText(/can't be more than/)).not.toBeInTheDocument();
+    expect(planButton()).toBeEnabled();
+
+    fireEvent.click(planButton());
+    await waitFor(() => expect(sent).toHaveLength(1));
+  });
+});

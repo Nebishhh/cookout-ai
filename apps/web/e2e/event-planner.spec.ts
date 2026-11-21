@@ -120,7 +120,7 @@ test.describe('Event Planner E2E Tests', () => {
     await expect(page.getByText('1200 g').first()).toBeVisible();
   });
 
-  test('displays 400 error banner when submitting an invalid guest group (e.g. vegans > vegetarians)', async ({
+  test('explains an invalid guest group next to the field and blocks planning (e.g. vegans > vegetarians)', async ({
     page,
     request,
   }) => {
@@ -149,10 +149,15 @@ test.describe('Event Planner E2E Tests', () => {
     await page.locator('#input-vegetarian-count').fill('2');
     await page.locator('#input-vegan-count').fill('5');
 
-    await page.getByRole('button', { name: /plan event/i }).click();
-
-    // Assert 400 error banner displays cleanly in UI
-    await expect(page.getByText(/cannot exceed vegetarianCount/i)).toBeVisible();
+    // The breakdown is checked in the browser: a plain message appears under the vegan field and
+    // the plan button stays disabled, so the request never reaches the server.
+    const veganInput = page.locator('#input-vegan-count');
+    await expect(veganInput).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('#input-vegan-count-error')).toHaveText(
+      "Vegan guests count as vegetarian too, so there can't be more than the 2 vegetarian guests."
+    );
+    await expect(page.getByRole('button', { name: /plan event/i })).toBeDisabled();
+    await expect(page.getByText(/veganCount|vegetarianCount/)).toHaveCount(0);
   });
 
   test('quick-fill AI fallback: a no-digits description is parsed via the fixture-intercepted Gemini call and fills the guest fields', async ({

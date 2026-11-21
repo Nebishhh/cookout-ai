@@ -16,7 +16,11 @@ import {
   RotateCcw,
   Sparkles,
 } from 'lucide-react';
-import { MAX_RECIPES_PER_EVENT } from '@cookout-ai/domain';
+import {
+  MAX_RECIPES_PER_EVENT,
+  validateGuestGroupInput,
+  type GuestGroupField,
+} from '@cookout-ai/domain';
 import {
   useRecipes,
   usePlanEvent,
@@ -184,6 +188,11 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   };
 
   const guestGroupPayload = { totalGuests, vegetarianCount, veganCount };
+  // Checked in the browser with the domain's own rules, so a bad breakdown is explained next to
+  // the field it belongs to instead of coming back from the server as a raw banner.
+  const guestErrors = validateGuestGroupInput(guestGroupPayload);
+  const guestErrorFor = (field: GuestGroupField) =>
+    guestErrors.find((e) => e.field === field)?.message;
   const serveTimeMinutes = timeInputToMinutes(serveTime);
   // Shared by every plan/save/update call so the cook schedule is requested consistently.
   const planPayload = {
@@ -195,7 +204,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (totalGuests <= 0) return;
+    if (guestErrors.length > 0) return;
 
     if (isViewMode && selectedEventId) {
       updateEventMutation.mutate({
@@ -216,7 +225,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   };
 
   const handleSaveEvent = () => {
-    if (!name.trim()) return;
+    if (!name.trim() || guestErrors.length > 0) return;
 
     createEventMutation.mutate(
       {
@@ -479,9 +488,18 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                   min={1}
                   value={totalGuests}
                   onChange={(e) => handleTotalGuestsChange(e.target.value)}
-                  className="mt-1 h-9 bg-canvas border-stone"
+                  className={`mt-1 h-9 bg-canvas ${guestErrorFor('totalGuests') ? 'border-clay' : 'border-stone'}`}
+                  aria-invalid={guestErrorFor('totalGuests') ? true : undefined}
+                  aria-describedby={
+                    guestErrorFor('totalGuests') ? 'input-total-guests-error' : undefined
+                  }
                   required
                 />
+                {guestErrorFor('totalGuests') && (
+                  <p id="input-total-guests-error" className="mt-1 text-xs text-clay-hover">
+                    {guestErrorFor('totalGuests')}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -494,9 +512,18 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                   min={0}
                   value={vegetarianCount}
                   onChange={(e) => handleVegetarianCountChange(e.target.value)}
-                  className="mt-1 h-9 bg-canvas border-stone"
+                  className={`mt-1 h-9 bg-canvas ${guestErrorFor('vegetarianCount') ? 'border-clay' : 'border-stone'}`}
+                  aria-invalid={guestErrorFor('vegetarianCount') ? true : undefined}
+                  aria-describedby={
+                    guestErrorFor('vegetarianCount') ? 'input-vegetarian-count-error' : undefined
+                  }
                   required
                 />
+                {guestErrorFor('vegetarianCount') && (
+                  <p id="input-vegetarian-count-error" className="mt-1 text-xs text-clay-hover">
+                    {guestErrorFor('vegetarianCount')}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -509,9 +536,18 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                   min={0}
                   value={veganCount}
                   onChange={(e) => handleVeganCountChange(e.target.value)}
-                  className="mt-1 h-9 bg-canvas border-stone"
+                  className={`mt-1 h-9 bg-canvas ${guestErrorFor('veganCount') ? 'border-clay' : 'border-stone'}`}
+                  aria-invalid={guestErrorFor('veganCount') ? true : undefined}
+                  aria-describedby={
+                    guestErrorFor('veganCount') ? 'input-vegan-count-error' : undefined
+                  }
                   required
                 />
+                {guestErrorFor('veganCount') && (
+                  <p id="input-vegan-count-error" className="mt-1 text-xs text-clay-hover">
+                    {guestErrorFor('veganCount')}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -661,7 +697,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
               {isViewMode ? (
                 <Button
                   type="submit"
-                  disabled={updateEventMutation.isPending}
+                  disabled={updateEventMutation.isPending || guestErrors.length > 0}
                   className="space-x-2 bg-clay text-white hover:bg-clay-hover disabled:opacity-50"
                 >
                   {updateEventMutation.isPending ? (
@@ -675,7 +711,11 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                 <>
                   <Button
                     type="submit"
-                    disabled={planEventMutation.isPending || selectedRecipeIds.length === 0}
+                    disabled={
+                      planEventMutation.isPending ||
+                      selectedRecipeIds.length === 0 ||
+                      guestErrors.length > 0
+                    }
                     className="space-x-2 bg-clay text-white hover:bg-clay-hover disabled:opacity-50"
                   >
                     <Calendar className="h-4 w-4" />
@@ -690,7 +730,9 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                       type="button"
                       variant="secondary"
                       onClick={handleSaveEvent}
-                      disabled={!canSaveEvent || createEventMutation.isPending}
+                      disabled={
+                        !canSaveEvent || createEventMutation.isPending || guestErrors.length > 0
+                      }
                       className="space-x-2 bg-olive text-white hover:bg-olive-hover disabled:opacity-50"
                     >
                       {createEventMutation.isPending ? (

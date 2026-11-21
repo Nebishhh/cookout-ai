@@ -69,3 +69,58 @@ export class GuestGroup {
     return this.totalGuests - this.vegetarianCount;
   }
 }
+
+export type GuestGroupField = 'totalGuests' | 'vegetarianCount' | 'veganCount';
+
+export interface GuestGroupFieldError {
+  field: GuestGroupField;
+  /** Plain-language message for display next to the field. */
+  message: string;
+}
+
+/**
+ * Checks the same invariants as the GuestGroup constructor, but returns every problem as a
+ * plain-language message keyed by field instead of throwing, so a form can show each one next to
+ * the input it belongs to. The constructor's own messages stay technical for API clients.
+ */
+export function validateGuestGroupInput(input: GuestGroupInput): GuestGroupFieldError[] {
+  const totalGuests = input.totalGuests;
+  const vegetarianCount = input.vegetarianCount ?? 0;
+  const veganCount = input.veganCount ?? 0;
+  const errors: GuestGroupFieldError[] = [];
+
+  const totalOk = Number.isInteger(totalGuests) && totalGuests > 0;
+  const vegetarianOk = Number.isInteger(vegetarianCount) && vegetarianCount >= 0;
+  const veganOk = Number.isInteger(veganCount) && veganCount >= 0;
+
+  if (!totalOk) {
+    errors.push({ field: 'totalGuests', message: 'Enter at least 1 guest, as a whole number.' });
+  }
+  if (!vegetarianOk) {
+    errors.push({
+      field: 'vegetarianCount',
+      message: 'Enter 0 or more vegetarian guests, as a whole number.',
+    });
+  }
+  if (!veganOk) {
+    errors.push({
+      field: 'veganCount',
+      message: 'Enter 0 or more vegan guests, as a whole number.',
+    });
+  }
+
+  if (totalOk && vegetarianOk && vegetarianCount > totalGuests) {
+    errors.push({
+      field: 'vegetarianCount',
+      message: `Vegetarian guests can't be more than the ${totalGuests} total guests.`,
+    });
+  }
+  if (vegetarianOk && veganOk && veganCount > vegetarianCount) {
+    errors.push({
+      field: 'veganCount',
+      message: `Vegan guests count as vegetarian too, so there can't be more than the ${vegetarianCount} vegetarian guests.`,
+    });
+  }
+
+  return errors;
+}

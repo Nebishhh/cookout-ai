@@ -49,7 +49,11 @@ export default defineConfig({
     {
       // start:e2e, not dev: no --env-file, so the run is hermetic — it never reads a developer's
       // apps/api/.env (which doesn't exist on a CI runner) and gets all its config from `env` below.
-      command: `npx prisma db push --schema="${schemaPath}" --accept-data-loss && npm run start:e2e --workspace=apps/api`,
+      // The schema comes from prisma/migrations, not a push. `migrate deploy` needs e2e.db to be
+      // either absent or already baselined (it refuses a pushed database with no history, P3005),
+      // which is why the root `test:e2e` script deletes the file first — run E2E through that
+      // script rather than calling Playwright directly.
+      command: `npx prisma migrate deploy --schema="${schemaPath}" && npm run start:e2e --workspace=apps/api`,
       url: 'http://localhost:3011/api/health',
       // Covers slow Prisma CLI starts on a loaded Windows machine.
       timeout: 180_000,

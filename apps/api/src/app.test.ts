@@ -39,7 +39,7 @@ describe('CookOut AI API Endpoints', () => {
       await prisma.$executeRawUnsafe('DELETE FROM Session');
       await prisma.$executeRawUnsafe('DELETE FROM User');
     } catch {
-      // Table creation handled by initial migration/db push
+      // Table creation handled by vitest.globalSetup.ts (prisma migrate deploy)
     }
   });
 

@@ -28,8 +28,18 @@ npx tsx --env-file=apps/api/.env scripts/smokeTestLiveGemini.ts   # manual live 
 Prisma (`prisma/schema.prisma` is the single schema for both `dev.db` and test DBs):
 
 ```bash
-DATABASE_URL="file:./dev.db" npx prisma db push --schema=prisma/schema.prisma
+DATABASE_URL="file:./dev.db" npm run db:deploy    # apply prisma/migrations to that database
+DATABASE_URL="file:./dev.db" npm run db:migrate   # after editing the schema: write a migration and apply it
+npm run db:check                                  # fail if prisma/migrations no longer describes the schema
 ```
+
+The schema reaches every database through `prisma/migrations`, never `prisma db push`. `0_init` is the baseline, generated from the schema with `migrate diff --from-empty`. A database created before that baseline existed has tables but no `_prisma_migrations` history, so `migrate deploy` refuses it with `P3005` until it is marked once as already holding the schema:
+
+```bash
+DATABASE_URL="file:./dev.db" npx prisma migrate resolve --applied 0_init --schema=prisma/schema.prisma
+```
+
+That writes the history row without running the migration's SQL, so no data moves. `npm run db:check` is also enforced as a test (`apps/api/src/prismaMigrations.test.ts`), so editing `schema.prisma` without writing a migration fails `npm test` on the machine that made the edit rather than later in CI.
 
 The Prisma CLI reads `DATABASE_URL` from the shell, a root `.env`, or `prisma/.env`, never from `apps/api/.env`. Neither a root `.env` nor `prisma/.env` is committed (`.gitignore` covers both), so **supply `DATABASE_URL` yourself** — inline as above, or `export DATABASE_URL="file:./dev.db"` first (PowerShell: `$env:DATABASE_URL="file:./dev.db"`, since it has no inline env-var prefix). Without it the CLI fails with `P1012 Environment variable not found: DATABASE_URL`. A relative SQLite URL resolves from `prisma/` (the schema's directory), not the working directory, so `file:./dev.db` is `prisma/dev.db` for both the CLI and the API's Prisma client. The API itself has no fallback either: `apps/api/src/prisma.ts` throws at startup if `DATABASE_URL` is unset (`npm run dev` gets it from `apps/api/.env`).
 
@@ -37,9 +47,9 @@ The Prisma CLI reads `DATABASE_URL` from the shell, a root `.env`, or `prisma/.e
 
 The root `vitest.config.ts` uses Vitest's `projects` feature (`apps/*`, `packages/*`) and injects one shared `DATABASE_URL` (`prisma/test.db`) via env for every project. `apps/api`'s test files therefore share a single physical SQLite file. The root config sets `test.fileParallelism: false` to serialize file execution across the whole run — this has to live in the **root** config, not just `apps/api/vitest.config.ts`: a per-project `fileParallelism: false` is silently ignored by the root `projects` orchestrator's shared worker pool (verified empirically — the per-project-only setting still raced; only setting it at root fixed it). If you add a new `apps/api/src/*.test.ts` file that touches the `Recipe`/`IngredientLine` tables, give it the same `beforeEach` cleanup pattern already used in `app.test.ts` — don't rely on file-run-order luck.
 
-`apps/api/vitest.globalSetup.ts` runs `prisma db push` against `prisma/test.db` before the API tests, so a fresh clone or CI runner needs no manual test-DB setup.
+`apps/api/vitest.globalSetup.ts` deletes `prisma/test.db` and rebuilds it with `prisma migrate deploy` before the API tests, so a fresh clone or CI runner needs no manual test-DB setup. It rebuilds rather than updating in place because `migrate deploy` refuses a pushed database that has tables but no migration history (`P3005`), and starting from empty also stops a stale `test.db` leaking rows into a run.
 
-E2E tests use a separate, fully isolated `prisma/e2e.db` (wiped at the start of `npm run test:e2e`) and run with `USE_GEMINI_FIXTURES=true`, so they don't share this DB or make live AI calls. `apps/web/playwright.config.ts` pushes the schema into `e2e.db` and starts the API with `start:e2e` (no `--env-file`, so `apps/api/.env` is never read; all config comes from the webServer `env`). `apps/web/e2e/globalSetup.ts` signs up one test user through the API, saves its session as `storageState` for every spec, then loads the app once in a browser and waits until the authenticated UI renders (so a cold Vite dependency cache doesn't time out the first spec).
+E2E tests use a separate, fully isolated `prisma/e2e.db` (wiped at the start of `npm run test:e2e`) and run with `USE_GEMINI_FIXTURES=true`, so they don't share this DB or make live AI calls. `apps/web/playwright.config.ts` applies `prisma/migrations` to `e2e.db` with `migrate deploy` and starts the API with `start:e2e` (no `--env-file`, so `apps/api/.env` is never read; all config comes from the webServer `env`). `apps/web/e2e/globalSetup.ts` signs up one test user through the API, saves its session as `storageState` for every spec, then loads the app once in a browser and waits until the authenticated UI renders (so a cold Vite dependency cache doesn't time out the first spec).
 
 ## Architecture
 

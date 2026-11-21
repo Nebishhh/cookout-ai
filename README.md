@@ -89,7 +89,7 @@ On macOS, Linux, or Git Bash you can instead run `echo 'DATABASE_URL="file:./dev
 Then create the database and start the app:
 
 ```bash
-npx prisma db push --schema=prisma/schema.prisma
+npm run db:deploy
 npm run dev
 ```
 

@@ -157,19 +157,100 @@ Two failures are deliberate, and both stop the container instead of touching dat
 ## Baselining an existing database
 
 A volume created before `prisma/migrations` existed was built by `prisma db push`, so it
-holds the right tables but no history, and `migrate deploy` refuses it. Mark it as already
-holding the baseline **once**, with a backup in hand first:
+holds tables but no history, and `migrate deploy` refuses it with `P3005`. It has to be marked
+**once** as already holding the `0_init` baseline.
+
+That mark is only a claim. `migrate resolve --applied` checks nothing: it writes the history row
+and never compares the database with the migration. A volume pushed from an older schema (say,
+from before guest accounts or cook schedules existed) can be missing columns `0_init` has, and
+marking it applied as-is makes Prisma believe they exist. The container then starts, and the app
+fails on the first query that touches them. So **check first, and only mark a database that
+already matches.**
+
+**A disposable database is easier to recreate than to catch up.** If the volume only holds test
+or demo data, delete it and let `migrate deploy` build a fresh one from `prisma/migrations`:
+
+```bash
+docker compose down
+docker volume rm cookout-ai_cookout_data
+docker compose up -d
+```
+
+Use the steps below only for a database whose data you need to keep.
+
+### 1. Back up, then check
 
 ```bash
 docker compose stop app
-docker volume inspect cookout-ai_cookout_data     # find the host path of prod.db
-cp /path/to/prod.db /path/to/prod.db.bak          # take the backup before anything else
-DATABASE_URL="file:/path/to/prod.db" npx prisma migrate resolve --applied 0_init --schema=prisma/schema.prisma
-DATABASE_URL="file:/path/to/prod.db" npx prisma migrate status --schema=prisma/schema.prisma
+docker volume inspect cookout-ai_cookout_data --format '{{ .Mountpoint }}'   # host directory holding prod.db
+cp /path/to/prod.db /path/to/prod.db.bak                                    # the backup comes first
+export DATABASE_URL="file:/path/to/prod.db"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+```
+
+- **`No difference detected.`** (exit 0): the database matches the baseline. Go to step 3.
+- **A list of changes** (exit 2): the database is behind. Go to step 2. Do not mark it applied.
+
+### 2. Catch up a database that is behind
+
+```bash
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > /path/to/catch-up.sql
+# Read catch-up.sql before running it.
+npx prisma db execute --file /path/to/catch-up.sql --schema=prisma/schema.prisma
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code   # must now say "No difference detected."
+```
+
+Read the generated SQL before running it. SQLite can't change a column's nullability or add a
+required column in place, so the script often rebuilds a table: it creates a new one, copies the
+rows across, drops the old one and renames the new one. That is normal, but check the copy
+covers every column you care about. If anything would drop data you need, stop and restore the
+backup instead.
+
+### 3. Mark the baseline applied
+
+```bash
+npx prisma migrate resolve --applied 0_init --schema=prisma/schema.prisma
+npx prisma migrate status --schema=prisma/schema.prisma   # should report the database up to date
 docker compose up -d
 ```
 
 `migrate resolve --applied` writes only the history row — it never runs the migration's SQL,
-so no table is touched and no row is lost. `migrate status` should then report the database
-up to date. Run this from a machine with this repo checked out and Node installed, not
-through the container.
+so no table is touched and no row is lost. Run steps 1–3 from a machine with this repo checked
+out and Node installed.
+
+### Docker Desktop for Windows
+
+Docker Desktop keeps volumes inside its own VM, so `docker volume inspect` gives no Windows
+path to copy from. Run the same three steps inside one-off containers of the app image instead:
+that image has the Prisma CLI, and the compose service already mounts the volume at `/data` and
+sets `DATABASE_URL=file:/data/prod.db`. In PowerShell, from the repo root (every `docker compose`
+command needs the root `.env` to exist, since the service reads it):
+
+```powershell
+docker compose stop app
+docker compose build app
+New-Item -ItemType Directory -Force "$HOME\cookout-backups"
+docker compose run --rm --no-deps -v "$HOME\cookout-backups:/backup" --entrypoint sh app -c "cp /data/prod.db /backup/prod.db.bak"
+docker compose run --rm --no-deps --entrypoint sh app -c "npx prisma migrate diff --from-url file:/data/prod.db --to-schema-datamodel prisma/schema.prisma --exit-code"
+```
+
+`docker compose build app` comes first so the image includes `prisma/migrations`. The backup
+lands in `cookout-backups\prod.db.bak` under your user folder: outside the volume, and outside
+the repo so it can never be committed. If the check reports a difference, catch up (step 2),
+reviewing `cookout-backups\catch-up.sql` in an editor before running it:
+
+```powershell
+docker compose run --rm --no-deps -v "$HOME\cookout-backups:/backup" --entrypoint sh app -c "npx prisma migrate diff --from-url file:/data/prod.db --to-schema-datamodel prisma/schema.prisma --script > /backup/catch-up.sql"
+docker compose run --rm --no-deps -v "$HOME\cookout-backups:/backup" --entrypoint sh app -c "npx prisma db execute --file /backup/catch-up.sql --schema=prisma/schema.prisma"
+docker compose run --rm --no-deps --entrypoint sh app -c "npx prisma migrate diff --from-url file:/data/prod.db --to-schema-datamodel prisma/schema.prisma --exit-code"
+```
+
+Then mark it applied (step 3) and start the app:
+
+```powershell
+docker compose run --rm --no-deps --entrypoint sh app -c "npx prisma migrate resolve --applied 0_init --schema=prisma/schema.prisma && npx prisma migrate status --schema=prisma/schema.prisma"
+docker compose up -d
+```
+
+`--entrypoint sh` keeps these one-off containers from running the image's own entrypoint, which
+would try `migrate deploy` before the database is ready for it.

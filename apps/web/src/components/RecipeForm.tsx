@@ -36,6 +36,8 @@ import { Checkbox } from './ui/checkbox';
 import { Select } from './ui/select';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
+import { ApiError } from '../lib/api';
+import { RecipeSourceReference } from './RecipeSourceReference';
 
 const SUPPORTED_UNITS_BY_CATEGORY = [
   { category: 'Mass', units: ['g', 'kg', 'oz', 'lb'] },
@@ -517,6 +519,8 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
 
   const [importText, setImportText] = useState('');
   const [importUrl, setImportUrl] = useState('');
+  // The URL whose import a site blocked, shown above Paste Text so the user can copy from it.
+  const [sourceUrl, setSourceUrl] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<'text' | 'url' | 'image' | 'camera'>('text');
   const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
@@ -565,6 +569,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
     setReviewNotice(null);
     setImportText('');
     setImportUrl('');
+    setSourceUrl(null);
     setImportMode('text');
     setSelectedImageFile(null);
     setImagePreviewUrl((prevUrl) => {
@@ -680,6 +685,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
           applied.steps.length > 0 ? applied.steps : [{ id: createStepId(), instruction: '' }]
         );
         setImportText('');
+        setSourceUrl(null);
         setReviewNotice(
           'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
         );
@@ -835,6 +841,23 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
   };
 
   const isPending = createRecipeMutation.isPending || updateRecipeMutation.isPending;
+  // A site refused the URL import (401/403/429 upstream). The banner offers Paste Text instead.
+  const siteBlockedError =
+    importRecipeUrlMutation.error instanceof ApiError &&
+    importRecipeUrlMutation.error.errorName === 'SiteBlocked'
+      ? importRecipeUrlMutation.error
+      : null;
+
+  const handleSwitchToPasteText = () => {
+    // Keep the blocked URL for reference; the URL field keeps it too for going back.
+    setSourceUrl(importRecipeUrlMutation.variables ?? importUrl.trim());
+    importRecipeUrlMutation.reset();
+    setValidationError(null);
+    setShowImportSection(true);
+    setImportMode('text');
+    // After the Paste Text panel renders.
+    setTimeout(() => document.getElementById('import-text-input')?.focus(), 0);
+  };
   const displayError =
     validationError ||
     (createRecipeMutation.error ? createRecipeMutation.error.message : null) ||
@@ -967,6 +990,7 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
                   >
                     {importMode === 'text' && (
                       <>
+                        {sourceUrl && <RecipeSourceReference url={sourceUrl} />}
                         <Label htmlFor="import-text-input" className="text-xs text-ink-muted">
                           Paste unformatted recipe text below (ingredients, servings, instructions)
                         </Label>
@@ -1088,7 +1112,21 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
         {displayError && (
           <Alert className="mb-6 border-clay-border bg-clay-light text-clay-hover">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{displayError}</AlertDescription>
+            <AlertDescription>
+              {displayError}
+              {siteBlockedError && displayError === siteBlockedError.message && (
+                <div className="mt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleSwitchToPasteText}
+                    className="h-11 border-clay/40 bg-canvas px-3 text-xs font-semibold text-clay-hover hover:bg-clay-light sm:h-9"
+                  >
+                    Switch to Paste Text
+                  </Button>
+                </div>
+              )}
+            </AlertDescription>
           </Alert>
         )}
 

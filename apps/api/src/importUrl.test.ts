@@ -517,6 +517,61 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
     });
   });
 
+  // Some sites (e.g. Allrecipes, Simply Recipes) refuse the importer's honest user agent. The user
+  // gets a plain explanation and a pointer to Paste Text, never a raw upstream status line.
+  describe('sites that block the importer', () => {
+    function siteResponds(status: number, statusText: string) {
+      vi.mocked(geminiModule.parseRecipeTextWithGeminiTimeout).mockClear();
+      vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
+        { address: '93.184.216.34', family: 4 },
+      ] as unknown as dns.LookupAddress);
+      mockedFetch.mockResolvedValue({
+        ok: false,
+        status,
+        statusText,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        body: null,
+        text: async () => '<html>Access denied</html>',
+      } as Response);
+    }
+
+    const BLOCKED_MESSAGE =
+      "This site doesn't allow recipe imports from other apps. Copy the recipe from the page and paste it into Paste Text instead.";
+    const RATE_LIMITED_MESSAGE =
+      'This site is limiting requests right now. Try again in a few minutes, or copy the recipe and use Paste Text.';
+
+    it.each([
+      [403, 'Forbidden', BLOCKED_MESSAGE],
+      [401, 'Unauthorized', BLOCKED_MESSAGE],
+      [429, 'Too Many Requests', RATE_LIMITED_MESSAGE],
+    ])(
+      'answers a %i from the site with a plain SiteBlocked message',
+      async (status, text, message) => {
+        siteResponds(status, text);
+
+        const res = await agent
+          .post('/api/recipes/import-url')
+          .send({ url: 'http://public-recipe.com/blocked' });
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual({ error: 'SiteBlocked', message });
+        expect(geminiModule.parseRecipeTextWithGeminiTimeout).not.toHaveBeenCalled();
+      }
+    );
+
+    it('leaves other failures (e.g. 404) as they were', async () => {
+      siteResponds(404, 'Not Found');
+
+      const res = await agent
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/missing' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe('FetchError');
+      expect(res.body.message).toBe('HTTP 404 from target URL: Not Found');
+    });
+  });
+
   describe('Gemini Integration & End-to-End Pipeline Tests', () => {
     it('returns 502 when Gemini API request times out past 30 seconds', async () => {
       vi.spyOn(dns.promises, 'lookup').mockResolvedValue([

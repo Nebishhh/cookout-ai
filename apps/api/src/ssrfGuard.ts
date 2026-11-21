@@ -27,6 +27,29 @@ export class FetchError extends Error {
   }
 }
 
+/** Upstream statuses that mean the site refused the importer, not that the page is broken. */
+const SITE_BLOCKED_STATUSES = new Set([401, 403, 429]);
+
+/**
+ * The target site refused the request (401/403/429). Some sites reject the importer's honest
+ * user agent; the user-facing message points them at Paste Text instead of showing the upstream
+ * status line. The API returns it as `{ error: 'SiteBlocked', message }` with a 502, like any
+ * other FetchError.
+ */
+export class SiteBlockedError extends FetchError {
+  readonly upstreamStatus: number;
+  constructor(upstreamStatus: number) {
+    super(
+      upstreamStatus === 429
+        ? 'This site is limiting requests right now. Try again in a few minutes, or copy the recipe and use Paste Text.'
+        : "This site doesn't allow recipe imports from other apps. Copy the recipe from the page and paste it into Paste Text instead.",
+      502
+    );
+    this.name = 'SiteBlocked';
+    this.upstreamStatus = upstreamStatus;
+  }
+}
+
 /**
  * Ranges ipaddr.js classifies as 'unicast' that must still be blocked. Every exception to the
  * "public unicast only" policy lives here, each with the reason it's needed.
@@ -343,6 +366,9 @@ export function createRecipeFetcher(
         }
 
         if (!response.ok) {
+          if (SITE_BLOCKED_STATUSES.has(response.status)) {
+            throw new SiteBlockedError(response.status);
+          }
           throw new FetchError(
             `HTTP ${response.status} from target URL: ${response.statusText}`,
             502

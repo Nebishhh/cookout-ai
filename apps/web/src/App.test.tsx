@@ -2113,6 +2113,51 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
   });
 
   describe('AI Recipe URL Import UI Tests', () => {
+    it('explains a site that blocks the importer and switches to Paste Text with the URL kept for reference', async () => {
+      const blockedUrl = 'https://www.allrecipes.com/recipe/10813/best-chocolate-chip-cookies/';
+      const message =
+        "This site doesn't allow recipe imports from other apps. Copy the recipe from the page and paste it into Paste Text instead.";
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-url') && options?.method === 'POST') {
+          return {
+            ok: false,
+            status: 502,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ error: 'SiteBlocked', message }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return recipesGetResponse(url.toString(), []);
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App initialUser={TEST_USER} />);
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /url link/i }));
+      fireEvent.change(screen.getByLabelText(/enter recipe webpage url below/i), {
+        target: { value: blockedUrl },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /import from url/i }));
+
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(screen.queryByText(/HTTP 403/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /switch to paste text/i }));
+
+      const textBox = await screen.findByLabelText(/paste unformatted recipe text below/i);
+      await waitFor(() => expect(textBox).toHaveFocus());
+      expect(textBox).toHaveValue('');
+      const link = screen.getByRole('link', { name: blockedUrl });
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+      expect(screen.queryByText(message)).not.toBeInTheDocument();
+
+      // The URL is still there if the user goes back to the URL tab.
+      fireEvent.click(screen.getByRole('button', { name: /url link/i }));
+      expect(screen.getByLabelText(/enter recipe webpage url below/i)).toHaveValue(blockedUrl);
+    });
+
     it('shows the server warning when a URL import had to cap the page instructions', async () => {
       const warning =
         'This page lists 120 instruction steps; only the first 100 were imported. Add the rest by hand.';

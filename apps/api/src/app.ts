@@ -391,6 +391,8 @@ app.post(
       }
 
       let extractedText: string;
+      // Notes for the user about page content the extractor had to cap (see extractRecipeText).
+      let importWarnings: string[] = [];
       if (process.env.USE_GEMINI_FIXTURES === 'true') {
         extractedText = `URL_TEST ${url}`;
       } else {
@@ -421,6 +423,7 @@ app.post(
         try {
           const extracted = extractRecipeText(html);
           extractedText = extracted.extractedText;
+          importWarnings = extracted.warnings;
         } catch (err) {
           if (err instanceof ExtractionError) {
             return res.status(err.statusCode).json({
@@ -518,6 +521,7 @@ app.post(
             : null,
           notes: step.notes,
         })),
+        warnings: importWarnings,
       });
     } catch (err) {
       next(err);

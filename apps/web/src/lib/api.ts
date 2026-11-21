@@ -316,6 +316,8 @@ export interface ImportRecipeTextResponseDto {
     unit: string;
   }>;
   instructions: RecipeStepDto[];
+  /** URL import only: notes about page content that was capped (e.g. too many steps). */
+  warnings?: string[];
 }
 
 export interface ParseEventDescriptionResponseDto {

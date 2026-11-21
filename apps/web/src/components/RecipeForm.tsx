@@ -708,8 +708,13 @@ export const RecipeForm: React.FC<RecipeFormProps> = ({ recipe, onSuccess, onCan
           applied.steps.length > 0 ? applied.steps : [{ id: createStepId(), instruction: '' }]
         );
         setImportUrl('');
+        // Warnings name page content the server had to cap (e.g. a 120-step page), so the user
+        // knows to check the draft against the original instead of losing steps unnoticed.
         setReviewNotice(
-          'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.'
+          [
+            'Imported via AI — please review all fields, especially dietary tags and ingredient amounts, before saving.',
+            ...(draft.warnings ?? []),
+          ].join(' ')
         );
       },
     });

@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import dns from 'dns';
+import { readFileSync } from 'fs';
 import { fetch as undiciFetch } from 'undici';
 import { prisma } from './prisma.js';
 import { extractRecipeText, ExtractionError } from './extractRecipeText.js';
@@ -15,6 +16,27 @@ vi.mock('undici', async (importOriginal) => ({
   fetch: vi.fn(),
 }));
 const mockedFetch = vi.mocked(undiciFetch);
+
+function recipePage(file: string): string {
+  return readFileSync(new URL(`./__fixtures__/recipe-pages/${file}`, import.meta.url), 'utf8');
+}
+
+/** A page whose only JSON-LD is a Recipe with the given extra fields. */
+function recipeHtml(fields: Record<string, unknown>): string {
+  const recipe = {
+    '@context': 'https://schema.org',
+    '@type': 'Recipe',
+    name: 'Synthetic Recipe',
+    recipeIngredient: ['1 cup flour'],
+    ...fields,
+  };
+  return `<html><head><script type="application/ld+json">${JSON.stringify(recipe)}</script></head><body></body></html>`;
+}
+
+/** Lines of the form "<n>. <text>" in extracted text. */
+function numberedSteps(text: string): string[] {
+  return text.split('\n').filter((line) => /^\d+\. /.test(line));
+}
 
 vi.mock('./geminiClient.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./geminiClient.js')>()),
@@ -166,6 +188,132 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       const result = extractRecipeText(html);
       expect(result.extractionMethod).toBe('JSON-LD');
       expect(result.extractedText).toContain('Recipe Name: Normal Sized Block');
+    });
+  });
+
+  // Trimmed copies of real pages (see __fixtures__/recipe-pages/SOURCES.md): real JSON-LD
+  // structure and ingredients, paraphrased step text.
+  describe('recipeInstructions from real recipe pages', () => {
+    it('keeps a flat HowToStep list (Allrecipes: top-level array, @type array)', () => {
+      const result = extractRecipeText(recipePage('allrecipes-howtostep-array.html'));
+
+      expect(result.extractionMethod).toBe('JSON-LD');
+      expect(result.extractedText).toContain('- 1 cup chopped walnuts');
+      expect(result.extractedText).toContain(
+        'Instructions:\n1. Set out the ingredients with the butter soft and the eggs at room temperature.'
+      );
+      expect(result.extractedText).toContain(
+        '9. Serve, or keep the cooled cookies in a sealed container.'
+      );
+      expect(numberedSteps(result.extractedText)).toHaveLength(9);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('keeps HowToSection groups in order with decoded section names (RecipeTin Eats: @graph)', () => {
+      const result = extractRecipeText(recipePage('recipetineats-howtosection-graph.html'));
+      const text = result.extractedText;
+
+      expect(numberedSteps(text)).toHaveLength(17);
+      expect(text).toContain(
+        'Chicken:\n1. Warm the milk, broth and stock powder in a saucepan, then add the chicken and thyme.'
+      );
+      expect(text).toContain('Chicken Pot Pie:\n4. Soften the garlic and onion in butter');
+      expect(text).toContain('Assembly & Baking:\n12. Partly thaw the pastry');
+      expect(text).not.toContain('&amp;');
+      expect(text).toContain('17. Serve straight away.');
+      // Each step repeats its text as `name`; it must appear once, not twice.
+      expect(text.split('Stir in the flour for a minute.')).toHaveLength(2);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('keeps a flat HowToStep list (BBC Good Food: single object)', () => {
+      const result = extractRecipeText(recipePage('bbcgoodfood-howtostep-object.html'));
+
+      expect(numberedSteps(result.extractedText)).toHaveLength(5);
+      expect(result.extractedText).toContain(
+        '1. Whisk the flour, eggs, milk, oil and a pinch of salt into a smooth batter.'
+      );
+      expect(result.warnings).toEqual([]);
+    });
+  });
+
+  // No fetched page used these shapes, so they are synthetic.
+  describe('recipeInstructions in other schema.org shapes', () => {
+    it('splits a single instructions string into numbered steps', () => {
+      const result = extractRecipeText(
+        recipeHtml({ recipeInstructions: 'Mix the batter.\n\nRest it.\nFry it.' })
+      );
+      expect(result.extractedText).toContain(
+        'Instructions:\n1. Mix the batter.\n2. Rest it.\n3. Fry it.'
+      );
+    });
+
+    it('keeps an array of plain strings', () => {
+      const result = extractRecipeText(
+        recipeHtml({ recipeInstructions: ['Mix the batter.', 'Fry it.'] })
+      );
+      expect(result.extractedText).toContain('Instructions:\n1. Mix the batter.\n2. Fry it.');
+    });
+
+    it('strips HTML markup and entities from step text', () => {
+      const result = extractRecipeText(
+        recipeHtml({
+          recipeInstructions: [
+            { '@type': 'HowToStep', text: '<p>Mix <b>well</b> &amp; rest.</p>' },
+          ],
+        })
+      );
+      expect(result.extractedText).toContain('1. Mix well & rest.');
+    });
+
+    it('keeps words apart across block tags and line breaks inside one step', () => {
+      const result = extractRecipeText(
+        recipeHtml({
+          recipeInstructions: [
+            {
+              '@type': 'HowToStep',
+              text: '<p>Mix</p><p>Rest</p><ul><li>One</li><li>Two</li></ul><div>Fry</div>it<br>now<br/>hot',
+            },
+          ],
+        })
+      );
+      expect(result.extractedText).toContain('1. Mix Rest One Two Fry it now hot');
+    });
+
+    it('adds no instructions block when the recipe has none', () => {
+      const result = extractRecipeText(recipeHtml({}));
+      expect(result.extractedText).not.toContain('Instructions:');
+      expect(result.warnings).toEqual([]);
+    });
+  });
+
+  describe('instruction caps never drop content silently', () => {
+    it('keeps the first 100 steps and says so when a page has more', () => {
+      const steps = Array.from({ length: 120 }, (_, i) => ({
+        '@type': 'HowToStep',
+        text: `Step number ${i + 1}.`,
+      }));
+      const result = extractRecipeText(recipeHtml({ recipeInstructions: steps }));
+
+      expect(numberedSteps(result.extractedText)).toHaveLength(100);
+      expect(result.extractedText).toContain('100. Step number 100.');
+      expect(result.extractedText).not.toContain('Step number 101.');
+      expect(result.warnings).toEqual([
+        'This page lists 120 instruction steps; only the first 100 were imported. Add the rest by hand.',
+      ]);
+    });
+
+    it('shortens a step longer than 2,000 characters and says which one', () => {
+      const result = extractRecipeText(
+        recipeHtml({ recipeInstructions: ['Short step.', `Long ${'x'.repeat(2500)}`] })
+      );
+
+      const longLine = result.extractedText.split('\n').find((line) => line.startsWith('2. '))!;
+      expect(longLine.length).toBeLessThanOrEqual('2. '.length + 2000);
+      expect(longLine.endsWith('…')).toBe(true);
+      expect(result.warnings).toEqual([
+        'Step 2 was longer than 2,000 characters and was shortened. Check it against the original page.',
+      ]);
     });
   });
 
@@ -518,6 +666,64 @@ describe('POST /api/recipes/import-url & Recipe Extractor Tests', () => {
       // CONFIRM ZERO database persistence occurred (Prisma count unchanged)
       const afterCount = await prisma.recipe.count();
       expect(afterCount).toBe(initialCount);
+    });
+
+    function servePage(html: string) {
+      vi.spyOn(dns.promises, 'lookup').mockResolvedValue([
+        { address: '93.184.216.34', family: 4 },
+      ] as unknown as dns.LookupAddress);
+      mockedFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
+        body: null,
+        text: async () => html,
+      } as Response);
+      return vi.mocked(geminiModule.parseRecipeTextWithGeminiTimeout).mockResolvedValue(
+        JSON.stringify({
+          name: 'Best Chocolate Chip Cookies',
+          baseServings: 48,
+          dietaryTags: [],
+          ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 3, unit: 'cup' }],
+          instructions: [{ instruction: 'Bake the cookies.' }],
+        })
+      );
+    }
+
+    it("sends a real page's instructions to Gemini, not just its ingredients", async () => {
+      const geminiSpy = servePage(recipePage('allrecipes-howtostep-array.html'));
+
+      const res = await agent
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/cookies' });
+
+      expect(res.status).toBe(200);
+      const sentText = geminiSpy.mock.calls[0][0];
+      expect(sentText).toContain('Instructions:');
+      expect(sentText).toContain('5. Mix in the flour until no dry patches are left');
+      expect(res.body.instructions).toHaveLength(1);
+      expect(res.body.warnings).toEqual([]);
+    });
+
+    it('returns a visible warning in the draft when the page had more steps than the cap', async () => {
+      const steps = Array.from({ length: 120 }, (_, i) => `Step number ${i + 1}.`);
+      servePage(
+        `<html><head><script type="application/ld+json">${JSON.stringify({
+          '@type': 'Recipe',
+          name: 'Very Long Recipe',
+          recipeIngredient: ['1 cup flour'],
+          recipeInstructions: steps,
+        })}</script></head><body></body></html>`
+      );
+
+      const res = await agent
+        .post('/api/recipes/import-url')
+        .send({ url: 'http://public-recipe.com/long' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.warnings).toEqual([
+        'This page lists 120 instruction steps; only the first 100 were imported. Add the rest by hand.',
+      ]);
     });
 
     it('returns 422 when mocked Gemini response contains invalid domain unit (e.g. "pinch")', async () => {

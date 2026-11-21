@@ -2113,6 +2113,45 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
   });
 
   describe('AI Recipe URL Import UI Tests', () => {
+    it('shows the server warning when a URL import had to cap the page instructions', async () => {
+      const warning =
+        'This page lists 120 instruction steps; only the first 100 were imported. Add the rest by hand.';
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+        if (url.toString().includes('/api/recipes/import-url') && options?.method === 'POST') {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              name: 'Very Long Recipe',
+              baseServings: 4,
+              dietaryTags: [],
+              ingredients: [
+                { ingredientId: 'flour', displayName: 'Flour', amount: 1, unit: 'cup' },
+              ],
+              instructions: [],
+              warnings: [warning],
+            }),
+          } as Response;
+        }
+        if (url.toString().includes('/api/recipes')) {
+          return recipesGetResponse(url.toString(), []);
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(<App initialUser={TEST_USER} />);
+      fireEvent.click(screen.getByRole('button', { name: /paste recipe text/i }));
+      fireEvent.click(screen.getByRole('button', { name: /url link/i }));
+      fireEvent.change(screen.getByLabelText(/enter recipe webpage url below/i), {
+        target: { value: 'https://example.com/long' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /import from url/i }));
+
+      expect(await screen.findByDisplayValue('Very Long Recipe')).toBeInTheDocument();
+      expect(screen.getByText(/imported via ai/i)).toHaveTextContent(warning);
+    });
+
     it('submits URL to import UI (POST /api/recipes/import-url) and pre-fills form fields without auto-persisting', async () => {
       let importUrlCalled = false;
       let capturedUrl = '';

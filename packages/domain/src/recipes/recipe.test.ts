@@ -191,14 +191,25 @@ describe('Recipe Domain Model & Scaling', () => {
       expect(scaled.ingredients[2].quantity.amount).toBe(6); // 3 egg * 2
     });
 
-    it('rejects non-integer or non-positive targetServings (zero, negative, fractional, NaN, Infinity)', () => {
+    it('rejects non-positive or non-finite targetServings (zero, negative, NaN, Infinity, non-number)', () => {
       const recipe = new Recipe('r1', 'Pancakes', 4, createValidIngredients());
 
       expect(() => scaleRecipe(recipe, 0)).toThrow(InvalidRecipeError);
       expect(() => scaleRecipe(recipe, -2)).toThrow(InvalidRecipeError);
-      expect(() => scaleRecipe(recipe, 2.5)).toThrow(InvalidRecipeError);
       expect(() => scaleRecipe(recipe, NaN)).toThrow(InvalidRecipeError);
       expect(() => scaleRecipe(recipe, Infinity)).toThrow(InvalidRecipeError);
+      // @ts-expect-error testing invalid input type
+      expect(() => scaleRecipe(recipe, '4')).toThrow(InvalidRecipeError);
+    });
+
+    it('scales to a fractional serving count exactly (an event course split gives 4.5)', () => {
+      const recipe = new Recipe('r1', 'Pancakes', 4, createValidIngredients());
+      const scaled = scaleRecipe(recipe, 4.5);
+
+      expect(scaled.targetServings).toBe(4.5);
+      expect(scaled.scaleFactor).toBe(1.125);
+      expect(scaled.ingredients[0].quantity.amount).toBe(2.25); // 2 cup * 1.125
+      expect(scaled.ingredients[1].quantity.amount).toBe(112.5); // 100 g * 1.125
     });
 
     it('does NOT mutate the original Recipe or its ingredient lines', () => {

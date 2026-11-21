@@ -479,6 +479,24 @@ describe('CookOut AI API Endpoints', () => {
       expect(resNeg.status).toBe(400);
       expect(resNeg.body).toHaveProperty('error', 'InvalidRecipeError');
     });
+
+    // The domain accepts fractional servings for event course splits (4.5 of a dish), but a
+    // person building a list by hand types whole servings, so this route keeps requiring them.
+    it('returns 400 when targetServings is not a whole number', async () => {
+      const r1Res = await agent.post('/api/recipes').send({
+        name: 'Pancakes',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' }],
+      });
+
+      for (const targetServings of [2.5, '4']) {
+        const res = await agent
+          .post('/api/shopping-list')
+          .send([{ recipeId: r1Res.body.id, targetServings }]);
+        expect(res.status).toBe(400);
+        expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
+      }
+    });
   });
 
   describe('PUT /api/recipes/:id & DELETE /api/recipes/:id', () => {
@@ -1258,6 +1276,22 @@ describe('CookOut AI API Endpoints', () => {
 
       expect(res.status).toBe(404);
       expect(res.body).toHaveProperty('error', 'NotFound');
+    });
+
+    it('POST /api/shopping-lists rejects a targetServings that is not a whole number', async () => {
+      const recipeRes = await agent.post('/api/recipes').send({
+        name: 'Pancakes',
+        baseServings: 4,
+        ingredients: [{ ingredientId: 'flour', displayName: 'Flour', amount: 100, unit: 'g' }],
+      });
+
+      const res = await agent.post('/api/shopping-lists').send({
+        name: 'List',
+        sourceItems: [{ recipeId: recipeRes.body.id, targetServings: 2.5 }],
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', 'InvalidRecipeError');
     });
 
     it('GET /api/shopping-lists returns all lists with items included', async () => {

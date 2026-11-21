@@ -34,6 +34,7 @@ import {
   toEventSummaryJSON,
   serializeEventPlan,
   buildCookSchedule,
+  asUncoursedDishes,
   type CreateEventInput,
 } from './eventMapper.js';
 import {
@@ -779,6 +780,20 @@ app.delete('/api/recipes/:id', async (req: Request, res: Response, next: NextFun
   }
 });
 
+/**
+ * Servings a person typed into the shopping-list builder. scaleRecipe() accepts fractions, since
+ * an event course split can ask for 4.5 of a dish, but a list built by hand is whole portions, so
+ * both shopping-list routes keep the whole-number rule the domain used to enforce for them.
+ */
+function requireWholeTargetServings(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new InvalidRecipeError(
+      `Invalid targetServings: ${String(value)}. targetServings must be a positive whole number.`
+    );
+  }
+  return value;
+}
+
 // POST /api/shopping-list
 app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -795,7 +810,7 @@ app.post('/api/shopping-list', async (req: Request, res: Response, next: NextFun
       }
 
       const recipeId = String(entry.recipeId);
-      const targetServings = entry.targetServings;
+      const targetServings = requireWholeTargetServings(entry.targetServings);
 
       const prismaRecipe = await prisma.recipe.findFirst({
         where: { id: recipeId, userId: req.user!.id },
@@ -1039,7 +1054,7 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
     }
 
     // 4. Call planEventShoppingList() from @cookout-ai/domain
-    const eventPlan = planEventShoppingList(recipes, guestGroup);
+    const eventPlan = planEventShoppingList({ dishes: asUncoursedDishes(recipes), guestGroup });
 
     // 5. Serialize EventPlan to JSON output
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
@@ -1114,7 +1129,10 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
 
     const reconstructedEvent = toDomainEvent(createdPrismaEvent);
 
-    const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
+    const eventPlan = planEventShoppingList({
+      dishes: asUncoursedDishes(recipes),
+      guestGroup: reconstructedEvent.guestGroup,
+    });
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     const pantryStock = await getPantryStockMap(req.user!.id);
 
@@ -1167,7 +1185,10 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
       req.user!.id
     );
 
-    const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
+    const eventPlan = planEventShoppingList({
+      dishes: asUncoursedDishes(recipes),
+      guestGroup: domainEvent.guestGroup,
+    });
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     const pantryStock = await getPantryStockMap(req.user!.id);
 
@@ -1218,7 +1239,10 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
 
     const reconstructedEvent = toDomainEvent(updatedPrismaEvent);
 
-    const eventPlan = planEventShoppingList(recipes, reconstructedEvent.guestGroup);
+    const eventPlan = planEventShoppingList({
+      dishes: asUncoursedDishes(recipes),
+      guestGroup: reconstructedEvent.guestGroup,
+    });
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
     const pantryStock = await getPantryStockMap(req.user!.id);
 
@@ -1283,7 +1307,7 @@ app.post('/api/shopping-lists', async (req: Request, res: Response, next: NextFu
       }
 
       const recipeId = String(entry.recipeId);
-      const targetServings = entry.targetServings;
+      const targetServings = requireWholeTargetServings(entry.targetServings);
 
       const prismaRecipe = await prisma.recipe.findFirst({
         where: { id: recipeId, userId: req.user!.id },
@@ -1368,7 +1392,10 @@ app.put(
         }
       }
 
-      const eventPlan = planEventShoppingList(recipes, domainEvent.guestGroup);
+      const eventPlan = planEventShoppingList({
+        dishes: asUncoursedDishes(recipes),
+        guestGroup: domainEvent.guestGroup,
+      });
       const pantryStock = await getPantryStockMap(req.user!.id);
       const afterPantry = subtractPantryStock(eventPlan.shoppingList, pantryStock);
       const practicallyRounded = applyPracticalRounding(afterPantry);

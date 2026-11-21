@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { GuestGroup } from './guestGroup.js';
 import { computeEligibleServings } from './computeEligibleServings.js';
 import { planEventShoppingList } from './planEventShoppingList.js';
+import { Course } from './course.js';
 import { InvalidGuestGroupError } from '../errors.js';
 import { Recipe } from '../recipes/recipe.js';
 import { IngredientLine } from '../recipes/ingredientLine.js';
 import { Quantity } from '../units/quantity.js';
 import { DietaryTag } from '../recipes/types.js';
-import type { IncludedRecipePlan } from './types.js';
+import type { EventPlan, IncludedRecipePlan, PlanDish } from './types.js';
 
 describe('Events Domain Module', () => {
   describe('GuestGroup Value Object', () => {
@@ -121,7 +122,10 @@ describe('Events Domain Module', () => {
         new IngredientLine('beef', 'Steak', new Quantity(2, 'lb')),
       ]);
 
-      const plan = planEventShoppingList([meatRecipe], allVegGroup);
+      const plan = planEventShoppingList({
+        dishes: [{ recipe: meatRecipe }],
+        guestGroup: allVegGroup,
+      });
 
       expect(plan.includedRecipes).toHaveLength(0);
       expect(plan.excludedRecipes).toHaveLength(1);
@@ -154,7 +158,10 @@ describe('Events Domain Module', () => {
         [DietaryTag.Vegan]
       );
 
-      const plan = planEventShoppingList([meatMain, vegSide, veganDessert], mixedGroup);
+      const plan = planEventShoppingList({
+        dishes: [meatMain, vegSide, veganDessert].map((recipe) => ({ recipe })),
+        guestGroup: mixedGroup,
+      });
 
       expect(plan.includedRecipes).toHaveLength(3);
       expect(plan.excludedRecipes).toHaveLength(0);
@@ -172,6 +179,17 @@ describe('Events Domain Module', () => {
       expect(meatPlan?.eligibleServings).toBe(9); // 9 omnivores
       expect(vegPlan?.eligibleServings).toBe(11); // 12 total - 1 vegan
       expect(veganPlan?.eligibleServings).toBe(12); // 12 total guests
+
+      // No courses assigned: every dish is its own course, so servings are exactly the
+      // eligible-guest numbers from before courses existed, and nothing is split or warned about.
+      for (const item of plan.includedRecipes) {
+        expect(item.servings).toBe(item.eligibleServings);
+        expect(item.scaledRecipe.targetServings).toBe(item.eligibleServings);
+        expect(item.course).toBeNull();
+        expect(item.servingsWereOverridden).toBe(false);
+      }
+      expect(plan.warnings).toEqual([]);
+      expect(plan.courseSummaries).toEqual([]);
     });
 
     it('correctly consolidates ingredients across differently-scaled recipes in an event plan', () => {
@@ -192,7 +210,10 @@ describe('Events Domain Module', () => {
         [DietaryTag.Vegan]
       );
 
-      const plan = planEventShoppingList([r1, r2], group);
+      const plan = planEventShoppingList({
+        dishes: [r1, r2].map((recipe) => ({ recipe })),
+        guestGroup: group,
+      });
 
       expect(plan.includedRecipes).toHaveLength(2);
       expect(plan.shoppingList).toHaveLength(1);
@@ -215,12 +236,128 @@ describe('Events Domain Module', () => {
         [DietaryTag.Vegan]
       );
 
-      const recipesInput = [recipe];
-      const plan = planEventShoppingList(recipesInput, group);
+      const dishesInput = [{ recipe }];
+      const plan = planEventShoppingList({ dishes: dishesInput, guestGroup: group });
 
-      expect(recipesInput[0]).toBe(recipe);
+      expect(dishesInput).toEqual([{ recipe }]);
+      expect(dishesInput[0].recipe).toBe(recipe);
       expect(plan.guestGroup).toBe(group);
       expect(Object.isFrozen(plan)).toBe(true);
+    });
+
+    describe('with courses', () => {
+      // 12 guests, 3 vegetarian of whom 1 is vegan: 9 omnivores, 2 vegetarians, 1 vegan.
+      const twelve = () => new GuestGroup({ totalGuests: 12, vegetarianCount: 3, veganCount: 1 });
+      const pork = new Recipe('r-pork', 'Pulled Pork', 4, [
+        new IngredientLine('pork', 'Pork Shoulder', new Quantity(1, 'kg')),
+      ]);
+      const tagine = new Recipe(
+        'r-tagine',
+        'Chickpea Tagine',
+        4,
+        [new IngredientLine('chickpeas', 'Chickpeas', new Quantity(400, 'g'))],
+        [DietaryTag.Vegan]
+      );
+      const potatoes = new Recipe(
+        'r-potatoes',
+        'Scalloped Potatoes',
+        6,
+        [new IngredientLine('potato', 'Potatoes', new Quantity(1200, 'g'))],
+        [DietaryTag.Vegetarian]
+      );
+      const sorbet = new Recipe(
+        'r-sorbet',
+        'Coconut Sorbet',
+        6,
+        [new IngredientLine('coconut-milk', 'Coconut Milk', new Quantity(800, 'ml'))],
+        [DietaryTag.Vegan]
+      );
+      const menu = (): PlanDish[] => [
+        { recipe: pork, course: Course.Main },
+        { recipe: tagine, course: Course.Main },
+        { recipe: potatoes, course: Course.Side },
+        { recipe: sorbet, course: Course.Dessert },
+      ];
+      const byName = (plan: EventPlan, name: string) =>
+        plan.includedRecipes.find((r) => r.scaledRecipe.sourceRecipeName === name)!;
+
+      it('scales each dish to its share of its course in the 12-guest example', () => {
+        const plan = planEventShoppingList({ dishes: menu(), guestGroup: twelve() });
+
+        expect(
+          plan.includedRecipes.map((r) => [r.scaledRecipe.sourceRecipeName, r.servings])
+        ).toEqual([
+          ['Pulled Pork', 4.5],
+          ['Chickpea Tagine', 7.5],
+          ['Scalloped Potatoes', 11],
+          ['Coconut Sorbet', 12],
+        ]);
+        // eligibleServings still answers "how many guests could eat this".
+        expect(plan.includedRecipes.map((r) => r.eligibleServings)).toEqual([9, 12, 11, 12]);
+        expect(plan.includedRecipes.map((r) => r.course)).toEqual([
+          Course.Main,
+          Course.Main,
+          Course.Side,
+          Course.Dessert,
+        ]);
+
+        // The shopping list follows the split, not the eligible count: 4.5 of 4 base servings.
+        expect(byName(plan, 'Pulled Pork').scaledRecipe.targetServings).toBe(4.5);
+        const porkLine = plan.shoppingList.find((i) => i.ingredientId === 'pork')!;
+        expect(porkLine.quantity.amount).toBeCloseTo(1125, 9); // 1000 g * 4.5 / 4
+      });
+
+      it('reports the shortfall warning and each course total', () => {
+        const plan = planEventShoppingList({ dishes: menu(), guestGroup: twelve() });
+
+        expect(plan.warnings.map((w) => w.message)).toEqual(['1 vegan guest has no Side']);
+        expect(plan.courseSummaries).toEqual([
+          { course: Course.Main, servings: 12, guestCount: 12, coveredGuestCount: 12 },
+          { course: Course.Side, servings: 11, guestCount: 12, coveredGuestCount: 11 },
+          { course: Course.Dessert, servings: 12, guestCount: 12, coveredGuestCount: 12 },
+        ]);
+      });
+
+      it('scales an overridden dish to the override and flags it', () => {
+        const dishes = menu();
+        dishes[0] = { ...dishes[0], servingsOverride: 6 };
+        const plan = planEventShoppingList({ dishes, guestGroup: twelve() });
+
+        const porkPlan = byName(plan, 'Pulled Pork');
+        expect(porkPlan.servings).toBe(6);
+        expect(porkPlan.servingsWereOverridden).toBe(true);
+        expect(porkPlan.scaledRecipe.targetServings).toBe(6);
+        expect(byName(plan, 'Chickpea Tagine').servings).toBe(7.5);
+        expect(plan.courseSummaries[0].servings).toBe(13.5);
+      });
+
+      it('includes a dish nobody can eat when the host overrides its servings', () => {
+        const allVegetarian = new GuestGroup({ totalGuests: 4, vegetarianCount: 4 });
+        const plan = planEventShoppingList({
+          dishes: [{ recipe: pork, course: Course.Main, servingsOverride: 2 }],
+          guestGroup: allVegetarian,
+        });
+
+        expect(plan.excludedRecipes).toHaveLength(0);
+        expect(plan.includedRecipes[0].servings).toBe(2);
+        expect(plan.includedRecipes[0].eligibleServings).toBe(0);
+      });
+
+      it('still excludes a dish nobody can eat when it has no override', () => {
+        const allVegetarian = new GuestGroup({ totalGuests: 4, vegetarianCount: 4 });
+        const plan = planEventShoppingList({
+          dishes: [
+            { recipe: pork, course: Course.Main },
+            { recipe: potatoes, course: Course.Main },
+          ],
+          guestGroup: allVegetarian,
+        });
+
+        expect(plan.excludedRecipes.map((e) => e.recipe.name)).toEqual(['Pulled Pork']);
+        expect(
+          plan.includedRecipes.map((r) => [r.scaledRecipe.sourceRecipeName, r.servings])
+        ).toEqual([['Scalloped Potatoes', 4]]);
+      });
     });
   });
 });

@@ -1,46 +1,60 @@
 import { describe, expect, it } from 'vitest';
-import { Event, GuestGroup, InvalidEventError, MAX_RECIPES_PER_EVENT } from '../index.js';
+import {
+  Course,
+  Event,
+  GuestGroup,
+  InvalidEventError,
+  MAX_RECIPES_PER_EVENT,
+  type EventDishInput,
+} from '../index.js';
 
 describe('Event Construction & Validation', () => {
   const validGuestGroup = () => new GuestGroup({ totalGuests: 10, vegetarianCount: 2 });
+  const dishesFor = (...recipeIds: string[]): EventDishInput[] =>
+    recipeIds.map((recipeId) => ({ recipeId }));
 
-  it('creates a valid Event with recipeIds', () => {
+  it('creates a valid Event with dishes, deriving recipeIds from them', () => {
     const event = new Event({
       id: 'event-1',
       name: 'Thanksgiving 2026',
       guestGroup: validGuestGroup(),
-      recipeIds: ['r1', 'r2'],
+      dishes: [{ recipeId: 'r1' }, { recipeId: 'r2', course: Course.Main, servingsOverride: 6 }],
     });
 
     expect(event.id).toBe('event-1');
     expect(event.name).toBe('Thanksgiving 2026');
     expect(event.guestGroup.totalGuests).toBe(10);
     expect(event.recipeIds).toEqual(['r1', 'r2']);
+    expect(event.dishes).toEqual([
+      { recipeId: 'r1', course: null, servingsOverride: null },
+      { recipeId: 'r2', course: Course.Main, servingsOverride: 6 },
+    ]);
   });
 
-  it('creates a valid Event with zero recipeIds (menu filled in later)', () => {
+  it('creates a valid Event with no dishes (menu filled in later)', () => {
     const event = new Event({
       id: 'event-1',
       name: 'Someday BBQ',
       guestGroup: validGuestGroup(),
-      recipeIds: [],
+      dishes: [],
     });
 
+    expect(event.dishes).toEqual([]);
     expect(event.recipeIds).toEqual([]);
   });
 
   it('rejects empty or whitespace-only id', () => {
     expect(
-      () => new Event({ id: '', name: 'Party', guestGroup: validGuestGroup(), recipeIds: [] })
+      () => new Event({ id: '', name: 'Party', guestGroup: validGuestGroup(), dishes: [] })
     ).toThrow(InvalidEventError);
     expect(
-      () => new Event({ id: '   ', name: 'Party', guestGroup: validGuestGroup(), recipeIds: [] })
+      () => new Event({ id: '   ', name: 'Party', guestGroup: validGuestGroup(), dishes: [] })
     ).toThrow(InvalidEventError);
   });
 
   it('rejects empty or whitespace-only name', () => {
     expect(
-      () => new Event({ id: 'event-1', name: '', guestGroup: validGuestGroup(), recipeIds: [] })
+      () => new Event({ id: 'event-1', name: '', guestGroup: validGuestGroup(), dishes: [] })
     ).toThrow(InvalidEventError);
   });
 
@@ -52,12 +66,12 @@ describe('Event Construction & Validation', () => {
           name: 'Party',
           // @ts-expect-error testing invalid input type
           guestGroup: { totalGuests: 10 },
-          recipeIds: [],
+          dishes: [],
         })
     ).toThrow(InvalidEventError);
   });
 
-  it('rejects a non-array recipeIds', () => {
+  it('rejects a non-array dishes', () => {
     expect(
       () =>
         new Event({
@@ -65,32 +79,59 @@ describe('Event Construction & Validation', () => {
           name: 'Party',
           guestGroup: validGuestGroup(),
           // @ts-expect-error testing invalid input type
-          recipeIds: 'not-an-array',
+          dishes: 'not-an-array',
         })
     ).toThrow(InvalidEventError);
   });
 
-  it('rejects recipeIds containing an empty string', () => {
+  it('rejects a dish whose recipeId is empty', () => {
     expect(
       () =>
         new Event({
           id: 'event-1',
           name: 'Party',
           guestGroup: validGuestGroup(),
-          recipeIds: ['r1', ''],
+          dishes: dishesFor('r1', ''),
         })
     ).toThrow(InvalidEventError);
   });
 
-  it('is frozen and rejects mutation of recipeIds', () => {
+  it('rejects a dish with an unknown course', () => {
+    expect(
+      () =>
+        new Event({
+          id: 'event-1',
+          name: 'Party',
+          guestGroup: validGuestGroup(),
+          // @ts-expect-error testing invalid input type
+          dishes: [{ recipeId: 'r1', course: 'Starter' }],
+        })
+    ).toThrow(InvalidEventError);
+  });
+
+  it.each([0, -1, 2.5, NaN, Infinity])('rejects a servings override of %s', (bad) => {
+    expect(
+      () =>
+        new Event({
+          id: 'event-1',
+          name: 'Party',
+          guestGroup: validGuestGroup(),
+          dishes: [{ recipeId: 'r1', servingsOverride: bad }],
+        })
+    ).toThrow(InvalidEventError);
+  });
+
+  it('is frozen, along with its dishes and derived recipeIds', () => {
     const event = new Event({
       id: 'event-1',
       name: 'Party',
       guestGroup: validGuestGroup(),
-      recipeIds: ['r1'],
+      dishes: dishesFor('r1'),
     });
 
     expect(Object.isFrozen(event)).toBe(true);
+    expect(Object.isFrozen(event.dishes)).toBe(true);
+    expect(Object.isFrozen(event.dishes[0])).toBe(true);
     expect(Object.isFrozen(event.recipeIds)).toBe(true);
     expect(() => {
       // @ts-expect-error mutating readonly array for test
@@ -98,37 +139,53 @@ describe('Event Construction & Validation', () => {
     }).toThrow();
   });
 
-  it('does not mutate the input recipeIds array', () => {
-    const recipeIds = ['r1', 'r2'];
+  it('does not mutate or keep a reference to the input dishes', () => {
+    const dishes = dishesFor('r1', 'r2');
     const event = new Event({
       id: 'event-1',
       name: 'Party',
       guestGroup: validGuestGroup(),
-      recipeIds,
+      dishes,
     });
 
-    recipeIds.push('r3');
+    dishes.push({ recipeId: 'r3' });
+    dishes[0].course = Course.Side;
     expect(event.recipeIds).toEqual(['r1', 'r2']);
+    expect(event.dishes[0].course).toBeNull();
   });
 
-  it('collapses duplicate recipeIds, keeping first-seen order', () => {
+  it('collapses duplicate recipes, keeping first-seen order and the first dish settings', () => {
     const event = new Event({
       id: 'event-1',
       name: 'Party',
       guestGroup: validGuestGroup(),
-      recipeIds: ['r2', 'r1', 'r2', 'r3', 'r1'],
+      dishes: [
+        { recipeId: 'r2', course: Course.Main },
+        { recipeId: 'r1' },
+        { recipeId: 'r2', course: Course.Side, servingsOverride: 9 },
+        { recipeId: 'r3' },
+        { recipeId: 'r1', course: Course.Dessert },
+      ],
     });
 
     expect(event.recipeIds).toEqual(['r2', 'r1', 'r3']);
+    expect(event.dishes[0]).toEqual({
+      recipeId: 'r2',
+      course: Course.Main,
+      servingsOverride: null,
+    });
+    expect(event.dishes[1].course).toBeNull();
   });
 
-  it('does not cap recipeIds itself, so events stored before MAX_RECIPES_PER_EVENT still load', () => {
-    const recipeIds = Array.from({ length: MAX_RECIPES_PER_EVENT + 1 }, (_, i) => `r${i}`);
+  it('does not cap dishes itself, so events stored before MAX_RECIPES_PER_EVENT still load', () => {
+    const dishes = dishesFor(
+      ...Array.from({ length: MAX_RECIPES_PER_EVENT + 1 }, (_, i) => `r${i}`)
+    );
     const event = new Event({
       id: 'event-1',
       name: 'Party',
       guestGroup: validGuestGroup(),
-      recipeIds,
+      dishes,
     });
 
     expect(event.recipeIds).toHaveLength(MAX_RECIPES_PER_EVENT + 1);
@@ -140,7 +197,7 @@ describe('Event Construction & Validation', () => {
         id: 'event-1',
         name: 'Cookout',
         guestGroup: validGuestGroup(),
-        recipeIds: ['r1'],
+        dishes: dishesFor('r1'),
         serveTimeMinutes,
       });
 

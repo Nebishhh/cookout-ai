@@ -12,6 +12,7 @@ import type {
   CookSchedule,
   EventPlan,
   GroceryCategory,
+  PlanDish,
   Quantity,
   Recipe,
 } from '@cookout-ai/domain';
@@ -50,11 +51,15 @@ export function validateAndCreateDomainEvent(input: CreateEventInput, overrideId
   const eventId = overrideId || crypto.randomUUID();
   const guestGroup = new GuestGroup(input.guestGroup);
 
+  if (!Array.isArray(input.recipeIds)) {
+    throw new InvalidEventError('recipeIds must be an array.');
+  }
+
   const event = new Event({
     id: eventId,
     name: input.name,
     guestGroup,
-    recipeIds: input.recipeIds,
+    dishes: input.recipeIds.map((recipeId) => ({ recipeId })),
     serveTimeMinutes: input.serveTimeMinutes,
   });
 
@@ -93,9 +98,18 @@ export function toDomainEvent(prismaEvent: PrismaEvent): Event {
     id: prismaEvent.id,
     name: prismaEvent.name,
     guestGroup,
-    recipeIds,
+    dishes: recipeIds.map((recipeId) => ({ recipeId })),
     serveTimeMinutes: prismaEvent.serveTimeMinutes,
   });
+}
+
+/**
+ * Recipes as the planner takes them, with no course or servings override. Events have nowhere to
+ * store a course yet, so every dish is its own standalone course — which plans exactly as events
+ * did before courses existed.
+ */
+export function asUncoursedDishes(recipes: readonly Recipe[]): PlanDish[] {
+  return recipes.map((recipe) => ({ recipe }));
 }
 
 /**

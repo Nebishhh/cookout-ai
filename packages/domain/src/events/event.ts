@@ -1,6 +1,8 @@
 import { InvalidEventError } from '../errors.js';
 import { GuestGroup } from './guestGroup.js';
 import { MINUTES_PER_DAY } from './cookSchedule.js';
+import { COURSE_ORDER, isCourse, type Course } from './course.js';
+import { normalizeServingsOverride } from './servingsOverride.js';
 
 /**
  * Most distinct recipes one event may reference. The planner picks recipes with one checkbox
@@ -10,23 +12,42 @@ import { MINUTES_PER_DAY } from './cookSchedule.js';
  */
 export const MAX_RECIPES_PER_EVENT = 50;
 
+/** A dish as supplied to the Event constructor; course and override may be omitted. */
+export interface EventDishInput {
+  recipeId: string;
+  course?: Course | null;
+  servingsOverride?: number | null;
+}
+
+/**
+ * A dish's place in an event: which recipe, which course (null = its own standalone course), and
+ * an optional servings override. Stores references only — the Recipe itself is resolved at read
+ * time, so an id that no longer resolves is tolerated rather than enforced here.
+ */
+export interface EventDish {
+  readonly recipeId: string;
+  readonly course: Course | null;
+  readonly servingsOverride: number | null;
+}
+
 export interface EventInput {
   id: string;
   name: string;
   guestGroup: GuestGroup;
-  recipeIds: string[];
+  dishes: EventDishInput[];
   serveTimeMinutes?: number | null;
 }
 
 /**
  * Open Question / Scope Notes:
- * - "Recompute live": Event stores only its inputs (name, guestGroup, recipeIds,
- *   serveTimeMinutes). The plan (included/excluded recipes, eligible servings, shopping list,
- *   cook schedule) is never stored here — it's recomputed fresh from current recipe data every
+ * - "Recompute live": Event stores only its inputs (name, guestGroup, dishes,
+ *   serveTimeMinutes). The plan (included/excluded recipes, servings, shopping list, cook
+ *   schedule) is never stored here — it's recomputed fresh from current recipe data every
  *   time the event is read, via planEventShoppingList() and computeCookSchedule(). Editing a
  *   recipe later is reflected retroactively in every event that references it, and a recipeId
  *   that no longer resolves to a Recipe is tolerated (dropped at the persistence boundary, not
  *   a domain-layer concern).
+ * - `recipeIds` is derived from `dishes` (same order) for callers that only need the references.
  * - `serveTimeMinutes` is **wall-clock minutes from midnight (0..1439), deliberately not a
  *   Date/DateTime**. "Serve at 6pm" is a wall-clock intent, not an instant on a timeline —
  *   storing an instant would drag timezone conversion into every read for no benefit, since
@@ -39,6 +60,7 @@ export class Event {
   readonly id: string;
   readonly name: string;
   readonly guestGroup: GuestGroup;
+  readonly dishes: readonly EventDish[];
   readonly recipeIds: readonly string[];
   readonly serveTimeMinutes: number | null;
 
@@ -59,16 +81,35 @@ export class Event {
       throw new InvalidEventError('Invalid guestGroup: Must be a valid GuestGroup instance.');
     }
 
-    if (!Array.isArray(input.recipeIds)) {
-      throw new InvalidEventError('recipeIds must be an array.');
+    if (!Array.isArray(input.dishes)) {
+      throw new InvalidEventError('dishes must be an array.');
     }
 
-    for (const recipeId of input.recipeIds) {
+    const dishes: EventDish[] = [];
+    const seen = new Set<string>();
+    for (const dish of input.dishes) {
+      const recipeId = dish && typeof dish === 'object' ? dish.recipeId : undefined;
       if (typeof recipeId !== 'string' || recipeId.trim().length === 0) {
         throw new InvalidEventError(
-          `Invalid recipeId in recipeIds: "${recipeId}". Every recipeId must be a non-empty string.`
+          `Invalid recipeId in dishes: "${String(recipeId)}". Every dish needs a non-empty recipeId.`
         );
       }
+
+      const course = dish.course ?? null;
+      if (course !== null && !isCourse(course)) {
+        throw new InvalidEventError(
+          `Invalid course for recipe "${recipeId}": "${String(course)}". Must be one of ${COURSE_ORDER.join(', ')}, or null.`
+        );
+      }
+      const servingsOverride = normalizeServingsOverride(
+        dish.servingsOverride,
+        `recipe "${recipeId}"`
+      );
+
+      // An event references each recipe at most once; duplicates collapse, first-seen wins.
+      if (seen.has(recipeId)) continue;
+      seen.add(recipeId);
+      dishes.push(Object.freeze({ recipeId, course, servingsOverride }));
     }
 
     const serveTimeMinutes = input.serveTimeMinutes ?? null;
@@ -88,8 +129,8 @@ export class Event {
     this.id = input.id;
     this.name = input.name;
     this.guestGroup = input.guestGroup;
-    // An event references each recipe at most once; duplicates collapse, first-seen order kept.
-    this.recipeIds = Object.freeze([...new Set(input.recipeIds)]);
+    this.dishes = Object.freeze(dishes);
+    this.recipeIds = Object.freeze(dishes.map((dish) => dish.recipeId));
     this.serveTimeMinutes = serveTimeMinutes;
 
     Object.freeze(this);

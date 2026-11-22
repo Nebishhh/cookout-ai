@@ -127,6 +127,13 @@ docker compose logs -f app     # watch the prisma migrate deploy + server startu
 
 ## Updating after a code change
 
+**Back up the database first.** Starting the new image runs `prisma migrate deploy`, and a
+migration that fails partway can't be resolved in place (see "Schema changes" below), so this
+backup is what you'd restore. Use the existing commands: on a Linux host, the
+`docker compose stop app`, `docker volume inspect` and `cp` lines under "1. Back up, then check";
+on Docker Desktop for Windows, the `New-Item` and `cp` lines of the first block under "Docker
+Desktop for Windows". Then:
+
 ```bash
 git pull
 docker compose up -d --build

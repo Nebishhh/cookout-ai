@@ -37,6 +37,11 @@ test.describe('Event Planner at phone width (390px)', () => {
 
     await page.getByRole('checkbox', { name: `Select recipe ${recipeName}` }).tap();
     const course = page.getByLabel(`Course for ${recipeName}`);
+    // The picker appears below the checkbox once it's checked, so where it lands depends on where
+    // the tap left the page. In CI the pinned tab row covered the checkbox, Playwright retried
+    // with the card at the very bottom of the screen, and the new picker started off-screen.
+    // Scroll it into view first, then check it can be fully on screen.
+    await course.scrollIntoViewIfNeeded();
     await expect(course).toBeInViewport();
     await course.selectOption('Main');
     const override = page.getByLabel(`Servings override for ${recipeName}`);

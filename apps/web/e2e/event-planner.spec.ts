@@ -170,10 +170,14 @@ test.describe('Event Planner E2E Tests', () => {
 
     // Deliberately no digits at all, so parseGuestGroupText() returns null and the route falls
     // back to the fixture-intercepted Gemini call (USE_GEMINI_FIXTURES=true for this e2e run).
-    await page
-      .locator('#input-guest-description')
-      .fill('a large family reunion, mostly meat eaters');
-    await page.getByRole('button', { name: /fill in/i }).click();
+    const description = page.locator('#input-guest-description');
+    const fillInButton = page.getByRole('button', { name: /fill in/i });
+    await description.fill('a large family reunion, mostly meat eaters');
+    // "Fill in" stays disabled until the description reaches React state; check both first so a
+    // lost fill fails here with a clear message instead of as a click timeout.
+    await expect(description).toHaveValue('a large family reunion, mostly meat eaters');
+    await expect(fillInButton).toBeEnabled();
+    await fillInButton.click();
 
     // GUEST_GROUP_FIXTURE: { totalGuests: 14, vegetarianCount: 5, veganCount: 2 }
     await expect(page.locator('#input-total-guests')).toHaveValue('14');

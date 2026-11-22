@@ -15,10 +15,15 @@ test.describe('AI Import E2E Tests (Fixture Interception)', () => {
     await page.goto('/');
     await page.getByRole('button', { name: /paste recipe text/i }).click();
 
-    await page
-      .getByLabel(/paste unformatted recipe text below/i)
-      .fill('Granola recipe with oats and honey');
-    await page.getByRole('button', { name: /import with ai/i }).click();
+    const textInput = page.getByLabel(/paste unformatted recipe text below/i);
+    const importButton = page.getByRole('button', { name: /import with ai/i });
+    await textInput.fill('Granola recipe with oats and honey');
+    // The import buttons stay disabled until the input's text reaches React state. Checking the
+    // value and the enabled button first makes a lost or wiped fill fail here, with a message
+    // saying which, rather than as a 30s timeout on a click that can never happen.
+    await expect(textInput).toHaveValue('Granola recipe with oats and honey');
+    await expect(importButton).toBeEnabled();
+    await importButton.click();
 
     // Wait for AI review notice banner first
     await expect(page.getByText(/imported via ai — please review all fields/i)).toBeVisible();
@@ -53,10 +58,12 @@ test.describe('AI Import E2E Tests (Fixture Interception)', () => {
     await page.getByRole('button', { name: /paste recipe text/i }).click();
     await page.getByRole('button', { name: /url link/i }).click();
 
-    await page
-      .getByLabel(/enter recipe webpage url below/i)
-      .fill('https://example.com/recipes/muffins');
-    await page.getByRole('button', { name: /import from url/i }).click();
+    const urlInput = page.getByLabel(/enter recipe webpage url below/i);
+    const importButton = page.getByRole('button', { name: /import from url/i });
+    await urlInput.fill('https://example.com/recipes/muffins');
+    await expect(urlInput).toHaveValue('https://example.com/recipes/muffins');
+    await expect(importButton).toBeEnabled();
+    await importButton.click();
 
     // Wait for AI review notice banner first
     await expect(page.getByText(/imported via ai — please review all fields/i)).toBeVisible();
@@ -173,10 +180,12 @@ test.describe('AI Import E2E Tests (Fixture Interception)', () => {
     await page.getByRole('button', { name: /paste recipe text/i }).click();
 
     // Submit text containing FAILURE_CASE_TEST trigger
-    await page
-      .getByLabel(/paste unformatted recipe text below/i)
-      .fill('FAILURE_CASE_TEST general non-recipe article');
-    await page.getByRole('button', { name: /import with ai/i }).click();
+    const textInput = page.getByLabel(/paste unformatted recipe text below/i);
+    const importButton = page.getByRole('button', { name: /import with ai/i });
+    await textInput.fill('FAILURE_CASE_TEST general non-recipe article');
+    await expect(textInput).toHaveValue('FAILURE_CASE_TEST general non-recipe article');
+    await expect(importButton).toBeEnabled();
+    await importButton.click();
 
     // Assert 502 error banner renders in UI
     await expect(

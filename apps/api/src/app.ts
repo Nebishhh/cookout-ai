@@ -18,6 +18,8 @@ import {
   InvalidShoppingListError,
   DomainError,
   MAX_RECIPES_PER_EVENT,
+  normalizeEventDishes,
+  type EventDish,
 } from '@cookout-ai/domain';
 import { prisma } from './prisma.js';
 import type { Prisma } from '@prisma/client';
@@ -34,7 +36,10 @@ import {
   toEventSummaryJSON,
   serializeEventPlan,
   buildCookSchedule,
-  asUncoursedDishes,
+  withOwnedDishesOnly,
+  toDishCreateRows,
+  toPlanDishes,
+  EVENT_DISHES_INCLUDE,
   type CreateEventInput,
 } from './eventMapper.js';
 import {
@@ -1022,7 +1027,7 @@ app.post(
 // POST /api/events/plan
 app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { recipeIds, guestGroup: guestGroupInput } = req.body || {};
+    const { recipeIds, dishes: dishesInput, guestGroup: guestGroupInput } = req.body || {};
 
     // 1. Construct domain GuestGroup FIRST — validates inputs before touching DB
     if (!guestGroupInput || typeof guestGroupInput !== 'object') {
@@ -1030,31 +1035,42 @@ app.post('/api/events/plan', async (req: Request, res: Response, next: NextFunct
     }
     const guestGroup = new GuestGroup(guestGroupInput);
 
-    // 2. Validate recipeIds array
-    if (!Array.isArray(recipeIds) || recipeIds.length === 0) {
-      throw new InvalidRecipeError('recipeIds must be a non-empty array of recipe ID strings.');
-    }
-
-    for (const id of recipeIds) {
-      if (typeof id !== 'string' || id.trim().length === 0) {
-        throw new InvalidRecipeError(`Invalid recipeId in array: ${id}`);
+    // 2. Validate the dishes: `dishes` (each with a course and override) when sent, otherwise the
+    //    older `recipeIds` list, which keeps its original checks and error messages.
+    let dishes: EventDish[];
+    if (dishesInput !== undefined) {
+      dishes = normalizeEventDishes(dishesInput);
+      if (dishes.length === 0) {
+        throw new InvalidRecipeError('dishes must be a non-empty array of dishes.');
       }
+    } else {
+      if (!Array.isArray(recipeIds) || recipeIds.length === 0) {
+        throw new InvalidRecipeError('recipeIds must be a non-empty array of recipe ID strings.');
+      }
+      for (const id of recipeIds) {
+        if (typeof id !== 'string' || id.trim().length === 0) {
+          throw new InvalidRecipeError(`Invalid recipeId in array: ${id}`);
+        }
+      }
+      dishes = normalizeEventDishes(recipeIds.map((recipeId: string) => ({ recipeId })));
     }
-    const uniqueRecipeIds = [...new Set<string>(recipeIds)];
-    if (uniqueRecipeIds.length > MAX_RECIPES_PER_EVENT) {
+    if (dishes.length > MAX_RECIPES_PER_EVENT) {
       throw new InvalidRecipeError(
-        `An event can include at most ${MAX_RECIPES_PER_EVENT} recipes (got ${uniqueRecipeIds.length}).`
+        `An event can include at most ${MAX_RECIPES_PER_EVENT} recipes (got ${dishes.length}).`
       );
     }
 
     // 3. Fetch the caller's recipes in one query; any ID they don't own is a 404
-    const { recipes, droppedRecipeIds } = await resolveOwnedRecipes(uniqueRecipeIds, req.user!.id);
+    const { recipes, droppedRecipeIds } = await resolveOwnedRecipes(
+      dishes.map((dish) => dish.recipeId),
+      req.user!.id
+    );
     if (droppedRecipeIds.length > 0) {
       throw new NotFoundError(`Recipe with id "${droppedRecipeIds[0]}" not found.`);
     }
 
     // 4. Call planEventShoppingList() from @cookout-ai/domain
-    const eventPlan = planEventShoppingList({ dishes: asUncoursedDishes(recipes), guestGroup });
+    const eventPlan = planEventShoppingList({ dishes: toPlanDishes(dishes, recipes), guestGroup });
 
     // 5. Serialize EventPlan to JSON output
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
@@ -1109,10 +1125,7 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
       requestedEvent.recipeIds,
       req.user!.id
     );
-    const domainEvent = validateAndCreateDomainEvent(
-      { ...(req.body as CreateEventInput), recipeIds: ownedRecipeIds },
-      requestedEvent.id
-    );
+    const domainEvent = withOwnedDishesOnly(requestedEvent, ownedRecipeIds);
 
     const createdPrismaEvent = await prisma.event.create({
       data: {
@@ -1122,15 +1135,16 @@ app.post('/api/events', async (req: Request, res: Response, next: NextFunction) 
         totalGuests: domainEvent.guestGroup.totalGuests,
         vegetarianCount: domainEvent.guestGroup.vegetarianCount,
         veganCount: domainEvent.guestGroup.veganCount,
-        recipeIdsJson: JSON.stringify(domainEvent.recipeIds),
         serveTimeMinutes: domainEvent.serveTimeMinutes,
+        dishes: { create: toDishCreateRows(domainEvent) },
       },
+      include: EVENT_DISHES_INCLUDE,
     });
 
     const reconstructedEvent = toDomainEvent(createdPrismaEvent);
 
     const eventPlan = planEventShoppingList({
-      dishes: asUncoursedDishes(recipes),
+      dishes: toPlanDishes(reconstructedEvent.dishes, recipes),
       guestGroup: reconstructedEvent.guestGroup,
     });
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
@@ -1153,7 +1167,7 @@ app.get('/api/events', async (req: Request, res: Response, next: NextFunction) =
   try {
     const prismaEvents = await prisma.event.findMany({
       where: { userId: req.user!.id },
-      include: { shoppingList: { select: { id: true } } },
+      include: { shoppingList: { select: { id: true } }, ...EVENT_DISHES_INCLUDE },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -1171,7 +1185,7 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
     const prismaEvent = await prisma.event.findFirst({
       where: { id, userId: req.user!.id },
-      include: { shoppingList: { select: { id: true } } },
+      include: { shoppingList: { select: { id: true } }, ...EVENT_DISHES_INCLUDE },
     });
 
     if (!prismaEvent) {
@@ -1186,7 +1200,7 @@ app.get('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
     );
 
     const eventPlan = planEventShoppingList({
-      dishes: asUncoursedDishes(recipes),
+      dishes: toPlanDishes(domainEvent.dishes, recipes),
       guestGroup: domainEvent.guestGroup,
     });
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
@@ -1219,11 +1233,10 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
       requestedEvent.recipeIds,
       req.user!.id
     );
-    const domainEvent = validateAndCreateDomainEvent(
-      { ...(req.body as CreateEventInput), recipeIds: ownedRecipeIds },
-      id
-    );
+    const domainEvent = withOwnedDishesOnly(requestedEvent, ownedRecipeIds);
 
+    // A full replace, like the scalar columns: the old dish rows go and the new list is created,
+    // both inside this one update so a reader never sees a half-written dish list.
     const updatedPrismaEvent = await prisma.event.update({
       where: { id },
       data: {
@@ -1231,16 +1244,16 @@ app.put('/api/events/:id', async (req: Request, res: Response, next: NextFunctio
         totalGuests: domainEvent.guestGroup.totalGuests,
         vegetarianCount: domainEvent.guestGroup.vegetarianCount,
         veganCount: domainEvent.guestGroup.veganCount,
-        recipeIdsJson: JSON.stringify(domainEvent.recipeIds),
         serveTimeMinutes: domainEvent.serveTimeMinutes,
+        dishes: { deleteMany: {}, create: toDishCreateRows(domainEvent) },
       },
-      include: { shoppingList: { select: { id: true } } },
+      include: { shoppingList: { select: { id: true } }, ...EVENT_DISHES_INCLUDE },
     });
 
     const reconstructedEvent = toDomainEvent(updatedPrismaEvent);
 
     const eventPlan = planEventShoppingList({
-      dishes: asUncoursedDishes(recipes),
+      dishes: toPlanDishes(reconstructedEvent.dishes, recipes),
       guestGroup: reconstructedEvent.guestGroup,
     });
     const categoryOverrides = await getCategoryOverridesMap(req.user!.id);
@@ -1374,6 +1387,7 @@ app.put(
 
       const prismaEvent = await prisma.event.findFirst({
         where: { id: eventId, userId: req.user!.id },
+        include: EVENT_DISHES_INCLUDE,
       });
       if (!prismaEvent) {
         throw new NotFoundError(`Event with id "${eventId}" not found.`);
@@ -1393,7 +1407,7 @@ app.put(
       }
 
       const eventPlan = planEventShoppingList({
-        dishes: asUncoursedDishes(recipes),
+        dishes: toPlanDishes(domainEvent.dishes, recipes),
         guestGroup: domainEvent.guestGroup,
       });
       const pantryStock = await getPantryStockMap(req.user!.id);

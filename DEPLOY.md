@@ -154,6 +154,11 @@ Two failures are deliberate, and both stop the container instead of touching dat
   docker compose exec app sh   # inspect /data/prod.db by hand before deciding how to proceed
   ```
 
+**If a migration fails (`P3009` on the next start), restore the backup taken before deploying;
+don't try to resolve it in place.** SQLite applies a migration statement by statement, so a
+failed one can be half-applied, and neither `migrate resolve --rolled-back` nor `--applied`
+describes that state truthfully.
+
 ## Baselining an existing database
 
 A volume created before `prisma/migrations` existed was built by `prisma db push`, so it

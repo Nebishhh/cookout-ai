@@ -2092,8 +2092,11 @@ describe('CookOut AI API Endpoints', () => {
       expect(createRes.body.recipeIds).toEqual([ownId]);
       expect(createRes.body.droppedRecipeIds).toEqual([foreignId]);
 
-      const stored = await prisma.event.findUnique({ where: { id: createRes.body.id } });
-      expect(JSON.parse(stored!.recipeIdsJson)).toEqual([ownId]);
+      const stored = await prisma.eventDish.findMany({
+        where: { eventId: createRes.body.id },
+        orderBy: { position: 'asc' },
+      });
+      expect(stored.map((dish) => dish.recipeId)).toEqual([ownId]);
     });
 
     it("PUT /api/events/:id does not store another user's recipe ID and reports it in droppedRecipeIds", async () => {
@@ -2111,8 +2114,11 @@ describe('CookOut AI API Endpoints', () => {
       expect(putRes.body.recipeIds).toEqual([ownId]);
       expect(putRes.body.droppedRecipeIds).toEqual([foreignId]);
 
-      const stored = await prisma.event.findUnique({ where: { id: createRes.body.id } });
-      expect(JSON.parse(stored!.recipeIdsJson)).toEqual([ownId]);
+      const stored = await prisma.eventDish.findMany({
+        where: { eventId: createRes.body.id },
+        orderBy: { position: 'asc' },
+      });
+      expect(stored.map((dish) => dish.recipeId)).toEqual([ownId]);
     });
   });
 });

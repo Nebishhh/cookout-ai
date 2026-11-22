@@ -4,19 +4,22 @@ import {
   InvalidEventError,
   InvalidGuestGroupError,
   MAX_RECIPES_PER_EVENT,
+  isCourse,
+  normalizeEventDishes,
   subtractPantryStock,
   applyPracticalRounding,
   computeCookSchedule,
 } from '@cookout-ai/domain';
 import type {
   CookSchedule,
+  EventDish,
   EventPlan,
   GroceryCategory,
   PlanDish,
   Quantity,
   Recipe,
 } from '@cookout-ai/domain';
-import type { Event as PrismaEvent } from '@prisma/client';
+import type { Event as PrismaEvent, EventDish as PrismaEventDish } from '@prisma/client';
 import { resolveCategory } from './categoryOverrides.js';
 
 export interface CreateGuestGroupInput {
@@ -25,12 +28,45 @@ export interface CreateGuestGroupInput {
   veganCount?: number;
 }
 
+export interface CreateEventDishInput {
+  recipeId: string;
+  /** One of Main, Side, Dessert, Drink, Other; null or omitted for its own standalone course. */
+  course?: string | null;
+  /** Positive whole number replacing the computed servings; null or omitted for none. */
+  servingsOverride?: number | null;
+}
+
 export interface CreateEventInput {
   name: string;
   guestGroup: CreateGuestGroupInput;
-  recipeIds: string[];
+  /** Each dish with its course and servings override. Used whenever it is present. */
+  dishes?: CreateEventDishInput[];
+  /** The older shape: recipe ids only, each its own course. Used only when `dishes` is absent. */
+  recipeIds?: string[];
   /** Wall-clock minutes from midnight (0..1439), or null/omitted for "no cook schedule". */
   serveTimeMinutes?: number | null;
+}
+
+/** An Event row with its dishes loaded, ready for toDomainEvent(). */
+export type PrismaEventWithDishes = PrismaEvent & { dishes: PrismaEventDish[] };
+
+/** The `include` every event read needs so toDomainEvent() gets its dishes in order. */
+export const EVENT_DISHES_INCLUDE = { dishes: { orderBy: { position: 'asc' } } } as const;
+
+/**
+ * The dishes a request asks for: `dishes` when present, otherwise the older `recipeIds` shape as
+ * dishes with no course or override, so clients written before courses keep working unchanged.
+ *
+ * @throws InvalidEventError for a malformed list or an invalid dish (unknown course, bad override).
+ */
+export function dishesFromRequest(input: { dishes?: unknown; recipeIds?: unknown }): EventDish[] {
+  if (input.dishes !== undefined) {
+    return normalizeEventDishes(input.dishes);
+  }
+  if (!Array.isArray(input.recipeIds)) {
+    throw new InvalidEventError('recipeIds must be an array.');
+  }
+  return normalizeEventDishes(input.recipeIds.map((recipeId: unknown) => ({ recipeId })));
 }
 
 /**
@@ -51,15 +87,11 @@ export function validateAndCreateDomainEvent(input: CreateEventInput, overrideId
   const eventId = overrideId || crypto.randomUUID();
   const guestGroup = new GuestGroup(input.guestGroup);
 
-  if (!Array.isArray(input.recipeIds)) {
-    throw new InvalidEventError('recipeIds must be an array.');
-  }
-
   const event = new Event({
     id: eventId,
     name: input.name,
     guestGroup,
-    dishes: input.recipeIds.map((recipeId) => ({ recipeId })),
+    dishes: dishesFromRequest(input),
     serveTimeMinutes: input.serveTimeMinutes,
   });
 
@@ -74,47 +106,89 @@ export function validateAndCreateDomainEvent(input: CreateEventInput, overrideId
 }
 
 /**
- * Reconstructs a domain Event object from a Prisma database record.
- * Re-enforces domain invariants uniformly regardless of data source.
+ * The same event keeping only the dishes whose recipe the caller owns, in the same order and with
+ * their course and override intact. Any other id (another user's recipe, or one that doesn't
+ * exist) is never stored; the routes report it in droppedRecipeIds instead.
  */
-export function toDomainEvent(prismaEvent: PrismaEvent): Event {
-  let recipeIds: string[] = [];
-  try {
-    const parsed = JSON.parse(prismaEvent.recipeIdsJson);
-    if (Array.isArray(parsed)) {
-      recipeIds = parsed.filter((id): id is string => typeof id === 'string');
-    }
-  } catch {
-    recipeIds = [];
-  }
+export function withOwnedDishesOnly(event: Event, ownedRecipeIds: readonly string[]): Event {
+  const owned = new Set(ownedRecipeIds);
+  return new Event({
+    id: event.id,
+    name: event.name,
+    guestGroup: event.guestGroup,
+    dishes: event.dishes.filter((dish) => owned.has(dish.recipeId)),
+    serveTimeMinutes: event.serveTimeMinutes,
+  });
+}
 
+/** An event's dishes as EventDish rows to create, numbered in order. */
+export function toDishCreateRows(event: Event) {
+  return event.dishes.map((dish, position) => ({
+    recipeId: dish.recipeId,
+    course: dish.course,
+    servingsOverride: dish.servingsOverride,
+    position,
+  }));
+}
+
+/**
+ * Reconstructs a domain Event object from a Prisma database record and its dishes.
+ * Re-enforces domain invariants uniformly regardless of data source.
+ *
+ * Tolerant of bad stored values, like dietary tags in recipeMapper: a course the domain doesn't
+ * know, or an override that isn't a positive whole number, reads as "none" rather than failing
+ * the whole event. The API never writes either; this only guards against hand-edited rows.
+ */
+export function toDomainEvent(prismaEvent: PrismaEventWithDishes): Event {
   const guestGroup = new GuestGroup({
     totalGuests: prismaEvent.totalGuests,
     vegetarianCount: prismaEvent.vegetarianCount,
     veganCount: prismaEvent.veganCount,
   });
 
+  const dishes = [...prismaEvent.dishes]
+    .sort((a, b) => a.position - b.position)
+    .map((row) => ({
+      recipeId: row.recipeId,
+      course: isCourse(row.course) ? row.course : null,
+      servingsOverride:
+        row.servingsOverride !== null &&
+        Number.isInteger(row.servingsOverride) &&
+        row.servingsOverride > 0
+          ? row.servingsOverride
+          : null,
+    }));
+
   return new Event({
     id: prismaEvent.id,
     name: prismaEvent.name,
     guestGroup,
-    dishes: recipeIds.map((recipeId) => ({ recipeId })),
+    dishes,
     serveTimeMinutes: prismaEvent.serveTimeMinutes,
   });
 }
 
 /**
- * Recipes as the planner takes them, with no course or servings override. Events have nowhere to
- * store a course yet, so every dish is its own standalone course — which plans exactly as events
- * did before courses existed.
+ * An event's dishes as the planner takes them: each dish paired with its resolved Recipe, keeping
+ * its course and override. A dish whose recipe didn't resolve (deleted, or not the caller's) is
+ * left out here; the routes report it in droppedRecipeIds.
  */
-export function asUncoursedDishes(recipes: readonly Recipe[]): PlanDish[] {
-  return recipes.map((recipe) => ({ recipe }));
+export function toPlanDishes(dishes: readonly EventDish[], recipes: readonly Recipe[]): PlanDish[] {
+  const recipesById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
+  const planDishes: PlanDish[] = [];
+  for (const dish of dishes) {
+    const recipe = recipesById.get(dish.recipeId);
+    if (recipe) {
+      planDishes.push({ recipe, course: dish.course, servingsOverride: dish.servingsOverride });
+    }
+  }
+  return planDishes;
 }
 
 /**
  * Formats a domain Event object for JSON API responses (summary shape — no recomputed plan).
  * shoppingListId defaults to null until persisted ShoppingList support links one.
+ * `recipeIds` is kept alongside `dishes` (same order) for clients written before courses.
  */
 export function toEventSummaryJSON(domainEvent: Event, shoppingListId: string | null = null) {
   return {
@@ -126,6 +200,11 @@ export function toEventSummaryJSON(domainEvent: Event, shoppingListId: string | 
       veganCount: domainEvent.guestGroup.veganCount,
       omnivoreCount: domainEvent.guestGroup.omnivoreCount,
     },
+    dishes: domainEvent.dishes.map((dish) => ({
+      recipeId: dish.recipeId,
+      course: dish.course,
+      servingsOverride: dish.servingsOverride,
+    })),
     recipeIds: domainEvent.recipeIds,
     serveTimeMinutes: domainEvent.serveTimeMinutes,
     shoppingListId,
@@ -194,6 +273,9 @@ export function serializeEventPlan(
       recipeId: item.scaledRecipe.sourceRecipeId,
       recipeName: item.scaledRecipe.sourceRecipeName,
       eligibleServings: item.eligibleServings,
+      servings: item.servings,
+      course: item.course,
+      servingsWereOverridden: item.servingsWereOverridden,
       scaledIngredients: item.scaledRecipe.ingredients.map((ing) => ({
         ingredientId: ing.ingredientId,
         displayName: ing.displayName,
@@ -214,6 +296,18 @@ export function serializeEventPlan(
       categoryIsOverridden: categoryOverrides.has(item.ingredientId),
       mathematicalQuantity: item.mathematicalQuantity.toJSON(),
       wasRoundedForPurchase: item.wasRoundedForPurchase,
+    })),
+    warnings: eventPlan.warnings.map((warning) => ({
+      course: warning.course,
+      cohort: warning.cohort,
+      guestCount: warning.guestCount,
+      message: warning.message,
+    })),
+    courseSummaries: eventPlan.courseSummaries.map((summary) => ({
+      course: summary.course,
+      servings: summary.servings,
+      guestCount: summary.guestCount,
+      coveredGuestCount: summary.coveredGuestCount,
     })),
     schedule: schedule
       ? {

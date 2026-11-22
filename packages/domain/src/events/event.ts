@@ -39,6 +39,50 @@ export interface EventInput {
 }
 
 /**
+ * Validates and normalizes an event's dishes: every dish needs a non-empty recipeId, a course
+ * from Course or null, and a servings override that is a positive whole number or null. An event
+ * references each recipe at most once, so a repeated recipe collapses into its first occurrence,
+ * keeping that one's course and override. Returns frozen dishes in first-seen order.
+ *
+ * Used by the Event constructor, and on its own wherever dishes arrive without a whole event
+ * around them (a plan preview), so both reject exactly the same input.
+ *
+ * @throws InvalidEventError for a non-array or any invalid dish.
+ */
+export function normalizeEventDishes(input: unknown): EventDish[] {
+  if (!Array.isArray(input)) {
+    throw new InvalidEventError('dishes must be an array.');
+  }
+
+  const dishes: EventDish[] = [];
+  const seen = new Set<string>();
+  for (const dish of input as Array<Partial<EventDishInput> | null | undefined>) {
+    const recipeId = dish && typeof dish === 'object' ? dish.recipeId : undefined;
+    if (typeof recipeId !== 'string' || recipeId.trim().length === 0) {
+      throw new InvalidEventError(
+        `Invalid recipeId in dishes: "${String(recipeId)}". Every dish needs a non-empty recipeId.`
+      );
+    }
+
+    const course = dish!.course ?? null;
+    if (course !== null && !isCourse(course)) {
+      throw new InvalidEventError(
+        `Invalid course for recipe "${recipeId}": "${String(course)}". Must be one of ${COURSE_ORDER.join(', ')}, or null.`
+      );
+    }
+    const servingsOverride = normalizeServingsOverride(
+      dish!.servingsOverride,
+      `recipe "${recipeId}"`
+    );
+
+    if (seen.has(recipeId)) continue;
+    seen.add(recipeId);
+    dishes.push(Object.freeze({ recipeId, course, servingsOverride }));
+  }
+  return dishes;
+}
+
+/**
  * Open Question / Scope Notes:
  * - "Recompute live": Event stores only its inputs (name, guestGroup, dishes,
  *   serveTimeMinutes). The plan (included/excluded recipes, servings, shopping list, cook
@@ -81,36 +125,7 @@ export class Event {
       throw new InvalidEventError('Invalid guestGroup: Must be a valid GuestGroup instance.');
     }
 
-    if (!Array.isArray(input.dishes)) {
-      throw new InvalidEventError('dishes must be an array.');
-    }
-
-    const dishes: EventDish[] = [];
-    const seen = new Set<string>();
-    for (const dish of input.dishes) {
-      const recipeId = dish && typeof dish === 'object' ? dish.recipeId : undefined;
-      if (typeof recipeId !== 'string' || recipeId.trim().length === 0) {
-        throw new InvalidEventError(
-          `Invalid recipeId in dishes: "${String(recipeId)}". Every dish needs a non-empty recipeId.`
-        );
-      }
-
-      const course = dish.course ?? null;
-      if (course !== null && !isCourse(course)) {
-        throw new InvalidEventError(
-          `Invalid course for recipe "${recipeId}": "${String(course)}". Must be one of ${COURSE_ORDER.join(', ')}, or null.`
-        );
-      }
-      const servingsOverride = normalizeServingsOverride(
-        dish.servingsOverride,
-        `recipe "${recipeId}"`
-      );
-
-      // An event references each recipe at most once; duplicates collapse, first-seen wins.
-      if (seen.has(recipeId)) continue;
-      seen.add(recipeId);
-      dishes.push(Object.freeze({ recipeId, course, servingsOverride }));
-    }
+    const dishes = normalizeEventDishes(input.dishes);
 
     const serveTimeMinutes = input.serveTimeMinutes ?? null;
     if (serveTimeMinutes !== null) {

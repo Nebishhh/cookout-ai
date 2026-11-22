@@ -44,6 +44,15 @@ function uniqueIds(count: number) {
   return Array.from({ length: count }, (_, i) => `missing-recipe-${i}`);
 }
 
+/** The recipe ids an event has stored, in order, read straight from its EventDish rows. */
+async function storedRecipeIds(eventId: string) {
+  const dishes = await prisma.eventDish.findMany({
+    where: { eventId },
+    orderBy: { position: 'asc' },
+  });
+  return dishes.map((dish) => dish.recipeId);
+}
+
 /** Call counts for the two recipe lookups the routes could use, reset before each test. */
 function recipeQueryCounts() {
   return { findFirst: recipeQueries.findFirst, findMany: recipeQueries.findMany };
@@ -111,8 +120,7 @@ describe('Event routes: recipeIds handling', () => {
     });
 
     expect(res.status).toBe(400);
-    const stored = await prisma.event.findUnique({ where: { id: created.body.id } });
-    expect(JSON.parse(stored!.recipeIdsJson)).toEqual([ownId]);
+    expect(await storedRecipeIds(created.body.id)).toEqual([ownId]);
   });
 
   it('stores duplicate recipe IDs once, keeping first-seen order', async () => {
@@ -121,8 +129,7 @@ describe('Event routes: recipeIds handling', () => {
     expect(res.status).toBe(201);
     expect(res.body.recipeIds).toEqual([ownId, ownId2]);
     expect(res.body.droppedRecipeIds).toEqual([]);
-    const stored = await prisma.event.findUnique({ where: { id: res.body.id } });
-    expect(JSON.parse(stored!.recipeIdsJson)).toEqual([ownId, ownId2]);
+    expect(await storedRecipeIds(res.body.id)).toEqual([ownId, ownId2]);
   });
 
   it('still enforces ownership and reports each dropped ID once, on POST and PUT', async () => {
@@ -140,8 +147,7 @@ describe('Event routes: recipeIds handling', () => {
     expect(updated.body.recipeIds).toEqual([ownId, ownId2]);
     expect(updated.body.droppedRecipeIds).toEqual([foreignId, 'missing-recipe']);
 
-    const stored = await prisma.event.findUnique({ where: { id: created.body.id } });
-    expect(JSON.parse(stored!.recipeIdsJson)).toEqual([ownId, ownId2]);
+    expect(await storedRecipeIds(created.body.id)).toEqual([ownId, ownId2]);
   });
 
   it('checks ownership with a single findMany instead of one query per ID', async () => {

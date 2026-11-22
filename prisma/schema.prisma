@@ -85,11 +85,9 @@ model RecipeStep {
   notes             String?
 }
 
-// Tradeoff Note: recipeIds is a JSON-encoded string column (recipeIdsJson), mirroring
-// dietaryTagsJson — unlike RecipeStep/IngredientLine, a recipeId carries no per-line data
-// beyond order, which a JSON array already preserves, so a join table adds nothing.
-// "Recompute live" also means Event tolerates ids that no longer resolve to a Recipe
-// (filtered out at read time) rather than depending on DB referential integrity.
+// An event's dishes live in EventDish rows (below). They used to be a JSON array of recipe ids
+// (recipeIdsJson), which was enough while a dish carried nothing beyond its order; a course and a
+// servings override per dish made it a real per-line record.
 // serveTimeMinutes is wall-clock minutes from midnight (0..1439), NOT a DateTime — "serve at
 // 6pm" is a wall-clock intent, not an instant, so storing it this way keeps timezone conversion
 // out of every read. NULL means the host hasn't asked for a cook schedule. See the domain
@@ -102,12 +100,33 @@ model Event {
   totalGuests      Int
   vegetarianCount  Int           @default(0)
   veganCount       Int           @default(0)
-  recipeIdsJson    String        @default("[]")
   serveTimeMinutes Int?
   createdAt        DateTime      @default(now())
+  dishes           EventDish[]
   shoppingList     ShoppingList?
 
   @@index([userId])
+}
+
+// One dish's place in an event: which recipe, in what order, in which course, and with what
+// servings override.
+// - recipeId deliberately has NO relation to Recipe. "Recompute live" means an event tolerates a
+//   recipe that has since been deleted: it is dropped at read time and reported in
+//   droppedRecipeIds, which drives the "N recipes were deleted" banner. A cascading foreign key
+//   would silently delete the row instead.
+// - course is NULL for "its own standalone course" (how every pre-course dish was backfilled) or
+//   one of the domain Course values, validated at the API boundary, not by the database.
+// - servingsOverride is NULL for "use the computed share".
+model EventDish {
+  id               String  @id @default(uuid())
+  eventId          String
+  event            Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  recipeId         String
+  course           String?
+  servingsOverride Int?
+  position         Int
+
+  @@index([eventId])
 }
 
 // eventId is nullable + @unique: usable standalone (null) or attached to at most one

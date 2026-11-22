@@ -7,9 +7,9 @@ import type { GroceryCategory } from './groceryCategory.js';
  *   same ingredientId by different display text) is not solved — first-seen wins, silently.
  * - Cross-category ingredientId collisions (same id used as Mass in one recipe,
  *   Volume in another) are kept as separate line items rather than merged or flagged.
- * - No rounding or "nice unit" conversion is applied to the consolidated output
- *   (e.g. 236.588 ml is not converted back to cups or liters) — presentation concerns
- *   belong to later milestones.
+ * - The consolidated quantity is exact and in a kitchen unit: the user's own unit when every
+ *   merged line shares it, otherwise one chosen by pickKitchenUnit(). Rounding to a buyable
+ *   amount happens later, in applyPracticalRounding().
  */
 export interface ShoppingListItem {
   readonly ingredientId: string;

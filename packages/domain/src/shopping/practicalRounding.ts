@@ -1,5 +1,6 @@
 import { Quantity } from '../units/quantity.js';
 import { UnitCategory } from '../units/units.js';
+import { differsByMoreThanCrumb, roundUpToPracticalAmount } from '../units/kitchenUnit.js';
 import type { ShoppingListItem } from './types.js';
 
 /**
@@ -16,58 +17,49 @@ export type PracticallyRoundedItem<T extends ShoppingListItem = ShoppingListItem
 };
 
 /**
- * Practical Scaling v2 (see docs/ideas/practical-scaling.md) — deliberately narrower than that
- * doc's original "curated 80-100 ingredient dataset keyed by ingredientId" proposal. ingredientId
- * is free-form text chosen by a user or extracted by AI import, not a controlled vocabulary, so a
- * dataset keyed by it would silently miss most real recipes. The Count unit registry
- * (`count`/`clove`/`egg`/`onion` — see units.ts's own note on this), by contrast, is already a
- * small, controlled set, and every unit in it is inherently atomic: you cannot buy a fraction of
- * an egg, a clove, an onion, or a generic countable item. So rather than a separate
- * ingredient-behavior lookup, atomicity is read directly off `quantity.category === Count` —
- * reusing a distinction the domain already models, rather than inventing a second one.
+ * Practical Scaling v2 (see docs/ideas/practical-scaling.md), turning exact amounts into ones
+ * you can buy and measure. Every rule rounds UP, never down: a mathematically required 0.25 egg
+ * or 2.3 cups is real demand that rounding down would silently drop from the list.
  *
- * Mass and Volume quantities are genuinely continuous (grams, milliliters) and are never rounded
- * here — that's still a real, unaddressed part of the original idea doc (e.g. "buy whole heads of
- * garlic" for a Mass/Volume-adjacent case) and remains out of scope.
+ * - **Count** (`count`/`clove`/`egg`/`onion`): up to a whole item, since you can't buy a fraction
+ *   of an egg. Atomicity is read off `quantity.category === Count` — reusing a distinction the
+ *   domain already models — rather than a per-ingredient dataset keyed by free-form ingredientId,
+ *   which would silently miss most real recipes.
+ * - **Mass and Volume**, in the same unit: up to the next kitchen fraction (¼, ⅓, ½, ⅔, ¾ or
+ *   whole) for tsp, tbsp, cup, fl oz, oz and lb; the next tenth for kg and l; the next whole
+ *   number for g and ml. See roundUpToPracticalAmount() in units/kitchenUnit.ts. 2.3 cup becomes
+ *   2 1/3 cup (never 2 1/4), and 1.13 kg becomes 1.2 kg.
  *
- * Rounds up, never down: a mathematically-required 0.25 egg is real demand that a floor-rounded
- * "0 eggs" would silently drop from the shopping list. An already-whole amount (including 0) is
- * left untouched — `wasRoundedForPurchase` is only ever true when rounding actually changed the
+ * An amount already on a step (including 0) is left untouched, and so is one a floating-point
+ * crumb above a step. `wasRoundedForPurchase` is only true when rounding really changed the
  * amount, so a caller can distinguish "no adjustment needed" from "adjusted, here's the exact
  * figure too."
  *
  * Applied downstream of consolidateShoppingList()/subtractPantryStock(), not inside them — those
- * stay exact-math, matching their own documented "no rounding is applied" scope note. A caller
- * that wants both the raw mathematical total and the practical purchase recommendation can call
- * this as a separate, final step.
+ * stay exact-math, so pantry subtraction works on the real figure and nothing is rounded twice.
  */
 export function applyPracticalRounding<T extends ShoppingListItem>(
   items: readonly T[]
 ): readonly PracticallyRoundedItem<T>[] {
   return Object.freeze(
     items.map((item) => {
-      if (item.quantity.category !== UnitCategory.Count) {
-        return Object.freeze({
-          ...item,
-          mathematicalQuantity: item.quantity,
-          wasRoundedForPurchase: false,
-        });
-      }
+      const rounded =
+        item.quantity.category === UnitCategory.Count
+          ? new Quantity(Math.ceil(item.quantity.amount), item.quantity.unit)
+          : roundUpToPracticalAmount(item.quantity);
 
-      const roundedAmount = Math.ceil(item.quantity.amount);
-      if (roundedAmount === item.quantity.amount) {
-        return Object.freeze({
-          ...item,
-          mathematicalQuantity: item.quantity,
-          wasRoundedForPurchase: false,
-        });
-      }
+      const changed =
+        item.quantity.category === UnitCategory.Count
+          ? rounded.amount !== item.quantity.amount
+          : differsByMoreThanCrumb(rounded.amount, item.quantity.amount);
 
+      // Always hand back the stepped amount (a crumb above 3 cups becomes exactly 3), but only
+      // call it "rounded for purchase" when it moved by more than that crumb.
       return Object.freeze({
         ...item,
-        quantity: new Quantity(roundedAmount, item.quantity.unit),
+        quantity: rounded,
         mathematicalQuantity: item.quantity,
-        wasRoundedForPurchase: true,
+        wasRoundedForPurchase: changed,
       });
     })
   );

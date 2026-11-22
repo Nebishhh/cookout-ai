@@ -39,8 +39,9 @@ describe('consolidateShoppingList()', () => {
     expect(list[0].category).toBe(GroceryCategory.PantryStaples);
   });
 
-  it('consolidates same-category ingredients with DIFFERENT units by converting to base unit and summing', () => {
-    // 2 cups milk + 100 ml milk (Volume base unit: ml)
+  it('converts DIFFERENT units of one category, then answers in a kitchen unit of the larger-share system', () => {
+    // 2 cups milk + 100 ml milk: mixed, so convert and sum. The cups are 473 ml of the 573 ml
+    // total, so the US system has the larger share and the total comes back in cups.
     const recipe1 = new Recipe('r1', 'Pancakes', 4, [
       new IngredientLine('milk', 'Whole Milk', new Quantity(2, 'cup')),
     ]);
@@ -56,10 +57,81 @@ describe('consolidateShoppingList()', () => {
     expect(list).toHaveLength(1);
     expect(list[0].ingredientId).toBe('milk');
     expect(list[0].displayName).toBe('Whole Milk');
-    expect(list[0].quantity.unit).toBe('ml');
-    // 2 cups = 2 * 236.5882365 = 473.176473 ml; + 100 ml = 573.176473 ml
-    expect(list[0].quantity.amount).toBeCloseTo(573.176473, 4);
+    expect(list[0].quantity.unit).toBe('cup');
+    // 2 cups = 473.176473 ml; + 100 ml = 573.176473 ml = 2.4226752... cups. Exact, not rounded.
+    expect(list[0].quantity.amount).toBeCloseTo(2.4226752837730374, 12);
     expect(list[0].sourceRecipeIds).toEqual(['r1', 'r2']);
+  });
+
+  describe('kitchen units', () => {
+    const line = (recipeId: string, quantity: Quantity) =>
+      scaleRecipe(new Recipe(recipeId, recipeId, 1, [new IngredientLine('x', 'X', quantity)]), 1);
+    const merge = (...quantities: Quantity[]) =>
+      consolidateShoppingList(quantities.map((q, i) => line(`r${i}`, q)))[0].quantity;
+
+    it('keeps the user unit when every merged amount shares it', () => {
+      const q = merge(new Quantity(2, 'tbsp'), new Quantity(1, 'tbsp'));
+      expect(q.unit).toBe('tbsp');
+      expect(q.amount).toBe(3);
+    });
+
+    it('keeps a large same-unit total in that unit rather than converting it', () => {
+      const q = merge(new Quantity(30, 'tbsp'), new Quantity(18, 'tbsp'));
+      expect([q.amount, q.unit]).toEqual([48, 'tbsp']);
+    });
+
+    it('answers a mixed metric volume in litres once it reaches one', () => {
+      const q = merge(new Quantity(500, 'ml'), new Quantity(1, 'l'));
+      expect(q.unit).toBe('l');
+      expect(q.amount).toBeCloseTo(1.5, 12);
+    });
+
+    it('answers a mixed metric mass in kilograms once it reaches one', () => {
+      const q = merge(new Quantity(100, 'g'), new Quantity(1, 'kg'));
+      expect(q.unit).toBe('kg');
+      expect(q.amount).toBeCloseTo(1.1, 12);
+    });
+
+    it('answers a mixed US mass in pounds once it reaches one', () => {
+      const q = merge(new Quantity(8, 'oz'), new Quantity(1, 'lb'));
+      expect(q.unit).toBe('lb');
+      expect(q.amount).toBeCloseTo(1.5, 12);
+    });
+
+    it('never answers in a unit that would make the amount less than 1', () => {
+      // 5 ml + 1 tsp (4.93 ml) = 9.93 ml: metric has the larger share, and 0.0099 l would be silly.
+      const q = merge(new Quantity(5, 'ml'), new Quantity(1, 'tsp'));
+      expect(q.unit).toBe('ml');
+      expect(q.amount).toBeCloseTo(9.92892159375, 9);
+    });
+
+    it('steps down within the US system when cups would be under 1', () => {
+      // 1 tbsp + 1 tsp = 19.72 ml: 0.08 cup, so tablespoons: 1 1/3 tbsp.
+      const q = merge(new Quantity(1, 'tbsp'), new Quantity(1, 'tsp'));
+      expect(q.unit).toBe('tbsp');
+      expect(q.amount).toBeCloseTo(4 / 3, 12);
+    });
+
+    it('answers in the larger-share system even when the first line is the minority', () => {
+      // 2 tbsp is 29.6 ml (US); 500 ml is metric. Metric wins: 529.57 ml, not 2.24 cups.
+      const q = merge(new Quantity(2, 'tbsp'), new Quantity(500, 'ml'));
+      expect(q.unit).toBe('ml');
+      expect(q.amount).toBeCloseTo(529.5735295625, 9);
+    });
+
+    it('gives the same answer whichever order the lines arrive in', () => {
+      const cupsFirst = merge(new Quantity(2, 'cup'), new Quantity(100, 'ml'));
+      const mlFirst = merge(new Quantity(100, 'ml'), new Quantity(2, 'cup'));
+      expect([mlFirst.unit, mlFirst.amount]).toEqual([cupsFirst.unit, cupsFirst.amount]);
+      expect(mlFirst.unit).toBe('cup');
+    });
+
+    it('applies the larger share to mixed masses too', () => {
+      // 1 oz (28.3 g) + 500 g: metric, and under 1 kg, so grams.
+      const q = merge(new Quantity(1, 'oz'), new Quantity(500, 'g'));
+      expect(q.unit).toBe('g');
+      expect(q.amount).toBeCloseTo(528.349523125, 9);
+    });
   });
 
   it('keeps same ingredientId with DIFFERENT categories as SEPARATE ShoppingListItem entries', () => {
@@ -91,7 +163,8 @@ describe('consolidateShoppingList()', () => {
     expect(volumeItem).toBeDefined();
     expect(volumeItem?.ingredientId).toBe('butter');
     expect(volumeItem?.displayName).toBe('Melted Butter');
-    expect(volumeItem?.quantity.unit).toBe('ml'); // Converted to volume base unit
+    expect(volumeItem?.quantity.unit).toBe('tbsp'); // Only one unit in this group: kept as written
+    expect(volumeItem?.quantity.amount).toBe(2);
     expect(volumeItem?.sourceRecipeIds).toEqual(['r2']);
   });
 
@@ -210,8 +283,8 @@ describe('consolidateShoppingList()', () => {
     expect(countItem?.quantity.unit).toBe('count');
     expect(countItem?.sourceRecipeIds).toEqual(['r1']);
 
-    expect(oilItem?.quantity.unit).toBe('ml'); // Converted to volume base unit
-    expect(oilItem?.quantity.amount).toBeCloseTo(29.5735, 3); // 2 tbsp = ~29.5735 ml
+    expect(oilItem?.quantity.unit).toBe('tbsp'); // A lone 2 tbsp stays 2 tbsp, not 29.57 ml
+    expect(oilItem?.quantity.amount).toBe(2);
     expect(oilItem?.sourceRecipeIds).toEqual(['r1']);
     expect(oilItem?.category).toBe(GroceryCategory.SpicesAndCondiments);
   });

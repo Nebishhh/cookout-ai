@@ -52,11 +52,33 @@ describe('formatQuantityAmount Utility Tests', () => {
   });
 
   describe('Non-Count Categories (Mass, Volume)', () => {
-    it('formats Mass and Volume decimal quantities without fraction conversion in both modes', () => {
+    it('formats Mass and Volume as decimals in display mode (recipe amounts as written)', () => {
       expect(formatQuantityAmount(2.25, 'g', 'Mass', 'display')).toBe('2.25');
-      expect(formatQuantityAmount(2.25, 'g', 'Mass', 'consolidated')).toBe('2.25');
       expect(formatQuantityAmount(0.5, 'cup', 'Volume', 'display')).toBe('0.5');
-      expect(formatQuantityAmount(0.5, 'cup', 'Volume', 'consolidated')).toBe('0.5');
+    });
+
+    it('shows kitchen fractions for shopping-list amounts in US kitchen units', () => {
+      expect(formatQuantityAmount(0.5, 'cup', 'Volume', 'consolidated')).toBe('1/2');
+      expect(formatQuantityAmount(7 / 3, 'cup', 'Volume', 'consolidated')).toBe('2 1/3');
+      expect(formatQuantityAmount(0.25, 'tsp', 'Volume', 'consolidated')).toBe('1/4');
+      expect(formatQuantityAmount(1.5, 'lb', 'Mass', 'consolidated')).toBe('1 1/2');
+    });
+
+    it('shows kilograms and litres as decimals, never as fractions', () => {
+      expect(formatQuantityAmount(1.5, 'kg', 'Mass', 'consolidated')).toBe('1.5');
+      expect(formatQuantityAmount(1.2, 'kg', 'Mass', 'consolidated')).toBe('1.2');
+      expect(formatQuantityAmount(1.7, 'l', 'Volume', 'consolidated')).toBe('1.7');
+    });
+
+    it('keeps grams and millilitres as plain numbers in the shopping list', () => {
+      expect(formatQuantityAmount(159, 'ml', 'Volume', 'consolidated')).toBe('159');
+      expect(formatQuantityAmount(2.25, 'g', 'Mass', 'consolidated')).toBe('2.25');
+    });
+
+    it('falls back to two decimals for an amount that is not on a kitchen fraction', () => {
+      expect(formatQuantityAmount(2.4226752837730374, 'cup', 'Volume', 'consolidated')).toBe(
+        '2.42'
+      );
     });
 
     it('formats whole number Mass and Volume quantities cleanly', () => {

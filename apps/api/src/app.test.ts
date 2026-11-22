@@ -430,9 +430,13 @@ describe('CookOut AI API Endpoints', () => {
 
       expect(milkItem).toBeDefined();
       expect(milkItem.displayName).toBe('Whole Milk'); // First seen wins
-      expect(milkItem.quantity.unit).toBe('ml');
-      // 2 cups = ~473.176 ml + 100 ml = ~573.176 ml
-      expect(milkItem.quantity.amount).toBeCloseTo(573.176, 3);
+      // 2 cups + 100 ml = 573.176 ml = 2.42 cups: mixed units, so answered in the first line's
+      // system (cups), then rounded up to a buyable 2 1/2 cups with the exact figure kept.
+      expect(milkItem.quantity.unit).toBe('cup');
+      expect(milkItem.quantity.amount).toBe(2.5);
+      expect(milkItem.wasRoundedForPurchase).toBe(true);
+      expect(milkItem.mathematicalQuantity.unit).toBe('cup');
+      expect(milkItem.mathematicalQuantity.amount).toBeCloseTo(2.4226752837730374, 9);
       expect(milkItem.sourceRecipeIds).toEqual([r1Id, r2Id]);
 
       expect(sugarItem).toBeDefined();
@@ -851,9 +855,10 @@ describe('CookOut AI API Endpoints', () => {
 
       const potatoItem = res.body.shoppingList[0];
       expect(potatoItem.ingredientId).toBe('potato');
-      // 500g * 2.0 = 1000g + (1kg * 2.0 = 2000g) = 3000g
-      expect(potatoItem.quantity.amount).toBe(3000);
-      expect(potatoItem.quantity.unit).toBe('g');
+      // 500g * 2.0 = 1000 g + (1kg * 2.0 = 2 kg): mixed units, summed to 3000 g and answered in
+      // the metric system's best unit.
+      expect(potatoItem.quantity.amount).toBe(3);
+      expect(potatoItem.quantity.unit).toBe('kg');
       expect(potatoItem.sourceRecipeIds).toEqual([r1Id, r2Id]);
     });
   });
@@ -1589,13 +1594,13 @@ describe('CookOut AI API Endpoints', () => {
       expect(item.mathematicalQuantity.amount).toBe(4);
     });
 
-    it('never rounds Mass or Volume quantities', async () => {
+    it('rounds Mass and Volume UP to a buyable amount, keeping the exact figure', async () => {
       const recipeRes = await agent.post('/api/recipes').send({
         name: 'Bread',
         baseServings: 4,
         ingredients: [
-          { ingredientId: 'flour', displayName: 'Flour', amount: 500, unit: 'g' },
-          { ingredientId: 'milk', displayName: 'Milk', amount: 1, unit: 'cup' },
+          { ingredientId: 'flour', displayName: 'Flour', amount: 333, unit: 'g' },
+          { ingredientId: 'milk', displayName: 'Milk', amount: 0.9, unit: 'cup' },
         ],
       });
 
@@ -1603,9 +1608,22 @@ describe('CookOut AI API Endpoints', () => {
         .post('/api/shopping-list')
         .send([{ recipeId: recipeRes.body.id, targetServings: 3 }]);
 
+      const byId = Object.fromEntries(
+        previewRes.body.shoppingList.map((i: { ingredientId: string }) => [i.ingredientId, i])
+      );
+
+      // 333 g * 3/4 = 249.75 g -> 250 g
+      expect(byId.flour.quantity).toEqual({ amount: 250, unit: 'g', category: 'Mass' });
+      expect(byId.flour.mathematicalQuantity.amount).toBeCloseTo(249.75, 9);
+      expect(byId.flour.wasRoundedForPurchase).toBe(true);
+
+      // 0.9 cup * 3/4 = 0.675 cup -> 3/4 cup, never down to 2/3
+      expect(byId.milk.quantity).toEqual({ amount: 0.75, unit: 'cup', category: 'Volume' });
+      expect(byId.milk.mathematicalQuantity.amount).toBeCloseTo(0.675, 9);
+      expect(byId.milk.wasRoundedForPurchase).toBe(true);
+
       for (const item of previewRes.body.shoppingList) {
-        expect(item.wasRoundedForPurchase).toBe(false);
-        expect(item.quantity.amount).toBe(item.mathematicalQuantity.amount);
+        expect(item.quantity.amount).toBeGreaterThanOrEqual(item.mathematicalQuantity.amount);
       }
     });
 
@@ -2012,13 +2030,13 @@ describe('CookOut AI API Endpoints', () => {
         .send([{ recipeId: recipeResB.body.id, targetServings: 4 }]);
 
       // B has no pantry stock of flour, so A's 5 cups must not be subtracted from B's list —
-      // full 2 cups (converted to the base ml unit) must still be present.
+      // the full 2 cups must still be present.
       const flourItem = previewResB.body.shoppingList.find(
         (i: { ingredientId: string }) => i.ingredientId === 'flour'
       );
       expect(flourItem).toBeDefined();
-      expect(flourItem.quantity.unit).toBe('ml');
-      expect(flourItem.quantity.amount).toBeCloseTo(473.176, 3);
+      expect(flourItem.quantity.unit).toBe('cup');
+      expect(flourItem.quantity.amount).toBe(2);
     });
 
     it("an IngredientCategoryOverride set by one user does not affect another user's shopping list category", async () => {

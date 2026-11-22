@@ -86,6 +86,24 @@ describe('subtractPantryStock()', () => {
     expect(result[0].quantity.amount).toBe(6);
   });
 
+  it('subtracts a pantry amount in ml from a line kept in tbsp', () => {
+    const items = [item('oil', 'Olive Oil', new Quantity(3, 'tbsp'))];
+    const pantry = new Map([['oil', new Quantity(15, 'ml')]]);
+    const result = subtractPantryStock(items, pantry);
+    expect(result).toHaveLength(1);
+    expect(result[0].quantity.unit).toBe('tbsp');
+    expect(result[0].quantity.amount).toBeCloseTo(3 - 15 / 14.78676478125, 12);
+  });
+
+  it('drops a line whose only remainder is a floating-point crumb, instead of printing zero', () => {
+    const needed = 0.1 + 0.2; // 0.30000000000000004 cup
+    const items = [item('milk', 'Milk', new Quantity(needed, 'cup'))];
+    const pantry = new Map([['milk', new Quantity(0.3, 'cup')]]);
+
+    expect(needed - 0.3).toBeGreaterThan(0); // the crumb is really there
+    expect(subtractPantryStock(items, pantry)).toHaveLength(0);
+  });
+
   it('subtracts a matching Count item exactly', () => {
     const items = [item('egg', 'Eggs', new Quantity(6, 'egg'))];
     const pantry = new Map([['egg', new Quantity(4, 'egg')]]);

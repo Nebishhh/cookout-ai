@@ -37,7 +37,9 @@ export function subtractPantryStock(
       throw err;
     }
 
-    if (reduced.amount === 0) {
+    // Fully covered. The tolerance is for floating-point crumbs (0.1 + 0.2 cup less 0.3 cup
+    // leaves 5.6e-17), which would otherwise survive as a line of "0 cup" to buy.
+    if (reduced.amount <= 1e-9 * Math.max(1, item.quantity.amount)) {
       continue;
     }
 

@@ -220,9 +220,10 @@ describe('Events Domain Module', () => {
 
       const potatoItem = plan.shoppingList[0];
       expect(potatoItem.ingredientId).toBe('potato');
-      // 500g * 2.0 = 1000g + (1kg * 2.0 = 2000g) = 3000g = 3000 g
-      expect(potatoItem.quantity.amount).toBe(3000);
-      expect(potatoItem.quantity.unit).toBe('g');
+      // 500g * 2.0 = 1000 g + (1kg * 2.0 = 2 kg): mixed units, so converted and summed to
+      // 3000 g, then answered in the metric system's best unit: 3 kg.
+      expect(potatoItem.quantity.amount).toBe(3);
+      expect(potatoItem.quantity.unit).toBe('kg');
       expect(potatoItem.sourceRecipeIds).toHaveLength(2);
     });
 
@@ -304,7 +305,9 @@ describe('Events Domain Module', () => {
         // The shopping list follows the split, not the eligible count: 4.5 of 4 base servings.
         expect(byName(plan, 'Pulled Pork').scaledRecipe.targetServings).toBe(4.5);
         const porkLine = plan.shoppingList.find((i) => i.ingredientId === 'pork')!;
-        expect(porkLine.quantity.amount).toBeCloseTo(1125, 9); // 1000 g * 4.5 / 4
+        // 1 kg * 4.5 / 4, kept in the recipe's own unit.
+        expect(porkLine.quantity.unit).toBe('kg');
+        expect(porkLine.quantity.amount).toBeCloseTo(1.125, 12);
       });
 
       it('reports the shortfall warning and each course total', () => {

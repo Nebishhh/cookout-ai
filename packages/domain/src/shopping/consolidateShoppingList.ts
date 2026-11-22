@@ -1,6 +1,7 @@
 import type { ScaledRecipe } from '../recipes/types.js';
 import { BASE_UNITS, UnitCategory } from '../units/units.js';
 import { Quantity } from '../units/quantity.js';
+import { largestShareSystem, pickKitchenUnit } from '../units/kitchenUnit.js';
 import type { ShoppingListItem } from './types.js';
 import { categorizeIngredient } from './groceryCategory.js';
 
@@ -15,15 +16,22 @@ interface RawItemEntry {
  *
  * Grouping rules:
  * 1. Ingredients are grouped by (ingredientId, UnitCategory).
- * 2. Mass & Volume groups are converted to their base units (g for Mass, ml for Volume) using Quantity.convertTo() and summed.
- * 3. Count groups are further subdivided by exact unit (e.g., 'egg' vs 'count'), and summed within matching units without conversion.
- * 4. First-encountered displayName is preserved for each item.
- * 5. Unique sourceRecipeIds are preserved in encounter order.
+ * 2. A Mass or Volume group whose entries all share one unit is summed in that unit and keeps it:
+ *    2 tbsp stays 2 tbsp, the way the user wrote it.
+ * 3. A Mass or Volume group mixing units is converted to its base unit (g or ml) with
+ *    Quantity.convertTo(), summed, and then expressed in a kitchen unit via pickKitchenUnit():
+ *    the largest unit, in the system (metric or US) contributing the larger share of the total,
+ *    that keeps the amount at 1 or more. 2 cups + 100 ml comes back as 2.42 cup, and
+ *    2 tbsp + 500 ml as 529.57 ml, whichever line comes first.
+ * 4. Count groups are further subdivided by exact unit (e.g., 'egg' vs 'count'), and summed within matching units without conversion.
+ * 5. First-encountered displayName is preserved for each item.
+ * 6. Unique sourceRecipeIds are preserved in encounter order.
  *
  * Open Questions / Scope Notes:
  * - Cross-category ingredientId collisions (e.g. "butter" as Mass vs Volume) produce separate line items.
  * - Display name reconciliation across recipes is not solved (first-seen wins).
- * - No presentation-layer unit rounding or "nice unit" conversions are applied.
+ * - Amounts stay exact. Rounding to something buyable is applyPracticalRounding()'s job, run
+ *   after pantry subtraction, so nothing here throws precision away.
  *
  * @param scaledRecipes Array of scaled recipes to consolidate.
  * @returns Readonly array of consolidated ShoppingListItem entries.
@@ -68,23 +76,37 @@ export function consolidateShoppingList(
     const firstDisplayName = entries[0].displayName;
 
     if (category === UnitCategory.Mass || category === UnitCategory.Volume) {
-      const baseUnit = BASE_UNITS[category];
-      let totalAmount = 0;
       const sourceRecipeIds: string[] = [];
-
       for (const entry of entries) {
-        const converted = entry.quantity.convertTo(baseUnit);
-        totalAmount += converted.amount;
         if (!sourceRecipeIds.includes(entry.sourceRecipeId)) {
           sourceRecipeIds.push(entry.sourceRecipeId);
         }
+      }
+
+      const firstUnit = entries[0].quantity.unit;
+      let quantity: Quantity;
+      if (entries.every((entry) => entry.quantity.unit === firstUnit)) {
+        // One unit throughout: sum as written, no conversion.
+        const total = entries.reduce((sum, entry) => sum + entry.quantity.amount, 0);
+        quantity = new Quantity(total, firstUnit);
+      } else {
+        // Mixed units: convert to base, sum, then answer in a kitchen unit of whichever system
+        // contributes the larger share of that total.
+        const baseUnit = BASE_UNITS[category];
+        const totalInBase = entries.reduce(
+          (sum, entry) => sum + entry.quantity.convertTo(baseUnit).amount,
+          0
+        );
+        const system = largestShareSystem(entries.map((entry) => entry.quantity));
+        const kitchenUnit = pickKitchenUnit(totalInBase, category, system);
+        quantity = new Quantity(totalInBase, baseUnit).convertTo(kitchenUnit);
       }
 
       result.push(
         Object.freeze({
           ingredientId,
           displayName: firstDisplayName,
-          quantity: new Quantity(totalAmount, baseUnit),
+          quantity,
           sourceRecipeIds: Object.freeze(sourceRecipeIds),
           category: categorizeIngredient(ingredientId, firstDisplayName),
         })

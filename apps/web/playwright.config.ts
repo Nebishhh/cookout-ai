@@ -12,6 +12,8 @@ const e2eDbUrl = `file:${path.resolve(rootDir, 'prisma/e2e.db')}`;
 // from it — avoids depending on Playwright's config-file TS loader resolving a same-directory
 // `.js`-referring-to-`.ts` import the way the app's own NodeNext build does.
 const storageStatePath = path.resolve(__dirname, 'e2e/.auth/storageState.json');
+/** Specs that run only in the phone project (and never on desktop). */
+const PHONE_SPECS = /(mobile-nav|event-planner-phone)\.spec\.ts/;
 
 export default defineConfig({
   testDir: './e2e',
@@ -30,19 +32,20 @@ export default defineConfig({
     // state-changing request. Same trusted origin used by globalSetup.ts's own signup call.
     extraHTTPHeaders: { Origin: 'http://localhost:3010' },
   },
-  // Every spec runs on desktop Chrome except mobile-nav.spec.ts, which runs only at phone width.
-  // The phone project uses Chromium (Pixel 7 profile, sized to a 390px-wide iPhone screen)
-  // because CI installs only Chromium; the iPhone device presets need WebKit.
+  // Every spec runs on desktop Chrome except the phone specs (mobile-nav.spec.ts and
+  // event-planner-phone.spec.ts), which run only at phone width. The phone project uses Chromium
+  // (Pixel 7 profile, sized to a 390px-wide iPhone screen) because CI installs only Chromium; the
+  // iPhone device presets need WebKit.
   projects: [
     {
       name: 'desktop',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: /mobile-nav\.spec\.ts/,
+      testIgnore: PHONE_SPECS,
     },
     {
       name: 'phone',
       use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
-      testMatch: /mobile-nav\.spec\.ts/,
+      testMatch: PHONE_SPECS,
     },
   ],
   webServer: [

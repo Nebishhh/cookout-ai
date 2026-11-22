@@ -25,11 +25,29 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function savedEventDetail(recipeIds: string[], droppedRecipeIds: string[] = []) {
+type SentDish = { recipeId: string; course: string | null; servingsOverride: number | null };
+
+/** The recipe ids in a plan/create/update body; the planner sends `dishes`, never `recipeIds`. */
+function recipeIdsOf(body: string): string[] {
+  const parsed = JSON.parse(body) as { dishes: SentDish[]; recipeIds?: unknown };
+  expect(parsed.recipeIds).toBeUndefined();
+  return parsed.dishes.map((dish) => dish.recipeId);
+}
+
+function savedEventDetail(
+  recipeIds: string[],
+  droppedRecipeIds: string[] = [],
+  dishes: SentDish[] = recipeIds.map((recipeId) => ({
+    recipeId,
+    course: null,
+    servingsOverride: null,
+  }))
+) {
   return {
     id: 'event-1',
     name: 'Big Dinner',
     guestGroup: { totalGuests: 10, vegetarianCount: 0, veganCount: 0, omnivoreCount: 10 },
+    dishes,
     recipeIds,
     serveTimeMinutes: null,
     shoppingListId: null,
@@ -57,8 +75,22 @@ function recipeNumber(box: HTMLElement) {
   return Number(box.getAttribute('aria-label')?.match(/(\d+)$/)?.[1]);
 }
 
+/**
+ * The checkbox whose accessible name (aria-label) is "Select recipe Recipe <n>".
+ *
+ * Found by that attribute rather than getByLabelText. jsdom recomputes every labelable element's
+ * `labels` after each DOM change, so the first label lookup after a click costs time proportional
+ * to (labelled controls x DOM size). With 50 checked cards, each carrying its own labelled course
+ * picker and servings override, that was ~5s per lookup (measured), and these tests look one up
+ * after nearly every click. The browser has no such cost: rendering 52 checked cards took 0.35s
+ * and a click 0.02s in the same measurement.
+ */
 function recipeCheckbox(n: number) {
-  return screen.getByLabelText(`Select recipe Recipe ${n}`) as HTMLInputElement;
+  const box = document.querySelector<HTMLInputElement>(
+    `input[type="checkbox"][aria-label="Select recipe Recipe ${n}"]`
+  );
+  if (!box) throw new Error(`No checkbox named "Select recipe Recipe ${n}"`);
+  return box;
 }
 
 beforeEach(() => {
@@ -100,13 +132,13 @@ function mockPlannerApi(recipes: ReturnType<typeof makeRecipes>, eventRecipeIds?
     const u = url.toString();
     if (u.includes('/api/recipes')) return jsonResponse(recipes);
     if (u.endsWith('/api/events/plan') && options?.method === 'POST') {
-      const { recipeIds } = JSON.parse(options.body as string) as { recipeIds: string[] };
+      const recipeIds = recipeIdsOf(options.body as string);
       sentRecipeIds.push(recipeIds);
       return overCap(recipeIds) ?? jsonResponse(emptyPlanResult(recipeIds));
     }
     if (eventRecipeIds && u.endsWith('/api/events/event-1')) {
       if (options?.method === 'PUT') {
-        const { recipeIds } = JSON.parse(options.body as string) as { recipeIds: string[] };
+        const recipeIds = recipeIdsOf(options.body as string);
         sentRecipeIds.push(recipeIds);
         return overCap(recipeIds) ?? jsonResponse(savedEventDetail(recipeIds));
       }
@@ -257,7 +289,7 @@ describe('EventPlanner: events that reference deleted recipes', () => {
       const u = url.toString();
       if (u.includes('/api/recipes')) return jsonResponse(liveRecipes);
       if (u.endsWith('/api/events/event-1') && options?.method === 'PUT') {
-        const body = JSON.parse(options.body as string) as { recipeIds: string[] };
+        const body = { recipeIds: recipeIdsOf(options.body as string) };
         putBodies.push(body);
         if (body.recipeIds.length > 50) {
           return jsonResponse(
@@ -385,5 +417,257 @@ describe('EventPlanner: guest breakdown validation', () => {
 
     fireEvent.click(planButton());
     await waitFor(() => expect(sent).toHaveLength(1));
+  });
+});
+
+describe('EventPlanner: courses and servings overrides', () => {
+  const HINT = 'Put alternatives in the same course to split servings.';
+  const twelve = { totalGuests: 12, vegetarianCount: 3, veganCount: 1, omnivoreCount: 9 };
+  const recipes = [
+    { id: 'pork', name: 'Pulled Pork', baseServings: 4, dietaryTags: [], ingredients: [] },
+    {
+      id: 'tagine',
+      name: 'Chickpea Tagine',
+      baseServings: 4,
+      dietaryTags: ['Vegan'],
+      ingredients: [],
+    },
+    {
+      id: 'potatoes',
+      name: 'Scalloped Potatoes',
+      baseServings: 6,
+      dietaryTags: ['Vegetarian'],
+      ingredients: [],
+    },
+    {
+      id: 'sorbet',
+      name: 'Coconut Sorbet',
+      baseServings: 6,
+      dietaryTags: ['Vegan'],
+      ingredients: [],
+    },
+  ];
+  const dish = (
+    recipeId: string,
+    recipeName: string,
+    course: string | null,
+    servings: number,
+    eligibleServings: number,
+    servingsWereOverridden = false
+  ) => ({
+    recipeId,
+    recipeName,
+    eligibleServings,
+    servings,
+    course,
+    servingsWereOverridden,
+    scaledIngredients: [],
+  });
+
+  /** The 12-guest example as the server returns it: 4.5 / 7.5 / 11 / 12, vegan has no Side. */
+  function twelveGuestPlan(overrides: { porkServings?: number; mainTotal?: number } = {}) {
+    const porkServings = overrides.porkServings ?? 4.5;
+    return {
+      guestGroup: twelve,
+      includedRecipes: [
+        dish('pork', 'Pulled Pork', 'Main', porkServings, 9, overrides.porkServings !== undefined),
+        dish('tagine', 'Chickpea Tagine', 'Main', 7.5, 12),
+        dish('potatoes', 'Scalloped Potatoes', 'Side', 11, 11),
+        dish('sorbet', 'Coconut Sorbet', 'Dessert', 12, 12),
+      ],
+      excludedRecipes: [],
+      shoppingList: [],
+      schedule: null,
+      warnings: [
+        { course: 'Side', cohort: 'vegan', guestCount: 1, message: '1 vegan guest has no Side' },
+      ],
+      courseSummaries: [
+        {
+          course: 'Main',
+          servings: overrides.mainTotal ?? 12,
+          guestCount: 12,
+          coveredGuestCount: 12,
+        },
+        { course: 'Side', servings: 11, guestCount: 12, coveredGuestCount: 11 },
+        { course: 'Dessert', servings: 12, guestCount: 12, coveredGuestCount: 12 },
+      ],
+    };
+  }
+
+  /** Serves the four recipes and answers every plan with `plan`, recording each plan body. */
+  function mockCourseApi(plan: unknown = twelveGuestPlan()) {
+    const bodies: Array<{ dishes: SentDish[] }> = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const u = url.toString();
+      if (u.includes('/api/recipes')) return jsonResponse(recipes);
+      if (u.endsWith('/api/events/plan') && options?.method === 'POST') {
+        recipeIdsOf(options.body as string);
+        bodies.push(JSON.parse(options.body as string));
+        return jsonResponse(plan);
+      }
+      return jsonResponse({ error: 'NotFound', message: 'not mocked' }, 404);
+    });
+    return bodies;
+  }
+
+  const planButton = () => screen.getByRole('button', { name: /plan event shopping list/i });
+  const check = (name: string) => fireEvent.click(screen.getByLabelText(`Select recipe ${name}`));
+
+  async function renderAndCheckAll() {
+    renderPlanner();
+    await screen.findByLabelText('Select recipe Pulled Pork');
+    for (const r of recipes) check(r.name);
+  }
+
+  it('shows the course hint, and a course picker and servings override on each checked dish', async () => {
+    mockCourseApi();
+    renderPlanner();
+    await screen.findByLabelText('Select recipe Pulled Pork');
+
+    expect(screen.getByText(HINT)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Course for Pulled Pork')).not.toBeInTheDocument();
+
+    check('Pulled Pork');
+    const course = screen.getByLabelText('Course for Pulled Pork');
+    expect(course).toHaveValue('');
+    expect(course).toHaveAccessibleDescription(HINT);
+    expect(Array.from((course as HTMLSelectElement).options).map((o) => o.textContent)).toEqual([
+      'No course',
+      'Main',
+      'Side',
+      'Dessert',
+      'Drink',
+      'Other',
+    ]);
+    expect(screen.getByLabelText('Servings override for Pulled Pork')).toHaveValue(null);
+    expect(screen.queryByLabelText('Course for Chickpea Tagine')).not.toBeInTheDocument();
+  });
+
+  it('sends each checked dish with its course and servings override', async () => {
+    const bodies = mockCourseApi();
+    await renderAndCheckAll();
+
+    fireEvent.change(screen.getByLabelText('Course for Pulled Pork'), {
+      target: { value: 'Main' },
+    });
+    fireEvent.change(screen.getByLabelText('Course for Chickpea Tagine'), {
+      target: { value: 'Main' },
+    });
+    fireEvent.change(screen.getByLabelText('Servings override for Scalloped Potatoes'), {
+      target: { value: '6' },
+    });
+    fireEvent.click(planButton());
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0].dishes).toEqual([
+      { recipeId: 'pork', course: 'Main', servingsOverride: null },
+      { recipeId: 'tagine', course: 'Main', servingsOverride: null },
+      { recipeId: 'potatoes', course: null, servingsOverride: 6 },
+      { recipeId: 'sorbet', course: null, servingsOverride: null },
+    ]);
+  });
+
+  it('explains a bad servings override next to the field and blocks planning', async () => {
+    const bodies = mockCourseApi();
+    await renderAndCheckAll();
+
+    const override = screen.getByLabelText('Servings override for Pulled Pork');
+    fireEvent.change(override, { target: { value: '2.5' } });
+
+    expect(override).toHaveAttribute('aria-invalid', 'true');
+    expect(override).toHaveAccessibleDescription('Enter a whole number of servings, 1 or more.');
+    expect(planButton()).toBeDisabled();
+    fireEvent.submit(planButton().closest('form')!);
+    expect(bodies).toHaveLength(0);
+
+    fireEvent.change(override, { target: { value: '' } });
+    expect(override).not.toHaveAttribute('aria-invalid');
+    expect(planButton()).toBeEnabled();
+  });
+
+  it('groups the plan by course with each course total and the shortfall warning', async () => {
+    mockCourseApi();
+    await renderAndCheckAll();
+    fireEvent.click(planButton());
+
+    expect(await screen.findByText('Main: 12 servings for 12 guests')).toBeInTheDocument();
+    expect(screen.getByText('Side: 11 servings for 12 guests')).toBeInTheDocument();
+    expect(screen.getByText('Dessert: 12 servings for 12 guests')).toBeInTheDocument();
+    expect(screen.queryByText(/over by|under by/)).not.toBeInTheDocument();
+
+    const card = (name: string) => screen.getByRole('article', { name });
+    expect(card('Pulled Pork')).toHaveTextContent('Cook 4 1/2 servings');
+    expect(card('Pulled Pork')).toHaveTextContent('9 guests can eat it');
+    expect(card('Chickpea Tagine')).toHaveTextContent('Cook 7 1/2 servings');
+    expect(card('Scalloped Potatoes')).toHaveTextContent('Cook 11 servings');
+    expect(card('Coconut Sorbet')).toHaveTextContent('Cook 12 servings');
+
+    const warning = screen
+      .getAllByRole('alert')
+      .find((el) => el.textContent?.includes('1 vegan guest has no Side'));
+    expect(warning).toBeDefined();
+  });
+
+  it('marks a course an override pushes over, and the overridden dish', async () => {
+    mockCourseApi(twelveGuestPlan({ porkServings: 6, mainTotal: 13.5 }));
+    await renderAndCheckAll();
+    fireEvent.click(planButton());
+
+    expect(await screen.findByText('Main: 13 1/2 servings for 12 guests')).toBeInTheDocument();
+    expect(screen.getByText('over by 1 1/2')).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Pulled Pork' })).toHaveTextContent('Your override');
+    expect(screen.getByRole('article', { name: 'Chickpea Tagine' })).not.toHaveTextContent(
+      'Your override'
+    );
+  });
+
+  it('marks a course an override pulls under', async () => {
+    mockCourseApi(twelveGuestPlan({ porkServings: 2, mainTotal: 9.5 }));
+    await renderAndCheckAll();
+    fireEvent.click(planButton());
+
+    expect(await screen.findByText('under by 2 1/2')).toBeInTheDocument();
+  });
+
+  it('pre-fills courses and overrides from a saved event and sends them back on update', async () => {
+    const put: Array<{ dishes: SentDish[] }> = [];
+    const saved = savedEventDetail(
+      ['pork', 'tagine'],
+      [],
+      [
+        { recipeId: 'pork', course: 'Main', servingsOverride: null },
+        { recipeId: 'tagine', course: 'Main', servingsOverride: 5 },
+      ]
+    );
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const u = url.toString();
+      if (u.includes('/api/recipes')) return jsonResponse(recipes);
+      if (u.endsWith('/api/events/event-1') && options?.method === 'PUT') {
+        recipeIdsOf(options.body as string);
+        put.push(JSON.parse(options.body as string));
+        return jsonResponse(saved);
+      }
+      if (u.endsWith('/api/events/event-1')) return jsonResponse(saved);
+      return jsonResponse({ error: 'NotFound', message: 'not mocked' }, 404);
+    });
+
+    renderPlanner({ selectedEventId: 'event-1' });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Course for Pulled Pork')).toHaveValue('Main')
+    );
+    expect(screen.getByLabelText('Course for Chickpea Tagine')).toHaveValue('Main');
+    expect(screen.getByLabelText('Servings override for Chickpea Tagine')).toHaveValue(5);
+
+    fireEvent.change(screen.getByLabelText('Course for Pulled Pork'), {
+      target: { value: 'Side' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^update event$/i }));
+
+    await waitFor(() => expect(put).toHaveLength(1));
+    expect(put[0].dishes).toEqual([
+      { recipeId: 'pork', course: 'Side', servingsOverride: null },
+      { recipeId: 'tagine', course: 'Main', servingsOverride: 5 },
+    ]);
   });
 });

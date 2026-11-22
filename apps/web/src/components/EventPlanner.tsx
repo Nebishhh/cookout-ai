@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   Calendar,
@@ -19,6 +19,7 @@ import {
 import {
   MAX_RECIPES_PER_EVENT,
   validateGuestGroupInput,
+  type Course,
   type GuestGroupField,
 } from '@cookout-ai/domain';
 import {
@@ -34,15 +35,23 @@ import {
   useParseEventDescription,
 } from '../lib/queries';
 import { formatQuantityAmount } from '../lib/formatQuantity';
+import {
+  courseBalance,
+  courseTotalLine,
+  formatServings,
+  groupIncludedByCourse,
+  parseServingsOverride,
+} from '../lib/eventPlanView';
+import type { EventDishDto } from '../lib/api';
 import { groupByCategory, GROCERY_CATEGORY_ORDER } from '../lib/groceryCategories';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Checkbox } from './ui/checkbox';
 import { Select } from './ui/select';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
 import { CookSchedulePanel } from './CookSchedulePanel';
+import { COURSE_HINT_ID, RecipeSelectCard } from './RecipeSelectCard';
 
 /**
  * `<input type="time">` speaks "HH:MM"; the API speaks wall-clock minutes from midnight (see
@@ -99,6 +108,11 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const [vegetarianCount, setVegetarianCount] = useState<number>(0);
   const [veganCount, setVeganCount] = useState<number>(0);
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
+  // Per-dish settings, keyed by recipe id like ShoppingListBuilder's targetServingsMap. Kept
+  // when a dish is unchecked, so re-checking it brings its settings back.
+  const [courseByRecipeId, setCourseByRecipeId] = useState<Record<string, Course | ''>>({});
+  /** Raw text of each servings-override field; '' means no override. */
+  const [overrideTextByRecipeId, setOverrideTextByRecipeId] = useState<Record<string, string>>({});
   const [guestDescription, setGuestDescription] = useState('');
   const [guestParseNotice, setGuestParseNotice] = useState<string | null>(null);
   /** "HH:MM" from <input type="time">, or '' for "no schedule requested". */
@@ -125,6 +139,19 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       // leave the selection here; the next save then sends only recipes that still exist.
       const deletedIds = new Set(eventQuery.data.droppedRecipeIds);
       setSelectedRecipeIds(eventQuery.data.recipeIds.filter((id) => !deletedIds.has(id)));
+      // An event fetched before courses existed has no `dishes`: every dish has no course.
+      const dishes = eventQuery.data.dishes ?? [];
+      setCourseByRecipeId(
+        Object.fromEntries(dishes.map((dish) => [dish.recipeId, dish.course ?? '']))
+      );
+      setOverrideTextByRecipeId(
+        Object.fromEntries(
+          dishes.map((dish) => [
+            dish.recipeId,
+            dish.servingsOverride == null ? '' : String(dish.servingsOverride),
+          ])
+        )
+      );
       setGuestDescription('');
       setGuestParseNotice(null);
       setServeTime(minutesToTimeInput(eventQuery.data.serveTimeMinutes));
@@ -134,6 +161,8 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
       setVegetarianCount(0);
       setVeganCount(0);
       setSelectedRecipeIds([]);
+      setCourseByRecipeId({});
+      setOverrideTextByRecipeId({});
       setGuestDescription('');
       setGuestParseNotice(null);
       setServeTime('');
@@ -146,13 +175,20 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const atRecipeLimit = selectedRecipeIds.length >= MAX_RECIPES_PER_EVENT;
   const recipesOverLimit = selectedRecipeIds.length - MAX_RECIPES_PER_EVENT;
 
-  const toggleRecipeSelection = (recipeId: string) => {
-    if (selectedRecipeIds.includes(recipeId)) {
-      setSelectedRecipeIds((prev) => prev.filter((id) => id !== recipeId));
-    } else if (!atRecipeLimit) {
-      setSelectedRecipeIds((prev) => [...prev, recipeId]);
-    }
-  };
+  // Stable callbacks (functional updates, no state in their closures) so the memoized recipe
+  // cards don't all re-render when one of them changes.
+  const toggleRecipeSelection = useCallback((recipeId: string) => {
+    setSelectedRecipeIds((prev) => {
+      if (prev.includes(recipeId)) return prev.filter((id) => id !== recipeId);
+      return prev.length >= MAX_RECIPES_PER_EVENT ? prev : [...prev, recipeId];
+    });
+  }, []);
+  const handleCourseChange = useCallback((recipeId: string, course: Course | '') => {
+    setCourseByRecipeId((prev) => ({ ...prev, [recipeId]: course }));
+  }, []);
+  const handleOverrideChange = useCallback((recipeId: string, text: string) => {
+    setOverrideTextByRecipeId((prev) => ({ ...prev, [recipeId]: text }));
+  }, []);
 
   const handleTotalGuestsChange = (valueStr: string) => {
     const parsed = parseInt(valueStr, 10);
@@ -194,9 +230,22 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const guestErrorFor = (field: GuestGroupField) =>
     guestErrors.find((e) => e.field === field)?.message;
   const serveTimeMinutes = timeInputToMinutes(serveTime);
+
+  // Each checked dish with its course and override. A bad override is explained next to its
+  // field and blocks planning and saving, the same way a bad guest breakdown does.
+  const overrideFor = (recipeId: string) =>
+    parseServingsOverride(overrideTextByRecipeId[recipeId] ?? '');
+  const dishes: EventDishDto[] = selectedRecipeIds.map((recipeId) => ({
+    recipeId,
+    course: courseByRecipeId[recipeId] || null,
+    servingsOverride: overrideFor(recipeId).value,
+  }));
+  const hasOverrideErrors = selectedRecipeIds.some((id) => overrideFor(id).error !== null);
+  const hasFieldErrors = guestErrors.length !== 0 || hasOverrideErrors;
+
   // Shared by every plan/save/update call so the cook schedule is requested consistently.
   const planPayload = {
-    recipeIds: selectedRecipeIds,
+    dishes,
     guestGroup: guestGroupPayload,
     serveTimeMinutes,
   };
@@ -204,7 +253,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (guestErrors.length > 0) return;
+    if (hasFieldErrors) return;
 
     if (isViewMode && selectedEventId) {
       updateEventMutation.mutate({
@@ -212,7 +261,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
         data: {
           name: name.trim(),
           guestGroup: guestGroupPayload,
-          recipeIds: selectedRecipeIds,
+          dishes,
           serveTimeMinutes,
         },
       });
@@ -225,13 +274,13 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   };
 
   const handleSaveEvent = () => {
-    if (!name.trim() || guestErrors.length > 0) return;
+    if (!name.trim() || hasFieldErrors) return;
 
     createEventMutation.mutate(
       {
         name: name.trim(),
         guestGroup: guestGroupPayload,
-        recipeIds: selectedRecipeIds,
+        dishes,
         serveTimeMinutes,
       },
       {
@@ -322,6 +371,22 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
   // includedRecipes / excludedRecipes / shoppingList shape.
   const resultData = isViewMode ? eventQuery.data : planEventMutation.data;
   const droppedRecipeIds = isViewMode ? (eventQuery.data?.droppedRecipeIds ?? []) : [];
+  // `?? []`: a plan fetched before courses existed (still in the persisted cache) has neither.
+  const planWarnings = resultData?.warnings ?? [];
+  const courseGroups = resultData
+    ? groupIncludedByCourse(resultData.includedRecipes, resultData.courseSummaries)
+    : [];
+  // Once planned, each override field's placeholder shows the computed share it would replace.
+  // Memoized so the recipe cards' placeholder props only change when the plan does.
+  const plannedServingsById = useMemo(
+    () =>
+      new Map(
+        (resultData?.includedRecipes ?? [])
+          .filter((item) => !item.servingsWereOverridden)
+          .map((item) => [item.recipeId, formatServings(item.servings ?? item.eligibleServings)])
+      ),
+    [resultData]
+  );
 
   const canSaveEvent = !isViewMode && Boolean(planEventMutation.data) && name.trim().length > 0;
 
@@ -564,6 +629,11 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                   {selectedRecipeIds.length} of {MAX_RECIPES_PER_EVENT} recipes selected
                 </span>
               </div>
+              {/* Each course picker points here (aria-describedby), so screen readers read the
+                  hint with the picker, not only sighted users scanning the form. */}
+              <p id={COURSE_HINT_ID} className="mb-3 text-xs text-ink-muted">
+                Put alternatives in the same course to split servings.
+              </p>
               {recipesOverLimit > 0 && (
                 <p className="mb-3 text-xs font-semibold text-clay-hover">
                   An event can include at most {MAX_RECIPES_PER_EVENT} recipes. Uncheck{' '}
@@ -584,60 +654,19 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {recipes.map((recipe) => {
                     const isSelected = selectedRecipeIds.includes(recipe.id);
-                    const isDisabled = !isSelected && atRecipeLimit;
-                    const checkboxId = `recipe-select-${recipe.id}`;
-
                     return (
-                      <div
+                      <RecipeSelectCard
                         key={recipe.id}
-                        className={`flex items-start justify-between rounded-xl border p-4 transition-all ${
-                          isSelected
-                            ? 'border-clay bg-clay-light/30 shadow-warm-md'
-                            : isDisabled
-                              ? 'border-stone bg-paper opacity-60'
-                              : 'border-stone bg-paper hover:border-stone-dark'
-                        }`}
-                      >
-                        <div className="flex items-start space-x-3">
-                          <Checkbox
-                            id={checkboxId}
-                            checked={isSelected}
-                            disabled={isDisabled}
-                            onChange={() => toggleRecipeSelection(recipe.id)}
-                            aria-label={`Select recipe ${recipe.name}`}
-                            className="mt-1 disabled:cursor-not-allowed"
-                          />
-                          <Label
-                            htmlFor={checkboxId}
-                            className={`text-left font-normal normal-case tracking-normal ${
-                              isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'
-                            }`}
-                          >
-                            <span className="font-serif text-sm font-semibold text-ink block">
-                              {recipe.name}
-                            </span>
-                            <span className="text-xs text-ink-muted block">
-                              Base: {recipe.baseServings} servings
-                            </span>
-                            {recipe.dietaryTags && recipe.dietaryTags.length > 0 && (
-                              <div className="mt-1.5 flex flex-wrap gap-1">
-                                {recipe.dietaryTags.map((tag) => (
-                                  <span
-                                    key={tag}
-                                    className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider shadow-warm-sm ${
-                                      tag === 'Vegan'
-                                        ? 'bg-olive-hover text-canvas'
-                                        : 'bg-olive text-canvas'
-                                    }`}
-                                  >
-                                    {tag}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </Label>
-                        </div>
-                      </div>
+                        recipe={recipe}
+                        isSelected={isSelected}
+                        isDisabled={!isSelected && atRecipeLimit}
+                        course={courseByRecipeId[recipe.id] ?? ''}
+                        overrideText={overrideTextByRecipeId[recipe.id] ?? ''}
+                        overridePlaceholder={plannedServingsById.get(recipe.id) ?? 'Auto'}
+                        onToggle={toggleRecipeSelection}
+                        onCourseChange={handleCourseChange}
+                        onOverrideChange={handleOverrideChange}
+                      />
                     );
                   })}
                 </div>
@@ -697,7 +726,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
               {isViewMode ? (
                 <Button
                   type="submit"
-                  disabled={updateEventMutation.isPending || guestErrors.length > 0}
+                  disabled={updateEventMutation.isPending || hasFieldErrors}
                   className="space-x-2 bg-clay text-white hover:bg-clay-hover disabled:opacity-50"
                 >
                   {updateEventMutation.isPending ? (
@@ -714,7 +743,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                     disabled={
                       planEventMutation.isPending ||
                       selectedRecipeIds.length === 0 ||
-                      guestErrors.length > 0
+                      hasFieldErrors
                     }
                     className="space-x-2 bg-clay text-white hover:bg-clay-hover disabled:opacity-50"
                   >
@@ -730,9 +759,7 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                       type="button"
                       variant="secondary"
                       onClick={handleSaveEvent}
-                      disabled={
-                        !canSaveEvent || createEventMutation.isPending || guestErrors.length > 0
-                      }
+                      disabled={!canSaveEvent || createEventMutation.isPending || hasFieldErrors}
                       className="space-x-2 bg-olive text-white hover:bg-olive-hover disabled:opacity-50"
                     >
                       {createEventMutation.isPending ? (
@@ -788,6 +815,22 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
               shared shape for both. */}
           <CookSchedulePanel schedule={resultData.schedule} />
 
+          {/* Course shortfalls sit right above the numbers they explain, rather than with the
+              page-top banners, which are out of view once the results render below the form. */}
+          {planWarnings.length > 0 && (
+            <Alert className="border-clay/30 bg-clay-light text-clay-hover">
+              <AlertTriangle className="h-5 w-5 text-clay-hover" />
+              <AlertDescription className="text-sm">
+                <span className="font-semibold">Some guests have nothing to eat in a course:</span>
+                <ul className="mt-1 list-disc pl-5">
+                  {planWarnings.map((warning) => (
+                    <li key={`${warning.course}-${warning.cohort}`}>{warning.message}</li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* 1. Included Recipes */}
           <Card className="border-olive/30 bg-paper">
             <CardHeader className="flex-row items-center space-x-3 border-b border-stone pb-4">
@@ -808,21 +851,62 @@ export const EventPlanner: React.FC<EventPlannerProps> = ({
                   No recipes were included for this guest group.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {resultData.includedRecipes.map((item) => (
-                    <div
-                      key={item.recipeId}
-                      className="rounded-xl border border-olive/30 bg-canvas p-4"
-                    >
-                      <div className="font-serif font-semibold text-ink">{item.recipeName}</div>
-                      <div className="mt-2 flex items-center justify-between text-xs">
-                        <span className="text-ink-muted">Eligible Servings:</span>
-                        <span className="rounded-md border border-olive/30 bg-olive-light px-2.5 py-1 font-semibold text-olive">
-                          serves {item.eligibleServings} guests
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                <div className="space-y-6">
+                  {courseGroups.map((group) => {
+                    const balance = group.summary ? courseBalance(group.summary) : null;
+                    return (
+                      <section key={group.course ?? 'no-course'}>
+                        {/* A plan with no courses at all keeps the plain grid it always had. */}
+                        {(group.course !== null || courseGroups.length > 1) && (
+                          <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                            <h4 className="font-serif text-sm font-semibold text-ink">
+                              {group.summary
+                                ? courseTotalLine(group.summary)
+                                : (group.course ?? 'No course')}
+                            </h4>
+                            {balance && (
+                              <span className="text-xs font-semibold text-clay-hover">
+                                {balance.label}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                          {group.dishes.map((item) => {
+                            const servings = item.servings ?? item.eligibleServings;
+                            return (
+                              <article
+                                key={item.recipeId}
+                                aria-label={item.recipeName}
+                                className="rounded-xl border border-olive/30 bg-canvas p-4"
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div className="font-serif font-semibold text-ink">
+                                    {item.recipeName}
+                                  </div>
+                                  {item.servingsWereOverridden && (
+                                    <span className="rounded-full border border-clay/40 bg-clay-light px-2 py-0.5 text-[10px] font-semibold text-clay-hover">
+                                      Your override
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                                  <span className="text-ink-muted">
+                                    {item.eligibleServings}{' '}
+                                    {item.eligibleServings === 1 ? 'guest' : 'guests'} can eat it
+                                  </span>
+                                  <span className="rounded-md border border-olive/30 bg-olive-light px-2.5 py-1 font-semibold text-olive">
+                                    Cook {formatServings(servings)}{' '}
+                                    {servings === 1 ? 'serving' : 'servings'}
+                                  </span>
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    );
+                  })}
                 </div>
               )}
             </CardContent>

@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+import type { Course } from '@cookout-ai/domain';
+
 /**
  * Shared API Client Module
  *
@@ -124,10 +126,46 @@ export interface GuestGroupDto {
   omnivoreCount: number;
 }
 
+/**
+ * Fields added with courses are optional in these DTOs: the server always sends them now, but a
+ * plan or event fetched before courses existed can still come back from the persisted query
+ * cache without them. Readers fall back to the pre-course meaning (no course, servings equal to
+ * eligibleServings, no warnings).
+ */
+export interface EventDishDto {
+  recipeId: string;
+  /** null = its own standalone course. */
+  course: Course | null;
+  /** A positive whole number replacing the computed servings, or null for none. */
+  servingsOverride: number | null;
+}
+
+export interface CourseShortfallDto {
+  course: Course;
+  cohort: string;
+  guestCount: number;
+  /** e.g. "1 vegan guest has no Side" */
+  message: string;
+}
+
+export interface CourseSummaryDto {
+  course: Course;
+  servings: number;
+  /** The whole party. */
+  guestCount: number;
+  /** The party minus guests with a shortfall in this course. */
+  coveredGuestCount: number;
+}
+
 export interface IncludedRecipePlanDto {
   recipeId: string;
   recipeName: string;
+  /** How many guests could eat this dish at all. */
   eligibleServings: number;
+  /** What to cook: the dish's share of its course (can be fractional) or the host's override. */
+  servings?: number;
+  course?: Course | null;
+  servingsWereOverridden?: boolean;
   scaledIngredients: Array<{
     ingredientId: string;
     displayName: string;
@@ -177,10 +215,14 @@ export interface EventPlanResponseDto {
   shoppingList: ShoppingListItemDto[];
   /** null when the event has no serve time set, so no schedule was requested. */
   schedule: CookScheduleDto | null;
+  /** Guest cohorts with nothing to eat in a course, in course order. */
+  warnings?: CourseShortfallDto[];
+  /** Each course's total against the party, in course order. */
+  courseSummaries?: CourseSummaryDto[];
 }
 
 export interface PlanEventInput {
-  recipeIds: string[];
+  dishes: EventDishDto[];
   guestGroup: {
     totalGuests: number;
     vegetarianCount?: number;
@@ -196,7 +238,7 @@ export interface CreateEventInput {
     vegetarianCount?: number;
     veganCount?: number;
   };
-  recipeIds: string[];
+  dishes: EventDishDto[];
   serveTimeMinutes?: number | null;
 }
 
@@ -204,6 +246,9 @@ export interface EventSummaryDto {
   id: string;
   name: string;
   guestGroup: GuestGroupDto;
+  /** Each dish with its course and override, in order. */
+  dishes?: EventDishDto[];
+  /** The same recipes as `dishes`, in the same order. */
   recipeIds: string[];
   serveTimeMinutes: number | null;
   shoppingListId: string | null;
@@ -215,6 +260,8 @@ export interface EventDetailDto extends EventSummaryDto {
   shoppingList: ShoppingListItemDto[];
   schedule: CookScheduleDto | null;
   droppedRecipeIds: string[];
+  warnings?: CourseShortfallDto[];
+  courseSummaries?: CourseSummaryDto[];
 }
 
 export interface CreateShoppingListInput {

@@ -88,21 +88,22 @@ test.describe('Event Planner E2E Tests', () => {
     // 6. Assert Included Recipes Heading
     await expect(page.getByRole('heading', { name: 'Included Recipes' })).toBeVisible();
 
-    // Domain Math Assertions:
-    // Recipe 1 (BBQ Chicken, 0 tags, baseServings 4):
-    // Eligible guests = 4 omnivores. Eligible servings = 4.
-    await expect(page.getByText(recipe1Name).first()).toBeVisible();
-    await expect(page.getByText('serves 4 guests')).toBeVisible();
+    // Domain Math Assertions. No courses are picked, so every dish is its own course and is
+    // cooked for everyone who can eat it: servings equal the eligible-guest count.
+    const card = (name: string) => page.getByRole('article', { name });
+
+    // Recipe 1 (BBQ Chicken, 0 tags, baseServings 4): 4 omnivores.
+    await expect(card(recipe1Name)).toContainText('Cook 4 servings');
+    await expect(card(recipe1Name)).toContainText('4 guests can eat it');
 
     // Recipe 2 (Vegetarian Pasta Bake, ['Vegetarian'], baseServings 4):
-    // Eligible guests = 4 omnivores + (4 vegetarians - 2 vegans) = 6 eligible guests.
-    await expect(page.getByText(recipe2Name).first()).toBeVisible();
-    await expect(page.getByText('serves 6 guests')).toBeVisible();
+    // 4 omnivores + (4 vegetarians - 2 vegans) = 6 eligible guests.
+    await expect(card(recipe2Name)).toContainText('Cook 6 servings');
+    await expect(card(recipe2Name)).toContainText('6 guests can eat it');
 
-    // Recipe 3 (Vegan Garden Salad, ['Vegan', 'Vegetarian'], baseServings 2):
-    // Eligible guests = 8 (all guests).
-    await expect(page.getByText(recipe3Name).first()).toBeVisible();
-    await expect(page.getByText('serves 8 guests')).toBeVisible();
+    // Recipe 3 (Vegan Garden Salad, ['Vegan', 'Vegetarian'], baseServings 2): all 8 guests.
+    await expect(card(recipe3Name)).toContainText('Cook 8 servings');
+    await expect(card(recipe3Name)).toContainText('8 guests can eat it');
 
     // 7. Consolidated Event Shopping List Verification
     await expect(
@@ -185,5 +186,87 @@ test.describe('Event Planner E2E Tests', () => {
     await expect(page.locator('#input-vegan-count')).toHaveValue('2');
 
     await expect(page.getByText(/filled in from ai parsing/i)).toBeVisible();
+  });
+
+  test('splits servings across courses for the 12-guest example and warns about the gap', async ({
+    page,
+    request,
+  }) => {
+    const suffix = Date.now();
+    const seed = async (
+      name: string,
+      baseServings: number,
+      dietaryTags: string[],
+      ingredient: { ingredientId: string; displayName: string; amount: number; unit: string }
+    ) => {
+      const res = await request.post('http://localhost:3011/api/recipes', {
+        data: { name: `${name} ${suffix}`, baseServings, dietaryTags, ingredients: [ingredient] },
+      });
+      expect(res.status()).toBe(201);
+      return (await res.json()).name as string;
+    };
+    const pork = await seed('Pulled Pork', 4, [], {
+      ingredientId: 'pork',
+      displayName: 'Pork Shoulder',
+      amount: 1,
+      unit: 'kg',
+    });
+    const tagine = await seed('Chickpea Tagine', 4, ['Vegan'], {
+      ingredientId: 'chickpeas',
+      displayName: 'Chickpeas',
+      amount: 400,
+      unit: 'g',
+    });
+    const potatoes = await seed('Scalloped Potatoes', 6, ['Vegetarian'], {
+      ingredientId: 'potato',
+      displayName: 'Potatoes',
+      amount: 1200,
+      unit: 'g',
+    });
+    const sorbet = await seed('Coconut Sorbet', 6, ['Vegan'], {
+      ingredientId: 'coconut-milk',
+      displayName: 'Coconut Milk',
+      amount: 800,
+      unit: 'ml',
+    });
+
+    await page.goto('/');
+    await page.locator('#nav-tab-event-planner').click();
+
+    // 12 guests: 3 vegetarian, of whom 1 is vegan.
+    await page.locator('#input-total-guests').fill('12');
+    await page.locator('#input-vegetarian-count').fill('3');
+    await page.locator('#input-vegan-count').fill('1');
+
+    const courses: Array<[string, string]> = [
+      [pork, 'Main'],
+      [tagine, 'Main'],
+      [potatoes, 'Side'],
+      [sorbet, 'Dessert'],
+    ];
+    for (const [name, course] of courses) {
+      await page.getByRole('checkbox', { name: `Select recipe ${name}` }).check();
+      await page.getByLabel(`Course for ${name}`).selectOption(course);
+    }
+    await expect(
+      page.getByText('Put alternatives in the same course to split servings.')
+    ).toBeVisible();
+
+    await page.getByRole('button', { name: /plan event/i }).click();
+
+    const card = (name: string) => page.getByRole('article', { name });
+    await expect(card(pork)).toContainText('Cook 4 1/2 servings');
+    await expect(card(tagine)).toContainText('Cook 7 1/2 servings');
+    await expect(card(potatoes)).toContainText('Cook 11 servings');
+    await expect(card(sorbet)).toContainText('Cook 12 servings');
+
+    await expect(page.getByText('Main: 12 servings for 12 guests')).toBeVisible();
+    await expect(page.getByText('Side: 11 servings for 12 guests')).toBeVisible();
+    await expect(page.getByText('Dessert: 12 servings for 12 guests')).toBeVisible();
+    await expect(page.getByText('1 vegan guest has no Side')).toBeVisible();
+
+    // The shopping list follows the split: 1 kg pork for 4 servings, cooked for 4 1/2, is
+    // 1.125 kg, bought as 1.2 kg (without courses it was 2.3 kg).
+    await expect(page.getByText('1.2 kg').first()).toBeVisible();
   });
 });

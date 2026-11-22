@@ -1269,7 +1269,11 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       await waitFor(() => {
         expect(capturedBody).toEqual({
-          recipeIds: ['r-meat', 'r-steak'],
+          // Each checked dish, with no course or servings override picked.
+          dishes: [
+            { recipeId: 'r-meat', course: null, servingsOverride: null },
+            { recipeId: 'r-steak', course: null, servingsOverride: null },
+          ],
           guestGroup: {
             totalGuests: 12,
             vegetarianCount: 3,
@@ -1282,7 +1286,12 @@ describe('Web UI (TanStack Query & App Integration Tests)', () => {
 
       // Verify Included Recipes section
       expect(await screen.findByText('Included Recipes')).toBeInTheDocument();
-      expect(screen.getByText('serves 9 guests')).toBeInTheDocument();
+      // This mock predates courses (no `servings` field), so the card falls back to the
+      // eligible count, the way an event with no courses always planned.
+      expect(screen.getByRole('article', { name: 'Beef Roast' })).toHaveTextContent(
+        'Cook 9 servings'
+      );
+      expect(screen.getByText('9 guests can eat it')).toBeInTheDocument();
 
       // Verify Excluded Recipes section with reason text
       expect(screen.getByText('Excluded Recipes')).toBeInTheDocument();
